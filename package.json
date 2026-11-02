@@ -1,0 +1,56 @@
+{
+  "name": "phlair",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tools for Phorge: Phizziwig, the live-preview remarkup editor, and Phuture, which snoozes items until a day.",
+  "homepage": "https://github.com/jcbachmann/phlair",
+  "repository": "github:jcbachmann/phlair",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "build:dev": "node build.mjs --dev",
+    "watch": "node build.mjs --dev --watch",
+    "test": "vitest run",
+    "pree2e": "node build.mjs --dev",
+    "e2e": "playwright test && node e2e/firefox-extension.mjs",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.src.json",
+    "format": "prettier --write .",
+    "check": "prettier --check . && npm run typecheck && vitest run",
+    "lint:extension": "web-ext lint",
+    "screenshots": "node build.mjs --dev && playwright test -c scripts/screenshots.config.ts",
+    "package": "node build.mjs --extension && web-ext build",
+    "package:phorge": "node build.mjs && tar -czf dist/phlair-phorge.tar.gz --exclude=.phutil_module_cache --transform 's,^phorge,phlair,;s,^LICENSE,phlair/LICENSE,' phorge LICENSE",
+    "sign:firefox": "node build.mjs --extension && web-ext sign"
+  },
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "26.6.5",
+    "darkreader": "4.9.133",
+    "esbuild": "0.28.2",
+    "jsdom": "30.1.3",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "web-ext": "10.7.0"
+  },
+  "webExt": {
+    "sourceDir": "dist/extension",
+    "artifactsDir": "dist",
+    "build": {
+      "filename": "phlair-{version}.zip",
+      "overwriteDest": true
+    },
+    "sign": {
+      "channel": "unlisted"
+    }
+  }
+}

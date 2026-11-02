@@ -1,0 +1,33 @@
+# Local Phorge for development and E2E tests: http://phorge.localhost:8098/
+# Log in with: docker compose exec phorge bin/auth recover admin
+name: phorge
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      # The password the database was created with.
+      MARIADB_ROOT_PASSWORD: phabricator
+    command: --sql-mode=STRICT_ALL_TABLES --max-allowed-packet=33554432 --innodb-buffer-pool-size=256M
+    volumes:
+      - db:/var/lib/mysql
+  phorge:
+    build: .
+    depends_on: [db]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PASSWORD: phabricator
+      BASE_URI: http://phorge.localhost:8098/
+    volumes:
+      # Lets scripts/generate-block-fixtures.mjs run the real block splitter.
+      - ../../test/php:/opt/remarkup-editor-test:ro
+      # Serves the built editor at /rme-dev/ for trying it in a browser.
+      - ../../dist:/opt/remarkup-editor-dist:ro
+      # The Phorge library of the editor (load-libraries), writable for "arc liberate".
+      - ../../phorge:/srv/phlair
+    extra_hosts:
+      # The host, for the E2E test's image site that the server downloads from.
+      - host.docker.internal:host-gateway
+    ports:
+      - "127.0.0.1:8098:80"
+volumes:
+  db:

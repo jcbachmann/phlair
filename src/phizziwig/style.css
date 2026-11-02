@@ -1,0 +1,691 @@
+/* The textarea stays in the form for Phorge, but the editor replaces it. */
+.rme-active > textarea.remarkup-assist-textarea {
+  display: none !important;
+}
+
+/*
+ * Phorge's preview button shows its preview in place of the editor. It
+ * sizes the preview like the textarea, which is hidden.
+ */
+.remarkup-preview-active > .rme-editor {
+  display: none;
+}
+
+.rme-active > .remarkup-inline-preview {
+  height: auto !important;
+  min-height: var(--rme-height, 120px);
+}
+
+/*
+ * The editor grows with its text instead of scrolling like the textarea, so
+ * the toolbar stays at the top of the window while the editor is in view.
+ */
+.rme-active > .remarkup-assist-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  /* Grows to a second row when the table buttons do not fit next to the others. */
+  display: flow-root;
+  height: auto !important;
+  min-height: 32px;
+  overflow: visible;
+}
+
+/*
+ * No colors of its own: they come from the page (see pageStyle() in
+ * attach.ts) or follow the text color, so the editor has the colors of the
+ * page in any theme and with tools like Dark Reader.
+ */
+.rme-editor {
+  min-height: var(--rme-height, 120px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rme-border-color, #c7ccd9);
+  border-top: none;
+  border-radius: 0 0 3px 3px;
+  background: var(--rme-background, #fff);
+  color: var(--rme-color, #000);
+  resize: vertical;
+  overflow: auto;
+}
+
+/*
+ * In a dialog (editing a task or comment), the editor keeps the height of the
+ * textarea and scrolls, like the textarea, instead of making the dialog grow.
+ */
+.aphront-dialog-view .rme-editor {
+  height: var(--rme-height, 120px);
+}
+
+.aphront-dialog-view .rme-editor .cm-editor {
+  min-height: 0;
+}
+
+.aphront-dialog-view .rme-editor .cm-scroller {
+  overflow: auto;
+}
+
+.rme-editor .cm-editor {
+  flex: 1;
+  font:
+    14px/1.7em "Segoe UI",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    Lato,
+    "Helvetica Neue",
+    Helvetica,
+    Arial,
+    sans-serif;
+  color: inherit;
+}
+
+/* The native caret, in the text color (CodeMirror's light theme makes it black). */
+.rme-editor .cm-editor .cm-content {
+  caret-color: currentColor;
+}
+
+.rme-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.rme-editor .cm-scroller {
+  flex: 1;
+  font: inherit;
+  line-height: inherit;
+}
+
+/* The content fills the box, so a click anywhere in an empty editor enters it. */
+.rme-editor .cm-content {
+  align-self: stretch;
+  padding: 8px 12px;
+}
+
+.rme-editor .cm-line {
+  padding: 0;
+}
+
+.rme-editor .cm-placeholder {
+  color: color-mix(in srgb, currentColor 50%, transparent);
+}
+
+/* Fullscreen mode: placed like Phorge places the textarea, below the toolbar. */
+/*
+ * Fullscreen mode: the toolbar on top, the editor in the rest of the window.
+ * A column, not a fixed offset: the toolbar may wrap to more rows.
+ */
+.remarkup-control-fullscreen-mode.rme-active {
+  display: flex;
+  flex-direction: column;
+}
+
+.remarkup-control-fullscreen-mode.rme-active > .rme-editor {
+  flex: 1;
+  min-height: 0;
+  border-width: 1px 0 0 0;
+  resize: none;
+}
+
+.remarkup-control-fullscreen-mode.rme-active .rme-editor .cm-content {
+  padding: 16px;
+}
+
+/* Rendered blocks. */
+.rme-block {
+  position: relative;
+  /*
+   * Contains floats like the left-aligned image thumbnails, so the editor
+   * measures the full height of the block. A float sticking out would push
+   * the following lines down without the editor knowing, and clicks and arrow
+   * keys would land on the wrong lines.
+   */
+  display: flow-root;
+  cursor: text;
+  /* The editor content is "pre-wrap"; rendered HTML is laid out normally. */
+  white-space: normal;
+}
+
+/* The blank lines between blocks are the space between them. */
+.rme-block > :last-child,
+.rme-block > :last-child > :last-child,
+.rme-block > .remarkup-list > li:last-child > .remarkup-list:last-child {
+  margin-bottom: 0;
+}
+
+.rme-block > :first-child {
+  margin-top: 0;
+}
+
+/*
+ * Firefox draws bullets in its own font, which makes each item 0.5px taller
+ * than its line height; in the text font the items are as high as the lines
+ * of the source, so entering a list does not move the text below it.
+ */
+.rme-block li::marker {
+  font-family: inherit;
+}
+
+.rme-block a {
+  cursor: pointer;
+}
+
+/*
+ * CodeMirror's helpers for the caret beside widgets (and hidden markup) are
+ * 1em high from the top of the text: in a header, more than its line height,
+ * which made the line higher than the rendered header. One line high instead.
+ */
+.rme-editor .cm-line .cm-widgetBuffer {
+  vertical-align: top;
+  height: 1lh;
+}
+
+/* Blank lines between blocks: the gap between rendered paragraphs. */
+.rme-editor .cm-line.rme-gap {
+  line-height: var(--rme-gap, 12px);
+  font-size: 2px;
+}
+
+/* Source of the blocks being edited. */
+.rme-markup,
+.rme-list-marker {
+  color: color-mix(in srgb, currentColor 60%, transparent);
+}
+
+.rme-list-marker {
+  font-weight: bold;
+}
+
+.rme-bold {
+  font-weight: bold;
+}
+
+.rme-italic {
+  font-style: italic;
+}
+
+.rme-del {
+  text-decoration: line-through;
+}
+
+.rme-underline {
+  text-decoration: underline;
+}
+
+.rme-link {
+  color: var(--rme-link-color, #136cb2);
+}
+
+.rme-ref,
+.rme-embed {
+  color: var(--rme-link-color, #136cb2);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  border-radius: 3px;
+}
+
+/*
+ * The source lines take the space of the rendered block, so entering a block
+ * does not move anything: the same line height (Phorge's 1.7em, inherited
+ * as a length like in its remarkup), and padding and borders only where the
+ * rendered block has them.
+ */
+.rme-editor .cm-line.rme-src-h {
+  font-weight: bold;
+}
+
+/* The sizes of the rendered headers, read from the page by pageMetrics(). */
+.rme-editor .cm-line.rme-src-h1 {
+  font-size: var(--rme-h1-font-size, 28px);
+  line-height: var(--rme-h1-line-height, inherit);
+}
+
+.rme-editor .cm-line.rme-src-h2 {
+  font-size: var(--rme-h2-font-size, 24px);
+  line-height: var(--rme-h2-line-height, inherit);
+}
+
+.rme-editor .cm-line.rme-src-h3 {
+  font-size: var(--rme-h3-font-size, 22px);
+  line-height: var(--rme-h3-line-height, inherit);
+}
+
+.rme-editor .cm-line.rme-src-h4 {
+  font-size: var(--rme-h4-font-size, 18px);
+  line-height: var(--rme-h4-line-height, inherit);
+}
+
+.rme-editor .cm-line.rme-src-h5 {
+  font-size: var(--rme-h5-font-size, 16px);
+  line-height: var(--rme-h5-line-height, inherit);
+}
+
+/* Colors from Phorge's "remarkup-note" etc.; the lines together are the box. */
+.rme-editor .cm-line.rme-src-note {
+  margin: 0;
+  padding: 0 12px;
+}
+
+.rme-editor .cm-line.rme-src-note.rme-first {
+  padding-top: 12px;
+}
+
+.rme-editor .cm-line.rme-src-note.rme-last {
+  padding-bottom: 12px;
+}
+
+.rme-editor .cm-line.rme-src-quote {
+  padding: 0 12px;
+  border-left: 3px solid var(--rme-quote-border-color, #a7b5bf);
+  background: var(--rme-quote-background, #f8f9fc);
+  color: var(--rme-quote-color, #464c5c);
+  font-style: italic;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-first {
+  padding-top: 8px;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-last {
+  padding-bottom: 8px;
+}
+
+/*
+ * List lines are indented like Phorge's lists (30px, nested lists 24px
+ * more, checklist items 6px more), and the marker hangs into the indent, so
+ * the item text starts where the rendered item text starts.
+ */
+.rme-editor .cm-line.rme-src-list {
+  --rme-depth: 0;
+  --rme-check: 0px;
+  position: relative;
+  /* An item without text keeps its height; its marker is out of the flow. */
+  min-height: 1.7em;
+  padding-left: calc(30px + var(--rme-depth) * 24px + var(--rme-check));
+}
+
+.rme-editor .cm-line.rme-list-depth-1 {
+  --rme-depth: 1;
+}
+
+.rme-editor .cm-line.rme-list-depth-2 {
+  --rme-depth: 2;
+}
+
+.rme-editor .cm-line.rme-list-depth-3 {
+  --rme-depth: 3;
+}
+
+.rme-editor .cm-line.rme-list-depth-4 {
+  --rme-depth: 4;
+}
+
+.rme-editor .cm-line.rme-list-check {
+  --rme-check: 6px;
+}
+
+/*
+ * An item of a list being edited, rendered on its own (ListItemWidget) in lists
+ * like those of the whole list. Those have no vertical margins: the widgets are
+ * the lines of the list, and nested lists take theirs as padding.
+ */
+.rme-editor .rme-block.rme-list-item.phabricator-remarkup :is(ul, ol).remarkup-list {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* The items around it only place the lists. */
+.rme-editor .rme-list-around {
+  list-style-type: none;
+}
+
+.rme-editor .rme-list-around::before {
+  visibility: hidden;
+}
+
+.rme-editor .rme-block.rme-list-item.rme-nest-end {
+  padding-bottom: 4px;
+}
+
+/* The 4px bottom margin of nested lists (their top margin is 0 in Phorge). */
+.rme-editor .cm-line.rme-list-nest-end {
+  padding-bottom: 4px;
+}
+
+/* The bullet or number of a list item being edited, as the page shows it (inlinePreview.ts). */
+.rme-src-list .rme-list-marker .rme-item-marker {
+  margin-right: 0.45em;
+  font-weight: normal;
+  color: var(--rme-color, inherit);
+}
+
+/* Its checkbox: Phorge's, 6px before the text like on the page. */
+.rme-editor .rme-src-list .rme-item-check .remarkup-list-item {
+  display: inline-block;
+  position: relative;
+  width: 16px;
+  height: 1em;
+  margin: 0 6px 0 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.rme-editor .rme-src-list .rme-item-check .remarkup-list-item::before {
+  top: 0;
+}
+
+.rme-src-list .rme-list-marker {
+  position: absolute;
+  transform: translateX(-100%);
+  white-space: pre;
+}
+
+/* Like the rendered code blocks, read from the page by pageMetrics(). */
+.rme-editor .cm-line.rme-src-code {
+  padding: 0 var(--rme-code-padding-x, 12px);
+  font-family: var(--rme-code-font-family, Menlo, Consolas, Monaco, monospace);
+  font-size: var(--rme-code-font-size, 11px);
+  line-height: var(--rme-code-line-height, 15px);
+  background: var(--rme-code-background, rgba(71, 87, 120, 0.08));
+}
+
+.rme-editor .cm-line.rme-src-code.rme-first {
+  padding-top: var(--rme-code-padding-y, 12px);
+  border-radius: var(--rme-code-radius, 3px) var(--rme-code-radius, 3px) 0 0;
+}
+
+.rme-editor .cm-line.rme-src-code.rme-last {
+  padding-bottom: var(--rme-code-padding-y, 12px);
+  border-radius: 0 0 var(--rme-code-radius, 3px) var(--rme-code-radius, 3px);
+}
+
+.rme-editor .cm-line.rme-src-code.rme-first.rme-last {
+  border-radius: var(--rme-code-radius, 3px);
+}
+
+/* Table source in the user's monospaced font, so the aligned columns line up. */
+.rme-editor .cm-line.rme-src-table {
+  font-family: var(--rme-code-font-family, Menlo, Consolas, Monaco, monospace);
+  font-size: 13px;
+}
+
+/* In the table source every character has the same width, so the columns line up. */
+.rme-editor .cm-line.rme-src-table :is(tt.remarkup-monospaced, .remarkup-highlight) {
+  padding: 0;
+  font: inherit;
+}
+
+.rme-editor .cm-line.rme-src-rule {
+  color: color-mix(in srgb, currentColor 50%, transparent);
+}
+
+/* The table buttons, in a bar above the table being edited (see tableBar). */
+.rme-table-bar {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100% - 8px);
+  padding: 0 4px 4px;
+  border: 1px solid var(--rme-border-color, #c7ccd9);
+  border-radius: 3px;
+  background: var(--rme-background, #fff);
+  box-shadow: 0 2px 6px color-mix(in srgb, currentColor 15%, transparent);
+}
+
+.rme-table-bar[hidden] {
+  display: none;
+}
+
+/* Sized and aligned like the Font Awesome glyphs of the other buttons. */
+.rme-table-bar .remarkup-assist svg {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+}
+
+/* Editable tables: the cell being edited. */
+.rme-table-editor :is(th, td):focus {
+  outline: 2px solid var(--rme-link-color, #3498db);
+  outline-offset: -2px;
+}
+
+.rme-table-editor :is(th, td) {
+  cursor: text;
+}
+
+/* An empty cell is a line high, like one with text, so it can be clicked and typed in. */
+.rme-table-editor :is(th, td):empty::after {
+  content: "\200b";
+}
+
+/* The live preview toggle, while on: a soft glow. */
+.remarkup-assist-button.rme-toggle.preview-active {
+  border-radius: 3px;
+  box-shadow:
+    0 0 7px 1px rgba(52, 152, 219, 0.5),
+    0 0 12px 2px rgba(155, 89, 182, 0.18);
+}
+
+/*
+ * Phorge hides most toolbar buttons on phones and tablets. With the
+ * editor they are back: the toolbar wraps to more rows instead.
+ */
+.device .rme-active > .remarkup-assist-bar .remarkup-assist-nodevice {
+  display: block;
+}
+
+/*
+ * All buttons in one flow, so each row is full: floats of different heights
+ * (the separators) would leave gaps, and the right-hand group would wrap as
+ * a whole.
+ */
+.device .rme-active > .remarkup-assist-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+/* Shown while blocks cannot be rendered. */
+.rme-status {
+  order: -1;
+  padding: 4px 12px;
+  font-size: 12px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.rme-status[hidden] {
+  display: none;
+}
+
+.rme-status a {
+  color: var(--rme-link-color, #136cb2);
+}
+
+/* Wide code blocks and tables scroll inside the block instead of widening the page. */
+.rme-block :is(.remarkup-code-block, .remarkup-table-wrap) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Rendered blocks within a selection being made with the mouse. */
+.rme-block.rme-selected {
+  background: color-mix(in srgb, Highlight 25%, transparent);
+}
+
+/* An emoji in the table source: two columns wide, like the alignment counts it. */
+.rme-editor .cm-line.rme-src-table .rme-wide {
+  display: inline-block;
+  width: 2ch;
+  overflow: hidden;
+  vertical-align: bottom;
+  text-align: center;
+}
+
+/* The size grid of the table button. */
+.rme-table-picker {
+  padding: 8px;
+}
+
+.rme-table-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 16px);
+  gap: 3px;
+}
+
+.rme-table-picker-cell {
+  display: block;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 2px;
+}
+
+.rme-table-picker-cell.rme-header {
+  border-bottom-width: 3px;
+  height: 14px;
+}
+
+.rme-table-picker-cell.rme-picked {
+  background: color-mix(in srgb, var(--rme-link-color, #3498db) 35%, transparent);
+  border-color: var(--rme-link-color, #3498db);
+}
+
+.rme-table-picker-label {
+  margin-top: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Phorge's preview below the form shows what the editor already shows. */
+body:has(.rme-active) .phui-remarkup-preview {
+  display: none;
+}
+
+/* CodeMirror's tooltips (the link bubble, hints) in the page's colors. */
+.rme-editor .cm-tooltip {
+  border: 1px solid var(--rme-border-color, #c7ccd9);
+  border-radius: 3px;
+  background: var(--rme-background, #fff);
+  color: inherit;
+  box-shadow: 0 2px 6px color-mix(in srgb, currentColor 15%, transparent);
+}
+
+.rme-link-bubble {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  font-style: normal;
+  font-weight: normal;
+}
+
+.rme-link-bubble-button {
+  color: var(--rme-link-color, #136cb2);
+  white-space: nowrap;
+}
+
+.rme-link-bubble-button .phui-icon-view {
+  margin-right: 4px;
+  color: inherit;
+}
+
+/* A shortcut or hint in the menus (and in dropdown menus, see dropdown.css). */
+.rme-popup-detail {
+  float: right;
+  margin-left: 16px;
+  opacity: 0.6;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Menus with shortcuts are as wide as their longest item, so no shortcut wraps. */
+.rme-shortcuts,
+.rme-autocomplete:has(.rme-popup-detail) {
+  width: max-content;
+  max-width: min(480px, 100vw - 32px);
+}
+
+/* The search input of the link and reference pickers, in the autocomplete head. */
+.rme-picker {
+  width: 360px;
+}
+
+.rme-picker .phuix-autocomplete-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rme-picker .phuix-autocomplete-echo.rme-picker-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  margin: 0;
+  padding: 0 4px;
+  font: inherit;
+}
+
+/* Checkboxes of rendered checklists can be clicked (Phorge draws them as ::before). */
+.rme-block .remarkup-list-with-checkmarks .remarkup-list-item::before {
+  cursor: pointer;
+}
+
+/* A long press on an image opens the editor's image menu, not the browser's. */
+.rme-editor a[data-rme-file] img {
+  -webkit-touch-callout: none;
+}
+
+/* Above Phorge's fullscreen editor (z-index 50, its own menus stay below it). */
+.remarkup-fullscreen-mode :is(.rme-dropdown, .rme-autocomplete) {
+  z-index: 52;
+}
+
+/* A menu without room for all its items scrolls (see Popup.placeAt). */
+.rme-autocomplete .phuix-autocomplete-list {
+  overflow-y: auto;
+}
+
+/* The link bubble of a table cell, placed below the cell. */
+.rme-editor .cm-tooltip.rme-cell-bubble {
+  position: absolute;
+}
+
+/*
+ * Floating images of a block being edited, before its source: no height of
+ * their own (the editor measures none), so the source lines flow around them.
+ */
+.rme-editor .rme-block.rme-preview-float {
+  display: block;
+  height: 0;
+}
+
+/* The "+" buttons on the table borders (see insertHandles). */
+.rme-table-insert {
+  position: absolute;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--rme-link-color, #136cb2);
+  color: var(--rme-background, #fff);
+  font: bold 14px/18px sans-serif;
+  text-align: center;
+  text-decoration: none !important;
+  box-shadow: 0 1px 3px color-mix(in srgb, currentColor 30%, transparent);
+}
+
+/* Drawn, not text: the table's text is only its cells. */
+.rme-table-insert::before {
+  content: "+";
+}
+
+.rme-table-insert[hidden] {
+  display: none;
+}
+
+/* Below the source, images need not keep their place in a paragraph (see imagesOf). */
+.rme-preview-below > p:empty {
+  display: none;
+}

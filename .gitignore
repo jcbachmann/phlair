@@ -1,0 +1,11 @@
+node_modules/
+.idea/
+dist/
+test-results/
+playwright-report/
+e2e/.auth/
+# Built by build.mjs
+phorge/rsrc/
+phorge/resources/
+phorge/THIRD_PARTY_LICENSES.txt
+phorge/src/.phutil_module_cache

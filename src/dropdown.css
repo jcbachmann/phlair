@@ -1,0 +1,8 @@
+/* A shortcut or hint in a menu item, at its right. */
+.rme-dropdown-detail {
+  float: right;
+  margin-left: 16px;
+  opacity: 0.6;
+  font-size: 11px;
+  white-space: nowrap;
+}
