@@ -24,7 +24,7 @@ import {
   toggleQuote,
 } from "./formatting";
 import { hostTextarea } from "./host";
-import { editLink, insertReference } from "./links";
+import { editLink } from "./links";
 import {
   insertAsciiArt,
   insertCard,
@@ -44,6 +44,8 @@ export interface Action {
   run: (view: EditorView) => boolean;
   /** Keyboard shortcut, as CodeMirror names keys ("Mod-Shift-x"). */
   key?: string;
+  /** Another key for it, not shown (e.g. of a command it replaced). */
+  alsoKey?: string;
   /** In the "/" insert menu, with these extra words to find it by. */
   insert?: string;
   /** Its group in the insert menu, see GROUPS. */
@@ -64,14 +66,15 @@ function clickNative(icon: string) {
 
 export const ACTIONS: Action[] = [
   ...INLINE_FORMATS.map((f) => ({ label: f.name, icon: f.icon, key: f.key, run: inlineFormat(f.icon), inline: true })),
-  { label: "Link", group: "Links", icon: "fa-link", key: "Mod-k", run: editLink, insert: "url", inline: true },
   {
-    label: "Reference a task, page, person…",
+    label: "Link or reference (task, page, person…)",
     group: "Links",
-    icon: "fa-anchor",
-    key: "Mod-Shift-k",
-    run: insertReference,
-    insert: "object wiki project user revision",
+    icon: "fa-link",
+    key: "Mod-k",
+    // The key of the reference command it took over.
+    alsoKey: "Mod-Shift-k",
+    run: editLink,
+    insert: "url reference object task wiki page project user person revision",
     inline: true,
   },
   {
@@ -269,7 +272,8 @@ function shortcutsOf(actions: Action[], overview: boolean) {
     EditorView.domEventHandlers({
       keydown(event, view) {
         for (const action of actions) {
-          if (action.key && matchesKey(event, action.key) && action.run(view)) {
+          const keys = [action.key, action.alsoKey].filter((key) => key !== undefined);
+          if (keys.some((key) => matchesKey(event, key)) && action.run(view)) {
             event.preventDefault();
             return true;
           }

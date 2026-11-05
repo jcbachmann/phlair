@@ -6,3 +6,8 @@
   font-size: 11px;
   white-space: nowrap;
 }
+
+/* On phones, in the middle of the window (dropdown.ts). */
+.rme-dropdown-centered {
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.35);
+}

@@ -391,7 +391,7 @@ test.describe("editing aids", () => {
     await page.keyboard.press("Shift+Control+ArrowLeft");
     await page.keyboard.press("Control+k");
     const picker = page.locator(".rme-picker");
-    await picker.locator("input").fill("Remarkup");
+    await picker.locator(".rme-picker-search").fill("Remarkup");
     await expect(picker.locator(".jx-result.focused")).toContainText("Remarkup Demo");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("Read the [[ demo/ | demo ]]");
@@ -407,7 +407,7 @@ test.describe("editing aids", () => {
     await page.keyboard.press("End");
     await page.keyboard.press("Shift+Control+ArrowLeft");
     await page.locator(".remarkup-assist-button:has(.fa-link)").click();
-    await picker.locator("input").fill("https://example.com/");
+    await picker.locator(".rme-picker-search").fill("https://example.com/");
     await expect(picker.locator(".jx-result.focused")).toContainText("Link to https://example.com/");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("Read the [[ https://example.com/ | demo ]]");
@@ -419,7 +419,7 @@ test.describe("editing aids", () => {
     await page.keyboard.type("See ");
     await page.keyboard.press("Control+Shift+k");
     const picker = page.locator(".rme-picker");
-    await picker.locator("input").fill("calib");
+    await picker.locator(".rme-picker-search").fill("calib");
     await expect(picker.locator(".jx-result.focused")).toContainText("T1: Calibrate the detector");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("See T1");
@@ -573,8 +573,8 @@ test.describe("reported issues", () => {
     expect(text.y).toBeGreaterThanOrEqual(bar.y + bar.height - 1);
   });
 
-  test("the reference button and shortcut open the search without scrolling", async ({ page }) => {
-    await openNewWikiPage(page, "Reference button");
+  test("the link button and shortcuts open the search without scrolling", async ({ page }) => {
+    await openNewWikiPage(page, "Link button");
     await editor(page).click();
     // A long page, edited at the top.
     await page.keyboard.insertText("\n\n" + Array.from({ length: 80 }, (_, i) => `Paragraph ${i}.`).join("\n\n"));
@@ -582,17 +582,23 @@ test.describe("reported issues", () => {
     await page.keyboard.type("See ");
     const scroll = () => page.evaluate(() => window.scrollY);
     const before = await scroll();
-    await page.locator(".rme-format:has(.fa-anchor)").click();
+    await page.locator(".remarkup-assist-button:has(.fa-link)").click();
     const picker = page.locator(".rme-picker");
-    await expect(picker.locator("input")).toBeFocused();
+    await expect(picker.locator(".rme-picker-search")).toBeFocused();
     await page.waitForTimeout(300);
     await expect(picker).toBeVisible();
     expect(await scroll()).toBe(before);
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
-    await page.keyboard.press("Control+Shift+k");
-    await expect(picker.locator("input")).toBeFocused();
-    expect(await scroll()).toBe(before);
+    // Ctrl+Shift+K, the key of the former reference command, does the same.
+    for (const key of ["Control+k", "Control+Shift+k"]) {
+      await page.keyboard.press(key);
+      await expect(picker.locator(".rme-picker-search")).toBeFocused();
+      expect(await scroll()).toBe(before);
+      await page.keyboard.press("Escape");
+    }
+    // One button for links and references.
+    await expect(page.locator(".remarkup-assist-bar .fa-anchor")).toHaveCount(0);
   });
 
   test("lines pasted into a quote stay in the quote", async ({ page }) => {
@@ -725,13 +731,19 @@ test("table source columns line up with emoji in cells", async ({ page }) => {
 test.describe("narrow windows", () => {
   test.use({ viewport: { width: 390, height: 800 } });
 
-  test("show all toolbar buttons, wrapped, without scrolling sideways", async ({ page }) => {
+  test("show the essential toolbar buttons, the others in ⋯, without scrolling sideways", async ({ page }) => {
     await openNewWikiPage(page, "Phone");
     await editor(page).click();
     // Phorge hides these on phones.
-    for (const icon of ["fa-bold", "fa-italic", "fa-link", "fa-table", "fa-header"]) {
+    for (const icon of ["fa-bold", "fa-italic", "fa-link"]) {
       await expect(page.locator(`.remarkup-assist-bar .remarkup-assist-button:has(.${icon})`)).toBeVisible();
     }
+    for (const icon of ["fa-table", "fa-header"]) {
+      await expect(page.locator(`.remarkup-assist-bar .remarkup-assist-button:has(.${icon})`)).toBeHidden();
+    }
+    await page.locator(".remarkup-assist-bar .rme-more").click();
+    await expect(page.locator(".rme-more-menu").getByRole("menuitem", { name: /Table/ })).toBeAttached();
+    await page.keyboard.press("Escape");
     await page.keyboard.insertText("| a | b |\n| 1 | 2 |\n\n```\n" + "x".repeat(300) + "\n```\n\nEnd.");
     await page.keyboard.press("Control+Home");
     await expect(page.locator(".rme-table-bar")).toBeVisible();
@@ -778,7 +790,6 @@ test.describe("narrow windows", () => {
         end: i === rows.size - 1 ? 0 : (barBox.right - right) / width,
       }));
     });
-    expect(free.length).toBeGreaterThan(1);
     for (const { start, end } of free) {
       expect(start).toBeLessThan(0.5);
       expect(end).toBeLessThan(1.5);
@@ -1027,7 +1038,7 @@ test.describe("review fixes", () => {
 
     await page.keyboard.type("\n\n/link");
     await page.keyboard.press("Enter");
-    await expect(page.locator(".rme-picker input")).toBeFocused();
+    await expect(page.locator(".rme-picker .rme-picker-search")).toBeFocused();
     await page.keyboard.press("Escape");
 
     await page.keyboard.type("/table");
@@ -1056,7 +1067,7 @@ test.describe("review fixes", () => {
     await openNewWikiPage(page, "Fast picker");
     await editor(page).click();
     await page.keyboard.press("Control+Shift+k");
-    const input = page.locator(".rme-picker input");
+    const input = page.locator(".rme-picker .rme-picker-search");
     // Results of an earlier query are showing: Enter must not take those.
     await input.fill("Remarkup");
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Remarkup Demo");
@@ -1073,7 +1084,7 @@ test.describe("review fixes", () => {
       await page.keyboard.press("ArrowLeft");
     }
     await page.keyboard.press("Control+k");
-    await page.locator(".rme-picker input").fill("T1");
+    await page.locator(".rme-picker .rme-picker-search").fill("T1");
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("T1:");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("See T1 now");
@@ -1182,15 +1193,17 @@ test.describe("second test round", () => {
     }
     await page.keyboard.press("Control+Shift+k");
     const picker = page.locator(".rme-picker");
-    await expect(picker).toContainText("Change Link:");
-    await picker.locator("input").fill("https://example.org/");
+    // The link's text and target, to change.
+    await expect(picker.locator(".rme-picker-text")).toHaveValue("site");
+    await expect(picker.locator(".rme-picker-search")).toHaveValue("https://example.com");
+    await picker.locator(".rme-picker-search").fill("https://example.org/");
     await expect(picker.locator(".jx-result.focused")).toContainText("Link to https://example.org/");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("See [[ https://example.org/ | site ]]");
     // The cursor right after a link: the link button changes it too.
     await page.keyboard.press("End");
     await page.locator(".remarkup-assist-button:has(.fa-link)").click();
-    await expect(picker).toContainText("Change Link:");
+    await expect(picker.locator(".rme-picker-search")).toHaveValue("https://example.org/");
   });
 
   test("links in table cells have their bubble and the link command", async ({ page }) => {
@@ -1208,7 +1221,7 @@ test.describe("second test round", () => {
     await page.locator(".rme-table-editor td", { hasText: "Fe" }).click();
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Control+k");
-    await page.locator(".rme-picker input").fill("https://example.com/fe");
+    await page.locator(".rme-picker .rme-picker-search").fill("https://example.com/fe");
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Link to");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("| Element | Source |\n| [[ https://example.com/fe | Fe ]] | site |");
@@ -1455,7 +1468,7 @@ test.describe("fourth test round", () => {
     const picker = page.locator(".rme-picker");
     for (let i = 0; i < 4; i++) {
       await page.keyboard.press("Control+Shift+k");
-      await expect(picker.locator("input")).toHaveValue("T1");
+      await expect(picker.locator(".rme-picker-search")).toHaveValue("T1");
       await expect(picker.locator(".jx-result").first()).toContainText("T1: Calibrate the detector");
       const at = await textBox(page, "See");
       const box = (await picker.boundingBox())!;
@@ -1466,7 +1479,7 @@ test.describe("fourth test round", () => {
       await expect(picker).toHaveCount(0);
     }
     await page.keyboard.press("Control+Shift+k");
-    await picker.locator("input").fill("T2");
+    await picker.locator(".rme-picker-search").fill("T2");
     await expect(picker.locator(".jx-result").first()).toContainText("T2");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toMatch(/^See T2 for the details/);
@@ -2136,10 +2149,61 @@ test.describe("eleventh test round", () => {
       .toBe(4);
     await editor(page).click();
     await page.keyboard.press("Control+Shift+k");
-    await page.locator(".rme-picker input").fill(word);
+    await page.locator(".rme-picker .rme-picker-search").fill(word);
     const tasks = page.locator(".rme-picker .jx-result", { has: page.locator(".fa-anchor") });
     await expect(tasks).toHaveCount(4);
     await expect(tasks).toContainText([`Fix the ${word} board`, `Old ${word} work`, "Another task", "Archived note"]);
+  });
+
+  test("the search lists wiki pages and tasks by title, then by text, open before closed, pages first", async ({
+    page,
+  }) => {
+    test.slow();
+    await openNewWikiPage(page, "Search order");
+    const word = `zw${Date.now().toString(36)}`;
+    const task = (title: string, description: string, status?: string) =>
+      conduit(page, "maniphest.edit", {
+        transactions: [
+          { type: "title", value: title },
+          { type: "description", value: description },
+          ...(status ? [{ type: "status", value: status }] : []),
+        ],
+      });
+    const wiki = async (title: string, content: string) => {
+      const slug = `e2e-${word}-${title.replace(/\W+/g, "-").toLowerCase()}/`;
+      await conduit(page, "phriction.create", { slug, title, content });
+      return (await conduit(page, "phriction.document.search", { constraints: { paths: [slug] } })).data[0].id;
+    };
+    await task("Closed task text", `Mentions ${word}.`, "resolved");
+    await task("Open task text", `Mentions ${word}.`);
+    await task(`Closed ${word} task`, "", "resolved");
+    await task(`Open ${word} task`, "");
+    await wiki("Open page text", `Mentions ${word}.`);
+    await wiki(`Open ${word} page`, "Nothing else.");
+    const deleted = await wiki(`Gone ${word} page`, "Nothing else.");
+    // Deleted pages count as closed ones.
+    await page.goto(`/phriction/delete/${deleted}/`);
+    await page.getByRole("button", { name: /Delete/ }).click();
+    await page.waitForURL(/\/w\//);
+    // The daemons index them for the search.
+    const indexed = async (method: string) =>
+      (await conduit(page, method, { constraints: { query: `~${word}` } })).data.length;
+    await expect.poll(() => indexed("maniphest.search"), { timeout: 30000 }).toBe(4);
+    await expect.poll(() => indexed("phriction.document.search"), { timeout: 30000 }).toBe(3);
+    await openNewWikiPage(page, "Search order");
+    await editor(page).click();
+    await page.keyboard.press("Control+k");
+    await page.locator(".rme-picker .rme-picker-search").fill(word);
+    const results = page.locator(".rme-picker .jx-result");
+    await expect(results.filter({ hasText: /Open|Closed|Gone/ })).toHaveText([
+      new RegExp(`Open ${word} page`),
+      new RegExp(`Open ${word} task`),
+      new RegExp(`Gone ${word} page`),
+      new RegExp(`Closed ${word} task`),
+      /Open page text/,
+      /Open task text/,
+      /Closed task text/,
+    ]);
   });
 
   test("Phorge's autocomplete works in table cells", async ({ page }) => {
@@ -2548,8 +2612,8 @@ test.describe("nineteenth test round", () => {
     await selectInCell(page);
     await page.keyboard.press("Control+k");
     const picker = page.locator(".rme-picker");
-    await expect(picker).toContainText("Link to:");
-    await page.locator(".rme-picker input").fill("https://example.com/k");
+    await expect(picker).toContainText("Link to");
+    await page.locator(".rme-picker .rme-picker-search").fill("https://example.com/k");
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Link to");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toContain("| some [[ https://example.com/k | words ]] here |");
@@ -2564,8 +2628,8 @@ test.describe("nineteenth test round", () => {
     await page.keyboard.press("Home");
     await page.keyboard.press("Control+Shift+ArrowRight");
     await page.keyboard.press("Control+Shift+K");
-    await expect(picker).toContainText("Reference:");
-    await page.locator(".rme-picker input").fill("T1");
+    await expect(picker).toContainText("Link to");
+    await page.locator(".rme-picker .rme-picker-search").fill("T1");
     await expect(page.locator(".rme-picker .jx-result").first()).toContainText("Calibrate the detector");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toMatch(/\| \[\[ \S*T1 \| some \]\] words here \|$/);
@@ -2611,7 +2675,7 @@ test.describe("nineteenth test round", () => {
     await page.locator(".cm-line", { hasText: "some" }).click();
     await page.keyboard.press("Control+k");
     // Once the search has its results, the editor has long noticed losing the focus.
-    await page.locator(".rme-picker input").fill("https://example.com");
+    await page.locator(".rme-picker .rme-picker-search").fill("https://example.com");
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Link to");
     await expect(page.locator(".cm-line", { hasText: "some" })).toBeVisible();
     await expect(page.locator(".rme-block-table")).toHaveCount(0);
@@ -2701,7 +2765,7 @@ test.describe("twentieth test round", () => {
     await page.keyboard.type("/icon");
     await page.keyboard.press("Enter");
     // Found by name, a color word colors it.
-    await page.locator(".rme-picker input").fill("camera red");
+    await page.locator(".rme-picker .rme-picker-search").fill("camera red");
     const first = page.locator(".rme-picker .jx-result").first();
     await expect(first).toContainText("camera, red");
     // In the color Phorge draws it in, not the menu's.
@@ -2720,7 +2784,7 @@ test.describe("twentieth test round", () => {
     const list = page.locator(".rme-picker .phuix-autocomplete-list");
     await expect.poll(() => list.locator(".jx-result").count()).toBeGreaterThan(300);
     expect(await list.evaluate((el) => el.clientHeight)).toBeLessThan(400);
-    await page.locator(".rme-picker input").fill("cog spin");
+    await page.locator(".rme-picker .rme-picker-search").fill("cog spin");
     await expect(first).toContainText("cog, spinning");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("{icon camera color=red} {icon cog spin}");
@@ -2800,7 +2864,7 @@ test.describe("fixes of the review", () => {
     // E.g. an upload before it finishing, or Phorge changing the textarea.
     await textarea(page).evaluate((t: HTMLTextAreaElement) => (t.value = `Uploaded {F1}. ${t.value}`));
     await expect(editor(page)).toContainText("Uploaded");
-    await page.locator(".rme-picker input").fill("https://example.com/docs");
+    await page.locator(".rme-picker .rme-picker-search").fill("https://example.com/docs");
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Link to");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("Uploaded {F1}. See the [[ https://example.com/docs | docs ]] here.");
@@ -2813,28 +2877,23 @@ test.describe("fixes of the review", () => {
     await editor(page).click();
     await page.keyboard.type("/icon");
     await page.keyboard.press("Enter");
-    await page.locator(".rme-picker input").fill("zzzz yyyy");
+    await page.locator(".rme-picker .rme-picker-search").fill("zzzz yyyy");
     await expect(page.locator(".rme-picker .rme-popup-note")).toHaveText("Nothing found.");
     // Faster than the search.
-    await page.locator(".rme-picker input").fill("camera");
+    await page.locator(".rme-picker .rme-picker-search").fill("camera");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toBe("{icon camera}");
   });
 
-  test("in a table cell: Alt+Shift+arrows move the column, the reference button and Option+Space work", async ({
-    page,
-  }) => {
+  test("in a table cell: Alt+Shift+arrows move the column, the link button and Option+Space work", async ({ page }) => {
     await startWith(page, "| a | b |\n| --- | --- |\n| one | two |");
     await page.locator(".rme-table-editor td", { hasText: "one" }).click();
     await page.keyboard.press("Alt+Shift+ArrowRight");
     await expect.poll(() => source(page)).toBe("| b   | a   |\n| --- | --- |\n| two | one |");
-    // The reference button of the toolbar acts on the cell.
+    // The link button of the toolbar acts on the cell.
     await page.keyboard.press("Control+a");
-    await page
-      .locator(".rme-format")
-      .and(page.getByRole("button", { name: /Reference/ }))
-      .click();
-    await page.locator(".rme-picker input").fill("T1");
+    await page.locator(".remarkup-assist-button:has(.fa-link)").click();
+    await page.locator(".rme-picker .rme-picker-search").fill("T1");
     await expect(page.locator(".rme-picker .jx-result").first()).toContainText("Calibrate the detector");
     await page.keyboard.press("Enter");
     await expect.poll(() => source(page)).toMatch(/\| two \| \[\[ \S*T1 \| one \]\] \|$/);
@@ -3288,7 +3347,7 @@ test.describe("insert menu in cells", () => {
     // The first item of a cell's menu: a link, whose search opens.
     await expect(page.locator(".rme-autocomplete .jx-result.focused")).toHaveText(/^Link/);
     await page.keyboard.press("Enter");
-    await expect(page.locator(".rme-picker input")).toBeFocused();
+    await expect(page.locator(".rme-picker .rme-picker-search")).toBeFocused();
     await expect(page.locator(".rme-table-editor tr")).toHaveCount(2);
     await expect.poll(() => source(page)).toBe("| a | b |\n| 1  | 2 |");
   });
@@ -3334,7 +3393,7 @@ test.describe("long menus", () => {
     await editor(page).click();
     await page.keyboard.type("/icon");
     await page.keyboard.press("Enter");
-    await expect(page.locator(".rme-picker input")).toBeFocused();
+    await expect(page.locator(".rme-picker .rme-picker-search")).toBeFocused();
     await expect(page.locator(".rme-autocomplete .jx-result").nth(20)).toBeAttached();
     await page.keyboard.press("PageDown");
     const paged = await focused(page);
@@ -3357,5 +3416,832 @@ test.describe("long menus", () => {
     await page.keyboard.press("PageUp");
     await expect.poll(async () => (await focused(page)).index).toBe(0);
     await expect.poll(() => source(page)).toBe("Hi :s");
+  });
+});
+
+test.describe("the link dialog", () => {
+  const picker = (page: Page) => page.locator(".rme-picker");
+  const text = (page: Page) => picker(page).locator(".rme-picker-text");
+  const link = (page: Page) => picker(page).locator(".rme-picker-search");
+
+  /** Opens the dialog of the link in the text by its bubble's Change. */
+  async function change(page: Page, linkText: string): Promise<void> {
+    // A click puts the cursor after the rendered link; one step back is in it, with its bubble.
+    await page.locator(".cm-line a", { hasText: linkText }).first().click();
+    await page.keyboard.press("ArrowLeft");
+    await page.locator(".rme-link-bubble").getByRole("link", { name: "Change" }).click();
+    await expect(link(page)).toBeFocused();
+  }
+
+  test("Change edits the text and the target of a link; only the text, and the target stays", async ({ page }) => {
+    await startWith(page, "See [[ https://example.com/a | the site ]] now.");
+    await change(page, "the site");
+    await expect(text(page)).toHaveValue("the site");
+    await expect(link(page)).toHaveValue("https://example.com/a");
+    // Tab goes to the text, and back.
+    await page.keyboard.press("Tab");
+    await expect(text(page)).toBeFocused();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("the page");
+    await page.keyboard.press("Tab");
+    await expect(link(page)).toBeFocused();
+    // The target's search results do not replace it.
+    await expect(picker(page).locator(".jx-result").first()).toBeAttached();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("See [[ https://example.com/a | the page ]] now.");
+    // Also a target its search finds as something else ("T1" as the task's "/T1").
+    await startWith(page, "See [[ T1 | the task ]] now.");
+    await change(page, "the task");
+    await expect(picker(page).locator(".jx-result").first()).toContainText("Calibrate the detector");
+    await text(page).fill("it");
+    await link(page).press("Enter");
+    await expect.poll(() => source(page)).toBe("See [[ T1 | it ]] now.");
+  });
+
+  test("an empty text leaves the link alone, an empty link the text alone, both empty nothing", async ({ page }) => {
+    await startWith(
+      page,
+      "A [[ https://example.com/a | one ]] B [[ https://example.com/b | two ]] C [[ /T1 | three ]] D",
+    );
+    await change(page, "one");
+    await text(page).fill("");
+    await link(page).press("Enter");
+    await expect
+      .poll(() => source(page))
+      .toBe("A https://example.com/a B [[ https://example.com/b | two ]] C [[ /T1 | three ]] D");
+    await blur(page);
+    await change(page, "two");
+    await link(page).fill("");
+    await link(page).press("Enter");
+    await expect.poll(() => source(page)).toBe("A https://example.com/a B two C [[ /T1 | three ]] D");
+    await blur(page);
+    await change(page, "three");
+    await text(page).fill("");
+    await link(page).fill("");
+    await link(page).press("Enter");
+    await expect.poll(() => source(page)).toBe("A https://example.com/a B two C  D");
+  });
+
+  test("Ctrl+K on selected text: the text in the dialog and highlighted in the editor while it is open", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Link dialog");
+    await editor(page).click();
+    await page.keyboard.type("Read the manual first.");
+    await page.keyboard.press("ArrowLeft");
+    for (let i = 0; i < "manual first.".length - 7; i++) {
+      await page.keyboard.press("ArrowLeft");
+    }
+    for (let i = 0; i < "manual".length; i++) {
+      await page.keyboard.press("Shift+ArrowLeft");
+    }
+    await page.keyboard.press("Control+k");
+    await expect(text(page)).toHaveValue("manual");
+    await expect(link(page)).toBeFocused();
+    await expect(page.locator(".rme-editor .rme-picking")).toHaveText("manual");
+    await link(page).fill("https://example.com/manual");
+    await expect(picker(page).locator(".jx-result.focused")).toContainText("Link to");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("Read the [[ https://example.com/manual | manual ]] first.");
+    await expect(page.locator(".rme-editor .rme-picking")).toHaveCount(0);
+    // Escape: nothing changes, the highlight goes.
+    await page.keyboard.press("Control+k");
+    await page.keyboard.press("Escape");
+    await expect(picker(page)).toHaveCount(0);
+    await expect(page.locator(".rme-editor .rme-picking")).toHaveCount(0);
+  });
+
+  test("a reference: without a text the reference, with one a link to it; Ctrl+K changes it", async ({ page }) => {
+    await openNewWikiPage(page, "Reference dialog");
+    await editor(page).click();
+    await page.keyboard.press("Control+Shift+k");
+    await expect(text(page)).toHaveValue("");
+    await link(page).fill("T1");
+    await expect(picker(page).locator(".jx-result.focused")).toContainText("Calibrate the detector");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("T1");
+    // Ctrl+K on a reference changes it too.
+    await page.keyboard.press("Control+k");
+    // The reference to change, by its reference.
+    await expect(link(page)).toHaveValue("T1");
+    await text(page).fill("the detector");
+    await link(page).press("Enter");
+    await expect.poll(() => source(page)).toBe("[[ /T1 | the detector ]]");
+  });
+});
+
+test.describe("the comment form on a phone", () => {
+  test.use({ viewport: { width: 390, height: 800 } });
+
+  test("an action can be removed by its X, pinned or not", async ({ page }) => {
+    await createTask(page, "Remove an action");
+    await addPhlair(page);
+    const select = page.locator(".phui-comment-action-control select");
+    for (const pinned of [false, true]) {
+      if (pinned) {
+        await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+        await expect(page.locator(".phui-comment-form-view")).toHaveClass(/remarkup-assist-pinned/);
+      }
+      await select.selectOption({ label: "Change Priority" });
+      const action = page.locator(".phui-comment-action");
+      await expect(action).toHaveCount(1);
+      // The icon: the link around it has no box of its own (the icon floats).
+      const remove = action.locator(".aphront-form-error .fa-times-circle");
+      await expect(remove).toBeVisible();
+      // At the right of the line of the action's name.
+      const label = (await action.locator(".aphront-form-label").boundingBox())!;
+      const box = (await remove.boundingBox())!;
+      expect(box.y).toBeLessThan(label.y + label.height);
+      expect(box.x).toBeGreaterThan(label.x + label.width / 2);
+      await page.screenshot({ path: `test-results/phone-action-${pinned}.png` });
+      await remove.click();
+      await expect(action).toHaveCount(0);
+    }
+  });
+
+  test("pinned, the form has a handle that sets its height; its text scrolls in it, the submit button sits next to the actions", async ({
+    page,
+  }) => {
+    await createTask(page, "Pinned form");
+    await addPhlair(page);
+    const form = page.locator(".phui-comment-form-view");
+    const submit = form.locator("button[data-sigil~='submit-transactions']");
+    await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+    await expect(form).toHaveClass(/remarkup-assist-pinned/);
+    const handle = page.locator(".rme-pinned-resize");
+    await expect(handle).toBeVisible();
+    // A long text: it scrolls in the editor, not the form with it (one scrollbar).
+    await editor(page).click();
+    await page.keyboard.insertText(Array.from({ length: 60 }, (_, i) => `Line ${i}`).join("\n\n"));
+    const scrolls = (selector: string) =>
+      page
+        .locator(selector)
+        .first()
+        .evaluate((el) => el.scrollHeight > el.clientHeight + 1);
+    await expect.poll(() => scrolls(".remarkup-assist-pinned .cm-scroller")).toBe(true);
+    // Not by a pixel either way, and no wider than the window.
+    const form_ = await form.evaluate((el) => ({
+      dx: el.scrollWidth - el.clientWidth,
+      dy: el.scrollHeight - el.clientHeight,
+      width: el.getBoundingClientRect().width,
+    }));
+    expect(form_).toEqual({ dx: 0, dy: 0, width: 390 });
+    // The handle on the middle of the top border, above none of the form's controls.
+    const top = (await form.boundingBox())!.y;
+    const onBorder = (await handle.boundingBox())!;
+    expect(Math.abs(onBorder.y + onBorder.height / 2 - top)).toBeLessThan(1.5);
+    expect(Math.abs(onBorder.x + onBorder.width / 2 - 195)).toBeLessThan(1.5);
+    expect(onBorder.y + onBorder.height).toBeLessThanOrEqual(
+      (await form.locator(".phui-comment-action-bar select").boundingBox())!.y,
+    );
+    await expect(submit).toBeInViewport();
+    // In the row of "Add Action...", in its middle; on a phone as an icon, its label as its tooltip.
+    const bar = form.locator(".phui-comment-action-bar");
+    await expect(bar.locator("button[data-sigil~='submit-transactions']")).toBeVisible();
+    const select = (await bar.locator("select").boundingBox())!;
+    const button = (await submit.boundingBox())!;
+    expect(Math.abs(button.y + button.height / 2 - (select.y + select.height / 2))).toBeLessThan(2);
+    expect(button.width).toBeLessThan(60);
+    // As high as the field next to it.
+    expect(Math.abs(button.height - select.height)).toBeLessThan(3);
+    await expect(submit).toHaveAttribute("title", /\S/);
+    // The handle sets the height.
+    const before = (await form.boundingBox())!.height;
+    const grip = (await handle.boundingBox())!;
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(grip.x + grip.width / 2, grip.y - 100, { steps: 5 });
+    await page.mouse.up();
+    const after = (await form.boundingBox())!.height;
+    expect(after).toBeGreaterThan(before + 80);
+    await expect(submit).toBeInViewport();
+    await page.screenshot({ path: "test-results/phone-pinned.png" });
+    // Remembered: pinned again after a reload, it has that height.
+    await page.reload();
+    await addPhlair(page);
+    await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+    await expect.poll(async () => Math.round((await form.boundingBox())!.height)).toBe(Math.round(after));
+    // Many actions: the form scrolls, the row of "Add Action..." stays at its top.
+    const actions = form.locator(".phui-comment-action-bar select");
+    for (const label of [
+      "Change Priority",
+      "Change Status",
+      "Assign / Claim",
+      "Change Subscribers",
+      "Change Project Tags",
+    ]) {
+      await actions.selectOption({ label });
+    }
+    await form.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect(form.locator(".phui-comment-action-bar")).toBeInViewport();
+    await expect(submit).toBeInViewport();
+    const formTop = (await form.boundingBox())!.y;
+    expect((await form.locator(".phui-comment-action-bar").boundingBox())!.y).toBeLessThan(formTop + 20);
+    // Removed again by their X, from the last one up.
+    const removes = form.locator(".phui-comment-action .aphront-form-error .fa-times-circle");
+    while ((await removes.count()) > 0) {
+      await removes.last().click();
+    }
+    // Unpinned, the handle goes, the button is below the text again; the comment is sent as ever.
+    await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+    await expect(form).not.toHaveClass(/remarkup-assist-pinned/);
+    await expect(handle).toHaveCount(0);
+    await expect(form.locator(".phui-comment-action-bar button")).toHaveCount(0);
+    await editor(page).click();
+    await page.keyboard.type("Pinned and sent.");
+    await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+    await submit.click();
+    await expect(
+      page.locator(".phui-timeline-view .phabricator-remarkup", { hasText: "Pinned and sent." }),
+    ).toBeVisible();
+  });
+});
+
+test.describe("feedback", () => {
+  test("the feedback button opens a new task for feedback, with the details filled in", async ({ page, context }) => {
+    await openNewWikiPage(page, "Feedback");
+    const opened = context.waitForEvent("page");
+    await page.locator(".rme-feedback-button").click();
+    const form = await opened;
+    await form.waitForLoadState();
+    await addPhlair(form);
+    expect(form.url()).toContain("/maniphest/task/edit/form/default/");
+    await expect(form.locator('input[name="title"]')).toHaveValue("Phizziwig feedback: ");
+    const description = await form.locator('textarea[name="description"]').inputValue();
+    expect(description).toContain("What did you do, what happened");
+    expect(description).toContain("== Details ==");
+    expect(description).toContain(`- Page: ${page.url()}`);
+    expect(description).toMatch(/- Editor: Phizziwig \S+/);
+    // The editor is on there: screenshots can be pasted. Sent, it is a task.
+    await expect(form.locator(".rme-editor")).toHaveCount(1);
+    await form.locator('input[name="title"]').fill("Phizziwig feedback: the e2e test");
+    await form.getByRole("button", { name: "Create New Task" }).click();
+    await expect(form).toHaveURL(/\/T\d+$/);
+    await expect(form.locator(".phui-header-header").first()).toContainText("Phizziwig feedback: the e2e test");
+  });
+});
+
+test.describe("checkboxes in rendered text", () => {
+  const boxes = (page: Page, within: string) => page.locator(`${within} ul.remarkup-list-with-checkmarks input`);
+  // The boxes clicked are saved 5 seconds after the last click.
+  test.beforeEach(async ({ page }) => {
+    await page.clock.install();
+  });
+  const saveNow = (page: Page) => page.clock.runFor(5_000);
+
+  test("a click in a task description saves just that checkbox", async ({ page }) => {
+    await page.goto("/maniphest/");
+    const description = "Steps:\n\n- [ ] one\n- [x] two\n\n```\n- [ ] in code\n```\n\nThe end.";
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Checkboxes to click" },
+        { type: "description", value: description },
+      ],
+    });
+    const id = task.object.id;
+    await page.goto(`/T${id}`);
+    await addPhlair(page);
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [id] } })).data[0].fields.description.raw;
+    const shown = boxes(page, ".phui-property-list-text-content");
+    await expect(shown).toHaveCount(2);
+    const edits = async () =>
+      (await conduit(page, "transaction.search", { objectIdentifier: `T${id}` })).data.filter(
+        (t: { type: string }) => t.type === "description",
+      ).length;
+    const editsBefore = await edits();
+    // Shown at once, saved together once the clicks pause, in one edit.
+    await shown.nth(0).click();
+    await expect(shown.nth(0)).toBeChecked();
+    await page.clock.runFor(4_000);
+    await shown.nth(1).click();
+    await expect(shown.nth(1)).not.toBeChecked();
+    await page.clock.runFor(4_000);
+    expect(await source()).toBe(description);
+    await page.clock.runFor(1_500);
+    await expect.poll(source).toBe(description.replace("- [ ] one", "- [x] one").replace("- [x] two", "- [ ] two"));
+    expect(await edits()).toBe(editsBefore + 1);
+    // Clicked and clicked back: nothing to save.
+    await shown.nth(0).click();
+    await shown.nth(0).click();
+    await saveNow(page);
+    // A save would have started now: none runs.
+    await expect(page.locator(".rme-saving")).toHaveCount(0);
+    await expect(shown.nth(0)).toBeChecked();
+    expect(await edits()).toBe(editsBefore + 1);
+    expect(await source()).toBe(description.replace("- [ ] one", "- [x] one").replace("- [x] two", "- [ ] two"));
+    // Changed by someone else meanwhile: not saved, and said so.
+    await conduit(page, "maniphest.edit", {
+      objectIdentifier: `T${id}`,
+      transactions: [{ type: "description", value: `- [ ] new first\n${await source()}` }],
+    });
+    const before = await source();
+    await shown.nth(0).click();
+    await saveNow(page);
+    await expect(page.locator(".rme-check-note")).toContainText("changed meanwhile");
+    // Shown as it was again.
+    await expect(shown.nth(0)).toBeChecked();
+    expect(await source()).toBe(before);
+  });
+
+  test("a click in a comment saves just that checkbox of the comment, also in a quote", async ({ page }) => {
+    await page.goto("/maniphest/");
+    const comment = "Also:\n\n> - [ ] quoted\n> - [x] done";
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Comment checkboxes" },
+        { type: "description", value: "- [ ] not this one" },
+        { type: "comment", value: comment },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    const shown = boxes(page, ".transaction-comment");
+    await expect(shown).toHaveCount(2);
+    await shown.nth(0).click();
+    await saveNow(page);
+    const comments = async () =>
+      (await conduit(page, "transaction.search", { objectIdentifier: `T${task.object.id}` })).data
+        .filter((t: { type: string }) => t.type === "comment")
+        .map((t: { comments: { content: { raw: string } }[] }) => t.comments[0].content.raw);
+    await expect.poll(comments).toEqual([comment.replace("> - [ ] quoted", "> - [x] quoted")]);
+    await expect(shown.nth(0)).toBeChecked();
+    // The description is untouched.
+    const fields = (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields;
+    expect(fields.description.raw).toBe("- [ ] not this one");
+  });
+
+  test("in a revision, the summary and the test plan; on a wiki page, the page", async ({ page }) => {
+    await createRevision(page, "Revision checkboxes");
+    const id = Number(/D(\d+)/.exec(page.url())![1]);
+    await conduit(page, "differential.revision.edit", {
+      objectIdentifier: `D${id}`,
+      transactions: [
+        { type: "summary", value: "- [ ] summary item" },
+        { type: "testPlan", value: "- [ ] tested here\n- [ ] and there" },
+      ],
+    });
+    await page.goto(`/D${id}`);
+    await addPhlair(page);
+    await boxes(page, ".phui-property-list-text-content").nth(2).click();
+    await saveNow(page);
+    const fields = async () =>
+      (await conduit(page, "differential.revision.search", { constraints: { ids: [id] } })).data[0].fields;
+    await expect.poll(async () => (await fields()).testPlan).toBe("- [ ] tested here\n- [x] and there");
+    expect((await fields()).summary).toBe("- [ ] summary item");
+
+    const slug = `e2e-checkboxes-${Date.now()}/`;
+    const content = "= Checklist =\n\n- [x] first\n  - [ ] nested\n\n```\n- [ ] code\n```";
+    await conduit(page, "phriction.create", { slug, title: "Checklist", content });
+    await page.goto(`/w/${slug}`);
+    await addPhlair(page);
+    const wiki = boxes(page, ".phui-document-content-view");
+    await expect(wiki).toHaveCount(2);
+    await wiki.nth(1).click();
+    await saveNow(page);
+    const raw = async () =>
+      (
+        await conduit(page, "phriction.document.search", {
+          constraints: { paths: [slug] },
+          attachments: { content: true },
+        })
+      ).data[0].attachments.content.content.raw;
+    await expect.poll(raw).toBe(content.replace("  - [ ] nested", "  - [x] nested"));
+  });
+
+  test("a save that fails is said, and the checkbox stays as it was", async ({ page }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Failing checkbox" },
+        { type: "description", value: "- [ ] one" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    await page.route(/\/api\/maniphest\.edit/, (route) => route.fulfill({ status: 500, body: "Broken" }));
+    const box = boxes(page, ".phui-property-list-text-content").first();
+    await box.click();
+    await saveNow(page);
+    await expect(page.locator(".rme-check-note")).toContainText("could not be saved");
+    await expect(box).not.toBeChecked();
+  });
+
+  test("boxes clicked are saved at once when the page is hidden, with the source read at the click", async ({
+    page,
+  }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Hidden with a checkbox" },
+        { type: "description", value: "- [ ] one\n- [ ] two" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    const loaded = page.waitForResponse((response) => response.url().includes("/api/maniphest.search"));
+    await boxes(page, ".phui-property-list-text-content").first().click();
+    await loaded;
+    let reads = 0;
+    page.on("request", (request) => request.url().includes("/api/maniphest.search") && reads++);
+    // Another tab, the tab closing, the screen locking: the page is hidden.
+    const saved = page.waitForRequest((request) => request.url().includes("/api/maniphest.edit"));
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await saved;
+    // One request: not reading the source again first.
+    expect(reads).toBe(0);
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
+        .raw;
+    await expect.poll(source).toBe("- [x] one\n- [ ] two");
+  });
+
+  test("leaving before the source is read: the browser asks, and meanwhile it is saved", async ({ page }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Leave at once" },
+        { type: "description", value: "- [ ] one" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    // A slow server.
+    await page.route(/\/api\/maniphest\.search/, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await route.continue();
+    });
+    let asked = false;
+    page.on("dialog", async (dialog) => {
+      asked = dialog.type() === "beforeunload";
+      // Read like a person reads it.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await dialog.accept();
+    });
+    await boxes(page, ".phui-property-list-text-content").first().click();
+    await page.goto("/maniphest/");
+    expect(asked).toBe(true);
+    await page.unroute(/\/api\/maniphest\.search/);
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
+        .raw;
+    await expect.poll(source).toBe("- [x] one");
+  });
+
+  test("boxes clicked are saved when the page is left before they would be", async ({ page }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Leave with a checkbox" },
+        { type: "description", value: "- [ ] one\n- [ ] two" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    // The source is read at the first click.
+    const loaded = page.waitForResponse((response) => response.url().includes("/api/maniphest.search"));
+    await boxes(page, ".phui-property-list-text-content").nth(1).click();
+    await loaded;
+    // The browser asks before leaving; leaving, it is saved.
+    let asked = false;
+    page.on("dialog", (dialog) => {
+      asked = dialog.type() === "beforeunload";
+      void dialog.accept();
+    });
+    await page.goto("/maniphest/");
+    expect(asked).toBe(true);
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
+        .raw;
+    await expect.poll(source).toBe("- [ ] one\n- [x] two");
+  });
+
+  test("a link followed (to the same page) saves first: the page it opens shows the boxes saved", async ({ page }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Follow a link" },
+        { type: "description", value: "- [ ] one\n- [ ] two" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    await boxes(page, ".phui-property-list-text-content").nth(1).click();
+    // A plain link to this page, like a mention of the task in a comment.
+    await page.evaluate((id) => {
+      const link = document.createElement("a");
+      link.href = `/T${id}`;
+      link.id = "again";
+      link.textContent = "This task again";
+      document.querySelector(".phui-timeline-view")!.prepend(link);
+    }, task.object.id);
+    await page.evaluate(() => ((window as unknown as { old: boolean }).old = true));
+    const loaded = page.waitForEvent("load");
+    await page.locator("#again").click();
+    // A new page.
+    await loaded;
+    expect(await page.evaluate(() => (window as unknown as { old?: boolean }).old ?? false)).toBe(false);
+    // Rendered by the server as saved: no checkbox script needed to see it.
+    await expect(page.locator(".phui-property-list-text-content li.remarkup-checked-item")).toHaveText("two");
+  });
+
+  test("a page older than the text saves the boxes as it shows them, then shows the text as saved", async ({
+    page,
+  }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "An older page" },
+        { type: "description", value: "- [ ] one\n- [ ] two\n- [ ] three" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    // Saved elsewhere meanwhile (another tab, a page left before this one loaded): "two" checked.
+    await conduit(page, "maniphest.edit", {
+      objectIdentifier: `T${task.object.id}`,
+      transactions: [{ type: "description", value: "- [ ] one\n- [x] two\n- [ ] three" }],
+    });
+    const shown = boxes(page, ".phui-property-list-text-content");
+    await expect(shown.nth(1)).not.toBeChecked();
+    // "two" as it shows (checked, here unchecked) and "one" clicked: no note, the clicks win.
+    await shown.nth(0).click();
+    await shown.nth(1).click();
+    await shown.nth(1).click();
+    await shown.nth(1).click();
+    await saveNow(page);
+    await expect(page.locator(".rme-saving")).toHaveCount(0);
+    await expect(page.locator(".rme-check-note")).toHaveCount(0);
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
+        .raw;
+    await expect.poll(source).toBe("- [x] one\n- [x] two\n- [ ] three");
+    // A box only the source changed shows as saved.
+    await conduit(page, "maniphest.edit", {
+      objectIdentifier: `T${task.object.id}`,
+      transactions: [{ type: "description", value: "- [x] one\n- [x] two\n- [x] three" }],
+    });
+    await shown.nth(0).click();
+    await saveNow(page);
+    await expect(page.locator(".rme-saving")).toHaveCount(0);
+    await expect.poll(source).toBe("- [ ] one\n- [x] two\n- [x] three");
+    await expect(shown.nth(2)).toBeChecked();
+  });
+});
+
+test.describe("fullscreen", () => {
+  test("the editor has a background of its own in fullscreen, the page's color", async ({ page }) => {
+    await createTask(page, "Fullscreen background");
+    await addPhlair(page);
+    await editor(page).click();
+    await page.keyboard.type("Text in fullscreen.");
+    await page.locator(".remarkup-assist-button:has(.fa-arrows-alt)").click();
+    await expect(page.locator(".remarkup-fullscreen-mode")).toBeVisible();
+    const background = await page.locator(".rme-editor").evaluate((el) => getComputedStyle(el).backgroundColor);
+    // Opaque: not the textarea's tint, through which the page would show.
+    expect(background).toMatch(/^rgb\(/);
+    await page.screenshot({ path: "test-results/fullscreen.png" });
+  });
+});
+
+test.describe("the toolbar on phones", () => {
+  const icons = (page: Page) =>
+    page
+      .locator(".phui-comment-form-view .remarkup-assist-bar .remarkup-assist-button:visible")
+      .evaluateAll((buttons) =>
+        buttons.map((b) => b.querySelector(".remarkup-assist")!.className.match(/fa-[\w-]+/)![0]),
+      );
+  const ESSENTIALS = [
+    "fa-bold",
+    "fa-italic",
+    "fa-link",
+    "fa-list-ul",
+    "fa-check-square-o",
+    "fa-cloud-upload",
+    "fa-ellipsis-h",
+    "fa-arrows-alt",
+    "fa-thumb-tack",
+    "fa-magic",
+  ].sort();
+
+  test("phones get one row of essentials and ⋯, pinned or not; larger screens all buttons", async ({ page }) => {
+    await createTask(page, "Toolbar sizes");
+    await addPhlair(page);
+    const pin = page.locator(".remarkup-assist-button:has(.fa-thumb-tack)");
+    // A computer: all of them, pinned or not, and no ⋯.
+    const all = await icons(page);
+    expect(all).not.toContain("fa-ellipsis-h");
+    expect(all.length).toBeGreaterThan(ESSENTIALS.length + 6);
+    await pin.click();
+    expect((await icons(page)).sort()).toEqual(all.sort());
+    await pin.click();
+    // A phone: the essentials, pinned or not.
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expect(page.locator("body")).toHaveClass(/device-phone/);
+    await expect.poll(async () => (await icons(page)).sort()).toEqual(ESSENTIALS);
+    await pin.click();
+    await expect.poll(async () => (await icons(page)).sort()).toEqual(ESSENTIALS);
+    // One row.
+    const heights = await page
+      .locator(".phui-comment-form-view .remarkup-assist-bar .remarkup-assist-button:visible")
+      .evaluateAll((buttons) => new Set(buttons.map((b) => Math.round(b.getBoundingClientRect().top))).size);
+    expect(heights).toBe(1);
+  });
+
+  test("on a phone, ⋯ shows the others in the middle of the window, which work on the text", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 640 });
+    await createTask(page, "Toolbar menu");
+    await addPhlair(page);
+    const bar = page.locator(".phui-comment-form-view .remarkup-assist-bar");
+    await editor(page).click();
+    await page.keyboard.type("strike me");
+    await page.keyboard.press("Shift+Home");
+    await bar.locator(".rme-more").click();
+    const menu = page.locator(".rme-more-menu");
+    await expect(menu.getByRole("menuitem", { name: /Preview/i })).toBeAttached();
+    // In the middle, in the window, scrolling itself.
+    const box = (await menu.boundingBox())!;
+    expect(Math.abs(box.x + box.width / 2 - 195)).toBeLessThan(2);
+    expect(Math.abs(box.y + box.height / 2 - 320)).toBeLessThan(2);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(640);
+    const scrollY = await page.evaluate(() => window.scrollY);
+    await menu.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect(menu).toBeVisible();
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+    await menu.getByRole("menuitem", { name: /Strikethrough/ }).click();
+    await expect.poll(() => textarea(page).inputValue()).toBe("~~strike me~~");
+  });
+});
+
+test.describe("the pinned form on a computer", () => {
+  test("the submit button, with its label, sits next to the actions", async ({ page }) => {
+    await createTask(page, "Pinned on a computer");
+    await addPhlair(page);
+    await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+    const bar = page.locator(".phui-comment-form-view .phui-comment-action-bar");
+    const submit = bar.locator("button[data-sigil~='submit-transactions']");
+    await expect(submit).toBeVisible();
+    expect((await submit.boundingBox())!.width).toBeGreaterThan(100);
+    const select = (await bar.locator("select").boundingBox())!;
+    const button = (await submit.boundingBox())!;
+    expect(Math.abs(button.y + button.height / 2 - (select.y + select.height / 2))).toBeLessThan(2);
+    // The same margins left, right and between, as "Add Action..." has them on phones.
+    const row = (await bar.boundingBox())!;
+    const left = select.x - row.x;
+    expect(Math.abs(row.x + row.width - (button.x + button.width) - left)).toBeLessThan(1);
+    expect(button.height).toBe(select.height);
+    // The handle on the top border, above none of the form's controls.
+    const handle = (await page.locator(".rme-pinned-resize").boundingBox())!;
+    const top = (await page.locator(".phui-comment-form-view").boundingBox())!.y;
+    expect(Math.abs(handle.y + handle.height / 2 - top)).toBeLessThan(1.5);
+    expect(handle.y + handle.height).toBeLessThanOrEqual(select.y);
+    // No scrollbars for a pixel.
+    const form = page.locator(".phui-comment-form-view");
+    expect(await form.evaluate((el) => [el.scrollWidth - el.clientWidth, el.scrollHeight - el.clientHeight])).toEqual([
+      0, 0,
+    ]);
+  });
+
+  test("a long menu near the bottom of the window stays in the window, scrolling itself", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    await createTask(page, "Menu at the bottom");
+    await addPhlair(page);
+    await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+    await page.locator(".rme-shortcuts-button").click();
+    const menu = page.locator(".rme-shortcuts");
+    await expect(menu).toBeVisible();
+    const box = (await menu.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(600);
+    // More items than room: it scrolls, not the page.
+    expect(await menu.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    const scrollY = await page.evaluate(() => window.scrollY);
+    await menu.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect(menu).toBeVisible();
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+  });
+});
+
+test.describe("the end of the text", () => {
+  test("a block at the end has as much room below it as the first line above it", async ({ page }) => {
+    await startWith(page, "Text.\n\n```\ncode line\n```");
+    const gaps = await page.locator(".rme-editor .cm-content").evaluate((content) => {
+      const box = content.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(content.querySelector(".cm-line")!);
+      const text = range.getBoundingClientRect();
+      const block = content.querySelector(".rme-block-code")!.getBoundingClientRect();
+      return { top: text.top - box.top, bottom: box.bottom - block.bottom };
+    });
+    // At least the room above the first line's text, which its letters start a bit below.
+    expect(gaps.bottom).toBeGreaterThanOrEqual(gaps.top);
+    expect(gaps.bottom).toBeLessThan(gaps.top + 4);
+  });
+});
+
+test.describe("the room below the text", () => {
+  /** The room between the last line and the end of what shows of the text, scrolled to its end. */
+  const roomBelow = (page: Page) =>
+    page
+      .locator(".rme-editor")
+      .last()
+      .evaluate((editor) => {
+        const scrollers = [editor, editor.querySelector(".cm-scroller")!] as HTMLElement[];
+        scrollers.forEach((el) => (el.scrollTop = el.scrollHeight));
+        const lines = editor.querySelectorAll(".cm-line");
+        const last = lines[lines.length - 1].getBoundingClientRect();
+        // The inside of the editor's box, which shows the text, without its border.
+        const inside = editor.getBoundingClientRect().top + editor.clientTop + editor.clientHeight;
+        return Math.round(inside - last.bottom);
+      });
+
+  test("is the same in the text, pinned and in a dialog; in fullscreen like its padding", async ({ page }) => {
+    await createTask(page, "Room below");
+    await addPhlair(page);
+    await editor(page).click();
+    await page.keyboard.insertText(Array.from({ length: 40 }, (_, i) => `Line ${i}`).join("\n\n"));
+    await page.keyboard.press("Control+End");
+    const normal = await roomBelow(page);
+    expect(normal).toBeGreaterThan(8);
+    const pin = page.locator(".remarkup-assist-button:has(.fa-thumb-tack)");
+    await pin.click();
+    await expect.poll(() => roomBelow(page)).toBe(normal);
+    await pin.click();
+    await page.locator(".remarkup-assist-button:has(.fa-arrows-alt)").click();
+    // Fullscreen has 16px of padding all round, not 8px.
+    await expect.poll(() => roomBelow(page)).toBe(normal + 8);
+    await page.keyboard.press("Escape");
+    // A dialog: editing the description.
+    await page.goto(`${page.url().replace(/\/T(\d+).*/, "/maniphest/task/edit/$1/")}`);
+    await addPhlair(page);
+    await editor(page).click();
+    await page.keyboard.insertText(Array.from({ length: 40 }, (_, i) => `Line ${i}`).join("\n\n"));
+    await expect.poll(() => roomBelow(page)).toBe(normal);
+  });
+});
+
+test.describe("the pinned form's handle by touch", () => {
+  test.use({ viewport: { width: 390, height: 800 }, hasTouch: true });
+
+  test("a finger drags the handle and sets the height", async ({ page }) => {
+    await createTask(page, "Touch handle");
+    await addPhlair(page);
+    await page.locator(".remarkup-assist-button:has(.fa-thumb-tack)").click();
+    const form = page.locator(".phui-comment-form-view");
+    const handle = page.locator(".rme-pinned-resize");
+    await expect(handle).toBeVisible();
+    // Touches do not scroll the page there.
+    await expect(handle).toHaveCSS("touch-action", "none");
+    const before = (await form.boundingBox())!.height;
+    // A finger: pointer events of the touch kind, which leave the handle as it drags.
+    await handle.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const at = (y: number) => ({
+        pointerId: 7,
+        pointerType: "touch",
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+        bubbles: true,
+      });
+      el.dispatchEvent(new PointerEvent("pointerdown", { ...at(box.top + 8), button: 0 }));
+      for (let y = box.top + 8; y >= box.top - 150; y -= 30) {
+        window.dispatchEvent(new PointerEvent("pointermove", at(y)));
+      }
+      window.dispatchEvent(new PointerEvent("pointerup", at(box.top - 150)));
+    });
+    await expect.poll(async () => (await form.boundingBox())!.height).toBeGreaterThan(before + 140);
+  });
+});
+
+test.describe("leaving a table cell", () => {
+  test("Tab right after typing: the cell left shows its text as edited, not its source, until rendered", async ({
+    page,
+  }) => {
+    await startWith(page, "Before.\n\n| Element | Line\n| --- | ---\n| Fe | Ka\n| Cu | Ka\n\nAfter.");
+    await page.locator(".rme-table-editor td", { hasText: "Fe" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" **iron**");
+    // What the cell shows from the moment it is left.
+    await page.evaluate(() => {
+      const shown: string[] = [];
+      (window as unknown as { shown: string[] }).shown = shown;
+      const cell = document.querySelector(".rme-table-editor tr[data-row='2'] td[data-col='0']")!;
+      const note = () => !cell.querySelector(".cm-editor") && shown.push(cell.textContent ?? "");
+      new MutationObserver(note).observe(cell, { childList: true, subtree: true, characterData: true });
+    });
+    await page.keyboard.press("Tab");
+    const cell = page.locator(".rme-table-editor tr[data-row='2'] td[data-col='0']");
+    await expect(cell.locator("strong")).toHaveText("iron");
+    const shown = await page.evaluate(() => (window as unknown as { shown: string[] }).shown);
+    expect(shown.length).toBeGreaterThan(0);
+    for (const text of shown) {
+      expect(text).not.toContain("**");
+    }
   });
 });

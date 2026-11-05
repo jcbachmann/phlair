@@ -29,7 +29,8 @@ const blur = (page: Page) => page.evaluate(() => (document.activeElement as HTML
 
 test("rendered while editing", async ({ page }) => {
   await openWithEditor(page, "/phriction/edit/2/");
-  await page.locator(".rme-block h2").first().waitFor();
+  // Headers show their styled source.
+  await page.locator(".rme-editor .cm-line.rme-src-h").first().waitFor();
   await shoot(page, "editor", [], 560);
 });
 
@@ -64,8 +65,8 @@ test("link and task search", async ({ page }) => {
   await openNewWikiPage(page, "Search");
   await editor(page).click();
   await page.keyboard.type("The detector is tracked in ");
-  await page.keyboard.press("Control+Shift+k");
-  await page.locator(".rme-picker input").fill("calib");
+  await page.keyboard.press("Control+k");
+  await page.locator(".rme-picker .rme-picker-search").fill("calib");
   await page.locator(".rme-picker .jx-result").first().waitFor();
   await shoot(page, "search", [".rme-picker"], 260);
 });
@@ -104,15 +105,12 @@ test("Phuture: snoozed items and the snooze menu", async ({ page }) => {
   const snooze = async (id: number, choice: string) => {
     const item = page.locator("li.phui-oi").filter({ has: page.locator(`a.phui-oi-link[href="/T${id}"]`) });
     await item.locator(".phuture-action a").click();
-    await page
-      .locator(".phuture-menu")
-      .getByRole("link", { name: new RegExp(`^${choice}`) })
-      .click();
+    await page.locator(".phuture-menu [role^='menuitem']", { hasText: new RegExp(`^${choice}`) }).click();
   };
   await snooze(ids[1], "Tomorrow");
   await snooze(ids[3], "In a week");
   await page.locator(".phuture-menu-button").click();
-  await page.locator(".phuture-menu").getByRole("link", { name: "Show snoozed items" }).click();
+  await page.locator(".phuture-menu [role^='menuitem']", { hasText: "Show snoozed items" }).click();
   await page
     .locator(`li.phui-oi a.phui-oi-link[href="/T${ids[0]}"]`)
     .locator("xpath=ancestor::li[1]")

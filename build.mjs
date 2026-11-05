@@ -163,6 +163,8 @@ const options = {
       dev ? `${pkg.version} dev, ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC` : pkg.version,
     ),
     __TARGET__: JSON.stringify("extension"),
+    // The project of feedback tasks (see feedback.ts), if any.
+    __FEEDBACK_PROJECT__: JSON.stringify(process.env.PHLAIR_FEEDBACK_PROJECT ?? ""),
   },
 };
 const target = (name) => ({ ...options.define, __TARGET__: JSON.stringify(name) });

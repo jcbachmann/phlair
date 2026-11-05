@@ -68,7 +68,7 @@ nothing moves when the cursor moves.
 - **Keys:** `Tab`/`Shift+Tab` move between cells (and add a row at the end), `Enter` adds a row (on an empty last row it
   leaves the table), arrow keys move between cells and out of the table, `Alt+↑/↓` move rows, `Alt+Shift+←/→` move
   columns, `Ctrl+Z` undoes, and typing `[[` in a cell adds the closing `]]`. A cell is edited like a line of the text:
-  formatting buttons and shortcuts, `Ctrl+K` and `Ctrl+Shift+K`, the link bubble, a URL pasted over selected text,
+  formatting buttons and shortcuts, `Ctrl+K`, the link bubble, a URL pasted over selected text,
   uploads (the upload button, pasting and dropping files), Phorge's autocomplete and the insert menu (with what fits in
   a cell) work in cells.
 - **New tables** from the table button: pick the size in a grid, and the table opens for editing with its first header
@@ -80,11 +80,13 @@ nothing moves when the cursor moves.
 
 ### Links and references
 
-- **Link button and `Ctrl+K`** search wiki pages, tasks (by title) and people, or take a URL; with text selected, it
-  becomes the link's text. On an existing link they change it.
-- **`Ctrl+Shift+K`** (anchor button) references a task, wiki page, project, person or other object, found by its title,
-  e.g. `T12`. Tasks with the words in their titles come first, then those with them in their descriptions or comments; open ones
-  first in each. On a reference, it opens with the reference filled in, showing what it refers to, and changes it.
+- **Link button and `Ctrl+K`** (also `Ctrl+Shift+K`) open a dialog with the **text** and the **target** of a link or
+  reference. The target is searched for, or a URL is taken: wiki pages and tasks with the words in their title, then those
+  with them in their text; each open ones before closed (deleted or moved) ones, and wiki pages before tasks; then
+  people, projects, repositories and other objects. Selected text is the link's text (and stays highlighted while
+  the dialog is open); with the cursor on a link or a reference (`T12`, `@alice`) they change it. Without a text, the
+  target alone is written (`T12`, `@alice`, a URL); without a target, the text alone; without either, nothing. `Tab`
+  goes between the fields, `Enter` applies.
 - With the cursor in a link, a **bubble** offers to open, change or remove it. A URL pasted over selected text links it.
 - **Phorge's autocomplete menu** for `@user`, `#project`, `[[ wiki page`, `:emoji` and `((short URL`, with the
   same rules and keys (a port of its `PHUIXAutocomplete`).
@@ -175,8 +177,25 @@ nothing moves when the cursor moves.
   choice is remembered per browser. Phorge's preview below the form is hidden while the editor shows the same.
 - **In dialogs** (editing a task or comment) the editor keeps the height of the text field and scrolls inside, like
   it; everywhere else it grows with the text.
-- **Phones and tablets** get all toolbar buttons (Phorge hides most of them there); the toolbar wraps.
+- **Tablets** get all toolbar buttons (Phorge hides most of them there); the toolbar wraps.
 - The wand button's tooltip shows the version of the running build (and the build time of a development build).
+- **Feedback:** the speech bubble button opens a new task for feedback on the editor in a new tab, with questions and
+  the details that help (version, page, browser); screenshots can be pasted into it. Builds can give these tasks a
+  project (`PHLAIR_FEEDBACK_PROJECT`, see [docs/PACKAGING.md](docs/PACKAGING.md)).
+- **Pinned comment form** ("Pin Form on Screen"): its text scrolls inside it, so the row of "Add Action..." with the
+  submit button (on phones an icon) and the toolbar stay in view; a handle on its top border sets its height (also by
+  touch), which is
+  remembered per browser.
+- **Phones** get one row of essential toolbar buttons; "⋯" has the others. Menus open in the middle of the window
+  there, and scroll where they do not fit (elsewhere they open where there is room).
+- **Fullscreen:** the editor has the page's background (Phorge's text field is a tint over the page).
+- **Actions of a comment** can be removed by their X on phones too (Phorge hides it there).
+- **Checkboxes in rendered text** can be clicked: in task descriptions, revision summaries and test plans, wiki pages
+  and comments, a click checks or unchecks the box at once, and 5 seconds after the last click the boxes clicked are
+  saved, one edit per text (only those boxes change, as the page shows them), if you may edit it. A link followed saves
+  them first; when the page is hidden or left otherwise (another tab or app, closing, reloading, where the browser asks
+  first), they are saved right away, in a request the browser finishes after the page is gone.
+  Quitting the browser at once, or a text over 64 KB, can still lose them: browsers give a closing page no more time.
 
 ### Limitations
 

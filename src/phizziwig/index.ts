@@ -4,12 +4,16 @@
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { addStyle } from "../style";
 import { enhance } from "./attach";
+import { enableCheckboxes } from "./checkboxes";
+import { watchCommentForms } from "./commentForm";
 import { closePicker } from "./editor/picker";
 import { TEXTAREA } from "./phorge";
 import css from "./style.css";
 
 function enhanceAll(root: ParentNode): void {
   root.querySelectorAll<HTMLTextAreaElement>(TEXTAREA).forEach(enhance);
+  watchCommentForms(root);
+  enableCheckboxes(root);
 }
 
 export function startPhizziwig(): void {

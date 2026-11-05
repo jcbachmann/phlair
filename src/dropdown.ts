@@ -146,6 +146,41 @@ export function showDropdown(
   return menu;
 }
 
+/** Space kept between a menu and the edges of the window. */
+const MARGIN = 8;
+
+/**
+ * Places a menu at a point of the window, all of it in the window: below the
+ * point, or above it where there is more room, scrolling if it fits on
+ * neither side. On phones, in the middle of the window, which it may fill.
+ */
+function place(menu: HTMLElement, x: number, y: number, alignRight: boolean): void {
+  menu.style.overflowY = "auto";
+  if (document.body.classList.contains("device-phone")) {
+    menu.classList.add("rme-dropdown-centered");
+    menu.style.position = "fixed";
+    menu.style.maxHeight = `${window.innerHeight - 4 * MARGIN}px`;
+    menu.style.maxWidth = `${window.innerWidth - 4 * MARGIN}px`;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${(window.innerWidth - rect.width) / 2}px`;
+    menu.style.top = `${(window.innerHeight - rect.height) / 2}px`;
+    return;
+  }
+  menu.style.position = "absolute";
+  menu.style.maxWidth = `${window.innerWidth - 2 * MARGIN}px`;
+  const { width, height } = menu.getBoundingClientRect();
+  const below = window.innerHeight - y - MARGIN;
+  const above = y - MARGIN;
+  const onBelow = height <= below || below >= above;
+  const room = onBelow ? below : above;
+  menu.style.maxHeight = `${room}px`;
+  const shown = Math.min(height, room);
+  const top = onBelow ? y : y - shown;
+  const left = Math.min(Math.max(MARGIN, alignRight ? x - width : x), window.innerWidth - width - MARGIN);
+  menu.style.left = `${Math.max(MARGIN, left) + window.scrollX}px`;
+  menu.style.top = `${top + window.scrollY}px`;
+}
+
 /**
  * Shows a dropdown menu with any content at a point of the window. With an
  * owner, the button that opened it, a press on it does not close the menu
@@ -171,22 +206,8 @@ export function showDropdownContent(
   menu.append(content);
   // Keep the focus where it is.
   menu.addEventListener("mousedown", (event) => event.preventDefault());
-  menu.style.position = "absolute";
-  menu.style.left = `${x + window.scrollX}px`;
-  menu.style.top = `${y + window.scrollY}px`;
   document.body.append(menu);
-  if (alignRight) {
-    x = Math.max(0, x - menu.getBoundingClientRect().width);
-    menu.style.left = `${x + window.scrollX}px`;
-  }
-  // Keep it on the screen.
-  const rect = menu.getBoundingClientRect();
-  if (rect.bottom > window.innerHeight) {
-    menu.style.top = `${Math.max(0, y - rect.height) + window.scrollY}px`;
-  }
-  if (rect.right > window.innerWidth) {
-    menu.style.left = `${Math.max(0, x - rect.width) + window.scrollX}px`;
-  }
+  place(menu, x, y, alignRight);
   open = menu;
   openOwner = owner ?? null;
   openOwner?.setAttribute("aria-expanded", "true");
@@ -208,6 +229,10 @@ document.addEventListener(
 window.addEventListener(
   "scroll",
   (event) => {
+    // Not the menu scrolling its own items.
+    if (event.target instanceof Node && open?.contains(event.target)) {
+      return;
+    }
     if (!openOwner || (event.target instanceof Element && event.target.contains(openOwner))) {
       closeDropdown();
     }

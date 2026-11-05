@@ -280,9 +280,30 @@ function stopEditing(dom: TableDom, cell: HTMLElement): void {
     editedCell = null;
   }
   cellEditors.delete(cell);
+  // What its editor showed (styled, its markup hidden, references rendered)
+  // stays until the table is rendered with the cell's new text: else the
+  // cell would show its source meanwhile (e.g. Tab right after typing), and
+  // the table would change its widths twice.
+  // As without the focus: all rendered, also what the cursor was on.
+  if (editor.hasFocus) {
+    editor.contentDOM.blur();
+  }
+  editor.dispatch({});
+  const shown = Array.from(editor.contentDOM.querySelectorAll(".cm-line"), (line) => {
+    const copy = line.cloneNode(true) as HTMLElement;
+    copy.removeAttribute("contenteditable");
+    return Array.from(copy.childNodes);
+  }).flat();
   editor.destroy();
-  delete cell.dataset.source;
-  cell.textContent = "";
+  const { row, col } = positionOf(cell);
+  const source = parseTable(dom.rmeText ?? "").rows[row]?.cells[col];
+  if (source !== undefined && !dom.rmeHtml) {
+    cell.replaceChildren(...shown);
+    cell.dataset.source = source;
+  } else {
+    delete cell.dataset.source;
+    cell.textContent = "";
+  }
   sync(dom, dom.rmeText ?? "", dom.rmeHtml);
 }
 
@@ -882,7 +903,6 @@ export function focusedCell(view: EditorView): HTMLElement | null {
 const INSERTING = new Set([
   ...INLINE_FORMATS.map((f) => f.icon),
   "fa-link",
-  "fa-anchor",
   "fa-list-ul",
   "fa-list-ol",
   "fa-code",

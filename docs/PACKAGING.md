@@ -4,11 +4,12 @@
 
 The repository holds no instance: what a build is for comes from the environment.
 
-| Variable            | For                                                                                                                                                                                  |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `PHLAIR_HOSTS`      | The Phorge instances the extension and userscript run on, e.g. `https://phorge.example.com/*` (several separated by spaces or commas). Without it, only the Phorge library is built. |
-| `PHLAIR_GECKO_ID`   | The Firefox add-on ID, e.g. `phlair@example.com`: needed to sign the extension, see [Firefox](#firefox-unlisted-signed-by-mozilla).                                                  |
-| `PHLAIR_UPDATE_URL` | Where the userscript is hosted, see [Userscript](#userscript).                                                                                                                       |
+| Variable                  | For                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PHLAIR_HOSTS`            | The Phorge instances the extension and userscript run on, e.g. `https://phorge.example.com/*` (several separated by spaces or commas). Without it, only the Phorge library is built. |
+| `PHLAIR_GECKO_ID`         | The Firefox add-on ID, e.g. `phlair@example.com`: needed to sign the extension, see [Firefox](#firefox-unlisted-signed-by-mozilla).                                                  |
+| `PHLAIR_UPDATE_URL`       | Where the userscript is hosted, see [Userscript](#userscript).                                                                                                                       |
+| `PHLAIR_FEEDBACK_PROJECT` | Optional: the project (hashtag without `#`) that feedback tasks of the editor's feedback button get.                                                                                 |
 
 | Command                         | Builds                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------- |

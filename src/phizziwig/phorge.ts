@@ -221,10 +221,11 @@ async function post(
   path: string,
   params: Record<string, string>,
   query: Record<string, string> = {},
+  keepalive = false,
 ): Promise<AjaxResponse> {
   return requestWithMetadata(
     path,
-    { method: "POST", body: new URLSearchParams({ __csrf__: csrfToken(), ...params }) },
+    { method: "POST", body: new URLSearchParams({ __csrf__: csrfToken(), ...params }), keepalive },
     query,
   );
 }
@@ -320,10 +321,17 @@ export async function typeahead(
  * Calls a Conduit method with the user's web session, like Phorge's
  * Conduit console does.
  */
-export async function conduit(method: string, params: Record<string, unknown>, timeout = 15_000): Promise<unknown> {
+export async function conduit(
+  method: string,
+  params: Record<string, unknown>,
+  timeout = 15_000,
+  /** Sent also when the page is left (e.g. saving on leaving it). */
+  keepalive = false,
+): Promise<unknown> {
   const response = await pageFetch(new URL(`/api/${method}`, location.origin).toString(), {
     method: "POST",
     credentials: "same-origin",
+    keepalive,
     signal: AbortSignal.timeout(timeout),
     body: new URLSearchParams({ params: JSON.stringify(params), output: "json", __csrf__: csrfToken() }),
   });
@@ -399,6 +407,11 @@ export async function uploadFile(file: File, progress?: (done: number) => void):
     { ...query, __upload__: "1" },
   )) as UploadedFile;
   return { id: payload.id, phid: payload.phid };
+}
+
+/** Saves the text of a comment, like its "Edit Comment" dialog (Phorge checks that the user may). */
+export async function editComment(phid: string, text: string, keepalive = false): Promise<void> {
+  await post(`/transactions/edit/${encodeURIComponent(phid)}/`, { text, __form__: "1" }, {}, keepalive);
 }
 
 /**

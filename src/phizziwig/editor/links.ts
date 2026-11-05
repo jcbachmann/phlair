@@ -1,6 +1,7 @@
-// Links in the text: the link button and Ctrl+K open a search for pages,
-// tasks and other objects (or take a URL); with the cursor in a link, a
-// bubble offers to open, change or remove it. (A URL pasted over selected
+// Links and references in the text: the link button and Ctrl+K open a
+// dialog with the text and the target, which searches pages, tasks and other
+// objects (or takes a URL); with the cursor in a link, a bubble offers to
+// open, change or remove it. (A URL pasted over selected
 // text links it, see pasting.ts.)
 
 import { type EditorState, StateField } from "@codemirror/state";
@@ -47,14 +48,6 @@ export function findLinks(line: string): Link[] {
   return links.sort((a, b) => a.from - b.from);
 }
 
-/** A link in its form. */
-function formatLink(form: Link["form"], target: string, text: string | null): string {
-  if (form === "markdown" && text) {
-    return `[${text}](${target})`;
-  }
-  return text ? `[[ ${target} | ${text} ]]` : form === "bare" ? target : `[[ ${target} ]]`;
-}
-
 /** The link at the cursor (inside it), in document positions. */
 function linkAt(state: EditorState, pos: number = state.selection.main.head): Link | null {
   const line = state.doc.lineAt(pos);
@@ -73,19 +66,23 @@ function selectedLink(state: EditorState): Link | null {
   return link ? { ...link, from: link.from + line.from, to: link.to + line.from } : null;
 }
 
-/** The text that links to a target, with the selected text as its text. */
-function linkText(target: Target, text: string): string {
+/**
+ * What the link dialog makes of a target and a text: a link with the text, or
+ * without one the target alone (its reference, e.g. "T12", "@alice", a URL).
+ * A Markdown link stays one. (Without a target, the text alone: unlink.)
+ */
+function linkResult(form: Link["form"], target: Target, text: string): string {
   if (!text) {
     return target.reference;
   }
-  return `[[ ${target.target} | ${text} ]]`;
+  return form === "markdown" ? `[${text}](${target.target})` : `[[ ${target.target} | ${text} ]]`;
 }
 
-/** The link with another target, keeping its form and text; a bare URL changed to a task or person becomes its reference ("T12"). */
-function relinked(link: Link, target: Target): string {
-  return link.form === "bare" && !/^[a-z]+:/i.test(target.target)
-    ? target.reference
-    : formatLink(link.form, target.target, link.text);
+/** What a link points to now, for the dialog: picked again when its link field is not changed. */
+function currentTarget(link: Link): Target {
+  // Without its text: a URL bare, a page or path in brackets.
+  const reference = /^[a-z]+:/i.test(link.target) ? link.target : `[[ ${link.target} ]]`;
+  return { label: link.target, icon: "fa-link", reference, target: link.target };
 }
 
 /** Replaces a range of the text with a link or reference, the cursor after it. */
@@ -98,56 +95,57 @@ function insertLink(view: EditorView, range: Range, insert: string): void {
   });
 }
 
+/** Opens the link dialog: the text and the target of a link, the target searched for. */
+function openLinkDialog(
+  view: EditorView,
+  options: { headIcon: string; headText: string; placeholder: string; range: Range; text: string; form: Link["form"] },
+  initial?: Target,
+): void {
+  openPicker(view, {
+    ...options,
+    // As written: the target of a link, the reference ("T12") of a reference.
+    initial: initial?.label,
+    initialTarget: initial,
+    pick: (target, range, text) => insertLink(view, range, linkResult(options.form, target, text)),
+    unlink: (range, text) => insertLink(view, range, text),
+  });
+}
+
 /**
- * The link button: changes the target of the link the cursor is in, links the
- * selected text, or inserts a reference.
+ * The link button, Ctrl+K (and Ctrl+Shift+K): changes the link or the
+ * reference ("T12", "@alice") the cursor is in, its text and its target, or
+ * links the selected text, or inserts a link or reference at the cursor.
  */
 export function editLink(view: EditorView): boolean {
   const { state } = view;
-  const existing = selectedLink(state);
-  if (existing) {
-    openPicker(view, {
-      headIcon: "fa-link",
-      headText: "Change Link:",
-      placeholder: "Search pages, tasks, people… or paste a URL",
-      initial: existing.target,
-      range: existing,
-      pick: (target, range) =>
-        view.dispatch({
-          changes: { from: range.from, to: range.to, insert: relinked(existing, target) },
-          userEvent: "input.link",
-        }),
-    });
-    return true;
-  }
-  const text = state.sliceDoc(state.selection.main.from, state.selection.main.to);
-  openPicker(view, {
+  const options = {
     headIcon: "fa-link",
     headText: "Link to:",
-    placeholder: "Search pages, tasks, people… or paste a URL",
-    range: state.selection.main,
-    pick: (target, range) => insertLink(view, range, linkText(target, text)),
-  });
-  return true;
-}
-
-/** Inserts a reference to a task or other object, found by its title; in a link, changes the link. */
-export function insertReference(view: EditorView): boolean {
-  if (selectedLink(view.state)) {
-    return editLink(view);
+    placeholder: "Search tasks, pages, people, projects… or paste a URL",
+  };
+  const existing = selectedLink(state);
+  if (existing) {
+    openLinkDialog(
+      view,
+      { ...options, range: existing, text: existing.text ?? "", form: existing.form },
+      currentTarget(existing),
+    );
+    return true;
   }
-  const reference = selectedReference(view.state);
-  const selected = reference ?? view.state.selection.main;
-  const text = view.state.sliceDoc(selected.from, selected.to);
-  openPicker(view, {
-    headIcon: "fa-anchor",
-    headText: "Reference:",
-    placeholder: "Search tasks, pages, people, projects… by name",
-    // A reference is changed: its search shows what it refers to.
-    initial: reference?.text,
-    range: selected,
-    pick: (target, range) => insertLink(view, range, reference ? target.reference : linkText(target, text)),
-  });
+  const reference = selectedReference(state);
+  if (reference) {
+    // Its search shows what it refers to.
+    const mention = /^@(.+)$/.exec(reference.text);
+    const target = mention ? `/p/${mention[1]}/` : `/${reference.text}`;
+    openLinkDialog(
+      view,
+      { ...options, range: reference, text: "", form: "wiki" },
+      { label: reference.text, icon: "fa-anchor", reference: reference.text, target },
+    );
+    return true;
+  }
+  const range = state.selection.main;
+  openLinkDialog(view, { ...options, range, text: state.sliceDoc(range.from, range.to), form: "wiki" });
   return true;
 }
 

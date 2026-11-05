@@ -38,6 +38,8 @@ import { pickerRanges } from "./editor/picker";
 import { cellPreview, inlinePreview } from "./editor/inlinePreview";
 import { sourceStyle } from "./editor/sourceStyle";
 import { cellSupport, formatFocusedCell } from "./editor/tableEditor";
+import { compactToolbar } from "./compactToolbar";
+import { feedbackUrl } from "./feedback";
 import { showTablePicker } from "./editor/tablePicker";
 import { fileUpload, submitWhenUploaded, uploadPanel } from "./editor/upload";
 import { keyLabel } from "./keys";
@@ -153,7 +155,8 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
   // The textarea is hidden, but has its colors.
   const own = getComputedStyle(textarea);
   editor.style.setProperty("--rme-color", own.color);
-  editor.style.setProperty("--rme-background", own.backgroundColor);
+  // Opaque: Phorge's is a tint of the page behind it, which the fullscreen editor does not have.
+  editor.style.setProperty("--rme-background", opaqueBackground(textarea));
   editor.style.setProperty("--rme-border-color", own.borderLeftColor);
 }
 
@@ -216,6 +219,40 @@ const overrides: ToolbarOverride[] = [
 function withHints(placeholder: string): string {
   const text = placeholder.trim();
   return `${text}${/[.…!?:]$/.test(text) ? "" : "."} Type / to insert, F1 for shortcuts.`;
+}
+
+/** The red, green, blue and alpha of a computed color ("rgb(…)" or "rgba(…)"); null for others. */
+function rgba(color: string): [number, number, number, number] | null {
+  const parts = /^rgba?\(([^)]+)\)$/
+    .exec(color)?.[1]
+    .split(/[\s,/]+/)
+    .filter(Boolean)
+    .map(Number);
+  return parts && parts.length >= 3 && parts.every((n) => !Number.isNaN(n))
+    ? [parts[0], parts[1], parts[2], parts[3] ?? 1]
+    : null;
+}
+
+/** The background of an element as it shows: its color over those of the elements behind it, opaque. */
+function opaqueBackground(element: Element): string {
+  const layers: [number, number, number, number][] = [];
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    const color = rgba(getComputedStyle(node).backgroundColor);
+    if (color && color[3] > 0) {
+      layers.push(color);
+      if (color[3] >= 1) {
+        break;
+      }
+    }
+  }
+  // Over white where nothing behind it is opaque.
+  let [r, g, b] = [255, 255, 255];
+  for (const [lr, lg, lb, la] of layers.reverse()) {
+    r = lr * la + r * (1 - la);
+    g = lg * la + g * (1 - la);
+    b = lb * la + b * (1 - la);
+  }
+  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
 }
 
 class LiveEditor {
@@ -397,10 +434,20 @@ class LiveEditor {
       },
     });
     this.bar.querySelector(".rme-toggle")?.after(help);
+    const feedback = toolbarButton({
+      title: "Feedback on the editor: a new task, in a new tab",
+      icon: "fa-commenting-o",
+      className: "remarkup-assist-right rme-own rme-feedback-button",
+      run: () => window.open(feedbackUrl(), "_blank", "noopener"),
+    });
+    help.after(feedback);
+    const restoreToolbar = compactToolbar(this.bar);
     this.removeButtons = () => {
+      restoreToolbar();
       removeFormatting();
       restoreTooltips();
       help.remove();
+      feedback.remove();
     };
     // Uploads and quoting change the textarea later; poll for that.
     this.timer = setInterval(() => this.pull(), 300);

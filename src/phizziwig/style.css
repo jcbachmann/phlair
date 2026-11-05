@@ -105,7 +105,18 @@
 /* The content fills the box, so a click anywhere in an empty editor enters it. */
 .rme-editor .cm-content {
   align-self: stretch;
-  padding: 8px 12px;
+  /* At the bottom as much room as above the first line shows: the padding and half the line's spacing. */
+  padding: 8px 12px calc(8px + (1lh - 1em) / 2);
+}
+
+/*
+ * Where the text scrolls in the editor (dialogs, the pinned form), the
+ * content is as high as the text, so its padding comes after the last line;
+ * CodeMirror's min-height fills the box.
+ */
+.aphront-dialog-view .rme-editor .cm-content,
+.remarkup-assist-pinned .rme-editor .cm-content {
+  align-self: flex-start;
 }
 
 .rme-editor .cm-line {
@@ -134,7 +145,7 @@
 }
 
 .remarkup-control-fullscreen-mode.rme-active .rme-editor .cm-content {
-  padding: 16px;
+  padding: 16px 16px calc(16px + (1lh - 1em) / 2);
 }
 
 /* Rendered blocks. */
@@ -706,6 +717,43 @@ body:has(.rme-active) .phui-remarkup-preview {
   font: inherit;
 }
 
+/* The link dialog: the text and the link, each with its name. */
+.rme-picker .phuix-autocomplete-echo.rme-picker-fields {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 6px;
+  align-items: center;
+}
+
+.rme-picker .phuix-autocomplete-echo.rme-picker-fields {
+  /* Not the grey of Phorge's echo: the text is no placeholder. */
+  color: inherit;
+}
+
+.rme-picker-fields label {
+  display: contents;
+  font-weight: normal;
+}
+
+.rme-picker-fields label > span {
+  opacity: 0.7;
+}
+
+.rme-picker-fields .rme-picker-input {
+  min-width: 0;
+  height: 22px;
+  margin: 0;
+  padding: 0 4px;
+  font: inherit;
+}
+
+/* The text a link or reference dialog replaces, while the dialog has the focus. */
+.rme-editor .rme-picking {
+  background-color: color-mix(in srgb, Highlight 45%, transparent);
+}
+
 /* A long press on an image opens the editor's image menu, not the browser's. */
 .rme-editor a[data-rme-file] img {
   -webkit-touch-callout: none;
@@ -922,5 +970,250 @@ body:has(.rme-active) .phui-remarkup-preview {
 }
 
 .rme-image-more[hidden] {
+  display: none;
+}
+
+/*
+ * The X that removes an action of a comment form: Phorge hides it on phones
+ * (it shows errors there in the label, which actions do not use). At the
+ * right of the line of the action's name.
+ */
+.phui-comment-action {
+  position: relative;
+}
+
+.device-phone .phui-comment-action > .aphront-form-error,
+.phui-form-full-width .phui-comment-action > .aphront-form-error {
+  display: block;
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: auto;
+  padding: 0;
+}
+
+/*
+ * The handle that sets the height of the pinned comment form (commentForm.ts):
+ * a grip on the middle of its top border, half above it, so it covers none
+ * of the form's controls; it takes touches too (no scrolling of the page).
+ */
+.rme-pinned-resize {
+  position: fixed;
+  left: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 64px;
+  height: 16px;
+  margin-left: -32px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.rme-pinned-resize::before {
+  content: "";
+  width: 48px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--rme-border-color, #c7ccd9);
+  border-radius: 4px;
+  background: var(--rme-background, #fff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.rme-pinned-resize:hover::before,
+.rme-pinned-resize:focus-visible::before {
+  border-color: #3d8fd9;
+}
+
+/*
+ * The pinned comment form (commentForm.ts): a column whose text scrolls
+ * inside it, so the actions, the toolbar and the submit button stay in view
+ * and there is one scrollbar, not one of the form and one of the page's text.
+ * The form itself scrolls only when its actions leave no room for the text.
+ */
+.phui-comment-form-view.remarkup-assist-pinned,
+.remarkup-assist-pinned > form,
+.remarkup-assist-pinned > form > .phui-form-view,
+.remarkup-assist-pinned .phui-comment-textarea-control,
+.remarkup-assist-pinned .phui-comment-textarea-control > .aphront-form-input,
+.remarkup-assist-pinned .phui-comment-textarea-control .rme-active {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.remarkup-assist-pinned > *,
+.remarkup-assist-pinned > form > .phui-form-view > *,
+.remarkup-assist-pinned .phui-comment-textarea-control > .aphront-form-input > *,
+.remarkup-assist-pinned .phui-comment-textarea-control .rme-active > * {
+  flex: none;
+}
+
+.remarkup-assist-pinned > form,
+.remarkup-assist-pinned > form > .phui-form-view,
+.remarkup-assist-pinned > form > .phui-form-view > .phui-comment-textarea-control,
+.remarkup-assist-pinned .phui-comment-textarea-control > .aphront-form-input > .rme-active,
+.remarkup-assist-pinned .phui-comment-textarea-control .rme-active > .rme-editor {
+  flex: 1 1 auto;
+}
+
+.remarkup-assist-pinned .rme-editor {
+  min-height: 60px;
+  resize: none;
+}
+
+/*
+ * No scrollbars for a pixel: as wide as the window with its border, and not
+ * the -1px margins by which Phorge's phone styles overlap the text area with
+ * the border of the (not pinned) form; never sideways.
+ */
+.phui-comment-form-view.remarkup-assist-pinned {
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.phui-comment-form-view.remarkup-assist-pinned .phui-comment-textarea-control,
+.device-phone .phui-comment-form-view.remarkup-assist-pinned .phui-comment-textarea-control {
+  margin-right: 0;
+  margin-bottom: 0;
+}
+
+/* Like in a dialog: the text scrolls in the editor. */
+.remarkup-assist-pinned .rme-editor .cm-editor {
+  min-height: 0;
+}
+
+.remarkup-assist-pinned .rme-editor .cm-scroller {
+  overflow: auto;
+}
+
+/*
+ * The submit button of the pinned form, in the row of "Add Action..."
+ * (commentForm.ts), which stays at the top when the form scrolls (many
+ * actions); on phones as an icon (its label is its tooltip, and read).
+ */
+.remarkup-assist-pinned .phui-comment-action-bar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  /* Room for the handle on the border above it (as on phones, also on larger screens). */
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.phui-comment-action-bar.rme-submit-in-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Phorge's clearfix ("grouped"), which would be one more item with a gap before it. */
+.phui-comment-action-bar.rme-submit-in-bar::after {
+  display: none;
+}
+
+/* Without Phorge's padding of the control (4px on larger screens): the same margins all round. */
+.rme-submit-in-bar > .phui-comment-action-control {
+  flex: 1;
+  float: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+/* Over Phorge's padding of the submit row, also on phones. */
+.phui-comment-form-view .phui-comment-action-bar.rme-submit-in-bar > .phui-comment-submit-control {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  margin: 0;
+  padding: 0;
+}
+
+.rme-submit-in-bar > .phui-comment-submit-control > .aphront-form-input {
+  display: flex;
+}
+
+/* As high as "Add Action...", with its label or (on phones) its icon. */
+.rme-submit-in-bar > .phui-comment-submit-control button {
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.device-phone .rme-submit-in-bar > .phui-comment-submit-control button {
+  height: auto;
+  font-size: 0;
+  padding: 0 14px;
+}
+
+.device-phone .rme-submit-in-bar > .phui-comment-submit-control button::before {
+  content: "\f1d8";
+  font-family: FontAwesome;
+  font-size: 16px;
+  font-weight: normal;
+}
+
+/*
+ * Checkboxes of rendered text that save their text when clicked
+ * (checkboxes.ts). Phorge hides the checkbox and draws a picture of one
+ * (::before of its item): the checkbox lies over the picture, unseen, so it
+ * takes the clicks and the keyboard.
+ */
+.phabricator-remarkup .remarkup-list-with-checkmarks input.rme-checkable {
+  visibility: visible;
+  position: absolute;
+  z-index: 1;
+  top: 3px;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.phabricator-remarkup .remarkup-list-with-checkmarks input.rme-saving {
+  cursor: progress;
+}
+
+.remarkup-list-with-checkmarks .remarkup-list-item:has(> input.rme-saving)::before {
+  opacity: 0.5;
+}
+
+/* Clicked, not saved yet (in a few seconds, or on leaving the page). */
+.remarkup-list-with-checkmarks .remarkup-list-item:has(> input.rme-pending)::before {
+  outline: 1px dashed currentColor;
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.remarkup-list-with-checkmarks .remarkup-list-item:has(> input.rme-checkable:focus-visible)::before {
+  outline: 2px solid var(--rme-focus-color, #3d8fd9);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.rme-check-note {
+  margin-left: 8px;
+  color: #c0392b;
+  font-size: smaller;
+}
+
+/* The toolbar on phones: the essential buttons, "⋯" for the others (compactToolbar.ts); all of them on larger screens. */
+.remarkup-assist-bar .rme-more {
+  display: none;
+}
+
+.device-phone .rme-active > .remarkup-assist-bar .rme-more {
+  display: block;
+}
+
+.device-phone .rme-active > .remarkup-assist-bar .rme-overflow,
+.device-phone .rme-active > .remarkup-assist-bar .remarkup-assist-nodevice.rme-overflow,
+.device-phone .rme-active > .remarkup-assist-bar .remarkup-assist-separator {
   display: none;
 }

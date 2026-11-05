@@ -57,7 +57,7 @@ export class Popup {
     this.node.append(head, this.list);
     // Keep the focus where it is (the editor, or the picker's input).
     this.node.addEventListener("mousedown", (event) => {
-      if (event.target !== this.echo) {
+      if (!this.echo.contains(event.target as Node)) {
         event.preventDefault();
       }
     });

@@ -6,7 +6,6 @@ import { EditorSelection, type EditorState, type Line } from "@codemirror/state"
 import type { EditorView } from "@codemirror/view";
 import { INLINE_FORMATS, LIST_ITEM, NOTE_PREFIX, NOTE_WORDS } from "../syntax";
 import { toolbarButton } from "../toolbar";
-import { insertReference } from "./links";
 import { blockAtCursor } from "./livePreview";
 
 type Command = (view: EditorView) => boolean;
@@ -423,12 +422,6 @@ const BUTTONS: Button[] = [
   },
   { icon: "fa-underline", title: "Underline", run: inlineFormat("fa-underline"), place: ["after", "fa-strikethrough"] },
   { icon: "fa-paint-brush", title: "Highlight", run: inlineFormat("fa-paint-brush"), place: ["after", "fa-underline"] },
-  {
-    icon: "fa-anchor",
-    title: "Reference a task, page, person or anything else, found by its name",
-    run: insertReference,
-    place: ["after", "fa-link"],
-  },
   { icon: "fa-check-square-o", title: "Checklist", run: toggleChecklist, place: ["after", "fa-list-ol"] },
   {
     icon: "fa-sticky-note-o",
