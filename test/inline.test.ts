@@ -246,7 +246,8 @@ describe("tokenizeInline", () => {
     expect(mismatches.slice(0, 3)).toEqual([]);
     // Exclusions are rare and named; most of them would hide a broken rule.
     expect(excluded.length).toBeLessThan(fixtures.length / 50);
-  });
+    // Over 5000 texts: about 2 s on a fast machine, more on a busy or slow one (CI).
+  }, 30_000);
 
   const show = (text: string, options = {}): unknown[] => {
     const list = (tokens: InlineToken[]): unknown[] =>

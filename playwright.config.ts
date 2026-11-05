@@ -8,7 +8,8 @@ export default defineConfig({
   globalSetup: "./e2e/global-setup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  reporter: [["list"], ["html", { open: "never" }]],
+  // On GitHub Actions also as annotations of the run.
+  reporter: [...(process.env.GITHUB_ACTIONS ? [["github"] as const] : []), ["list"], ["html", { open: "never" }]],
   use: {
     // What a failed test saw, for the tests that share the database and run in parallel.
     trace: "retain-on-failure",

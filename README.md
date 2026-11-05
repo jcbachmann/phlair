@@ -270,6 +270,9 @@ be tried in any page by adding `<script src="/rme-dev/phlair.user.js">`.
 | `node scripts/generate-block-fixtures.mjs`  | Regenerates the block splitting fixtures with the PHP engine.         |
 | `node scripts/generate-inline-fixtures.mjs` | Regenerates the inline markup fixtures with the PHP engine.           |
 
+GitHub Actions runs all of them on every push (`.github/workflows/check.yml`), the E2E tests against a fresh Phorge
+of `dev/phorge`; the report of a failed run is attached to it as `playwright-report`.
+
 Keep the feature lists and the screenshots current with every change of a feature: `npm run screenshots` takes them
 again from the local instance, with `scripts/screenshots.spec.ts`.
 
