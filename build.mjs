@@ -9,9 +9,12 @@ import { createHmac } from "node:crypto";
 import * as esbuild from "esbuild";
 import { appendFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildVersion } from "./scripts/version.mjs";
 
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const dev = process.argv.includes("--dev");
+// "0.1.0.42" and "0.1.0.42 (1a2b3c4, 2026-11-05)", see scripts/version.mjs.
+const { version, label } = buildVersion();
 const updateUrl = process.env.PHLAIR_UPDATE_URL;
 // Over http, anyone on the way could replace the script on its next update.
 if (updateUrl && !updateUrl.startsWith("https://")) {
@@ -48,7 +51,7 @@ const ALLOWED_LICENSES = new Set(["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", 
 const userscriptHeader = `// ==UserScript==
 // @name         Phlair
 // @namespace    ${pkg.homepage}
-// @version      ${pkg.version}
+// @version      ${version}
 // @description  ${pkg.description}
 // @author       J&C Bachmann GmbH
 // @license      MIT
@@ -65,7 +68,9 @@ ${updateUrl ? `// @updateURL    ${updateUrl}\n// @downloadURL  ${updateUrl}\n` :
 const manifest = {
   manifest_version: 3,
   name: "Phlair",
-  version: pkg.version,
+  version,
+  // Shown by Chrome instead of the version; Firefox ignores it.
+  version_name: label,
   description: pkg.description,
   icons: Object.fromEntries(ICON_SIZES.map((size) => [size, `icons/icon-${size}.png`])),
   // Firefox grants host permissions at install; matches alone need the user's consent.
@@ -154,13 +159,13 @@ const options = {
   legalComments: "none",
   metafile: true,
   logLevel: "info",
-  // Shown in the tooltip of the editor's toggle, to tell which build runs. A
-  // release build is the same for the same sources (AMO's source review
-  // rebuilds it; Phorge serves an unchanged script under the same URL), so
-  // only development builds have the time.
+  // Shown in the tooltip of the editor's toggle and in feedback tasks, to tell
+  // which build runs. A release build is the same for the same sources (AMO's
+  // source review rebuilds it; Phorge serves an unchanged script under the
+  // same URL), so only development builds have the time.
   define: {
     __BUILD__: JSON.stringify(
-      dev ? `${pkg.version} dev, ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC` : pkg.version,
+      dev ? `${label} dev, built ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC` : label,
     ),
     __TARGET__: JSON.stringify("extension"),
     // The project of feedback tasks (see feedback.ts), if any.
@@ -208,7 +213,7 @@ return array(
 }
 
 const celerityHeader = `/**
- * Phlair ${pkg.version}, built by build.mjs: a Javelin behavior, which the
+ * Phlair ${label}, built by build.mjs: a Javelin behavior, which the
  * library's main menu extension starts with the tools the user has on.
  *
  * @provides javelin-behavior-phlair

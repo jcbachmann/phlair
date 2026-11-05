@@ -11,28 +11,39 @@ The repository holds no instance: what a build is for comes from the environment
 | `PHLAIR_UPDATE_URL`       | Where the userscript is hosted, see [Userscript](#userscript).                                                                                                                       |
 | `PHLAIR_FEEDBACK_PROJECT` | Optional: the project (hashtag without `#`) that feedback tasks of the editor's feedback button get.                                                                                 |
 
-| Command                         | Builds                                                                             |
-| ------------------------------- | ---------------------------------------------------------------------------------- |
-| `npm run build`                 | Release build: the library, and the extension and userscript for `PHLAIR_HOSTS`.   |
-| `npm run build:dev`             | Development build: also runs on `http://phorge.localhost/*`.                       |
-| `npm run watch`                 | Development build, rebuilt on changes.                                             |
-| `npm run e2e`                   | Makes a development build first (`pree2e`), as the tests run against `dev/phorge`. |
-| `npm run lint:extension`        | Checks `dist/extension` with Mozilla's add-on linter (`web-ext lint`).             |
-| `npm run package`               | Release build, then `dist/phlair-<version>.zip` for AMO and Chrome.                |
-| `npm run package:phorge`        | Release build, then `dist/phlair-phorge.tar.gz`, see [PHORGE.md](PHORGE.md).       |
-| `npm run sign:firefox`          | Release build, then signs it on AMO as an unlisted add-on (`.xpi` in `dist/`).     |
-| `node scripts/render-icons.mjs` | Regenerates `icons/` (see [Icons](#icons)).                                        |
+| Command                         | Builds                                                                                 |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
+| `npm run build`                 | Release build: the library, and the extension and userscript for `PHLAIR_HOSTS`.       |
+| `npm run build:dev`             | Development build: also runs on `http://phorge.localhost/*`.                           |
+| `npm run watch`                 | Development build, rebuilt on changes.                                                 |
+| `npm run e2e`                   | Makes a development build first (`pree2e`), as the tests run against `dev/phorge`.     |
+| `npm run lint:extension`        | Checks `dist/extension` with Mozilla's add-on linter (`web-ext lint`).                 |
+| `npm run package`               | Release build, then `dist/phlair-<version>.zip` for AMO and Chrome.                    |
+| `npm run package:phorge`        | Release build, then `dist/phlair-phorge-<version>.tar.gz`, see [PHORGE.md](PHORGE.md). |
+| `npm run sign:firefox`          | Release build, then signs it on AMO as an unlisted add-on (`.xpi` in `dist/`).         |
+| `node scripts/render-icons.mjs` | Regenerates `icons/` (see [Icons](#icons)).                                            |
 
 `package` and `sign:firefox` fail without `PHLAIR_HOSTS`. The builds produce `dist/phlair.user.js`, `dist/extension/`
 (manifest, `content.js`, the options page, icons, `LICENSE`, `THIRD_PARTY_LICENSES.txt`) and the script of the Phorge
 library in `phorge/`. Never ship a development build: it asks for access to the `localhost` hosts. The web-ext
 settings (source and artifacts directory, zip name, channel) are in the `webExt` key of `package.json`.
 
-The version comes from `package.json`; AMO and the Chrome Web Store refuse a version they already have. Raise it with
-`npm version patch` (or `minor`/`major`): that updates `package.json` and `package-lock.json` together and makes a commit
-and a tag for the release. Phizziwig's wand button shows the version of the running build in its tooltip, a
-development build also its build time. A release build has no time in it: the same sources give the same files,
-which AMO's source review expects, and an unchanged script keeps its URL in Phorge.
+### Versions
+
+Every build is numbered by its commit, without a release (`scripts/version.mjs`): the version is the one in
+`package.json` with the number of commits up to the built one as a fourth part, e.g. `0.1.0.42`. It rises with every
+commit on `main`, and browsers and userscript managers compare it as numbers, so each build updates the one before.
+The label adds the commit and its date, `0.1.0.42 (1a2b3c4, 2026-11-05)`, with `-dirty` when the working tree has
+uncommitted changes. The file names carry the version; the label is in the manifest's `version_name` (shown by
+Chrome), at the top of the Phorge library's `phlair.js`, in the tooltip of Phizziwig's wand button and in feedback
+tasks. A development build adds its build time. A release build has no time in it: the same commit gives the same
+files, which AMO's source review expects, and an unchanged script keeps its URL in Phorge. The build needs the whole
+git history (a shallow clone fails); without git (e.g. sources from `git archive`) the version is `package.json`'s
+alone.
+
+For a release, raise the version with `npm version minor` (or `patch`/`major`): that updates `package.json` and
+`package-lock.json` together and makes a commit and a tag. Builds after it count on from there (`0.2.0.43`), above
+every build before it. AMO and the Chrome Web Store refuse a version they already have.
 
 ## Userscript
 

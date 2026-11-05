@@ -23,7 +23,7 @@
     "lint:extension": "web-ext lint",
     "screenshots": "node build.mjs --dev && playwright test -c scripts/screenshots.config.ts",
     "package": "node build.mjs --extension && web-ext build",
-    "package:phorge": "node build.mjs && tar -czf dist/phlair-phorge.tar.gz --exclude=.phutil_module_cache --transform 's,^phorge,phlair,;s,^LICENSE,phlair/LICENSE,' phorge LICENSE",
+    "package:phorge": "node build.mjs && tar -czf dist/phlair-phorge-$(node scripts/version.mjs).tar.gz --exclude=.phutil_module_cache --transform 's,^phorge,phlair,;s,^LICENSE,phlair/LICENSE,' phorge LICENSE",
     "sign:firefox": "node build.mjs --extension && web-ext sign"
   },
   "dependencies": {

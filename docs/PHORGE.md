@@ -21,7 +21,8 @@ npm ci && npm run package:phorge
 
 This builds `phorge/rsrc/phlair.js` with its Celerity map (`phorge/resources/celerity/map.php`) and the
 notices of the bundled packages (`phorge/THIRD_PARTY_LICENSES.txt`), and packs the library with the license into
-`dist/phlair-phorge.tar.gz` (top directory `phlair/`). The class map `phorge/src/__phutil_library_map__.php`
+`dist/phlair-phorge-<version>.tar.gz` (top directory `phlair/`; the version is in the first lines of
+`phlair/rsrc/phlair.js`, see [PACKAGING.md](PACKAGING.md#versions)). The class map `phorge/src/__phutil_library_map__.php`
 is in the repository; after adding or renaming a PHP class, regenerate it with `arc liberate phorge/src` (or with
 the arc of the dev container, see `dev/phorge`).
 
