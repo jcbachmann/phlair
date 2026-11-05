@@ -11,30 +11,41 @@ as a browser extension and a userscript for development.
 
 ## Phizziwig
 
-Phizziwig shows every block of the text as Phorge renders it, and only what the cursor is on shows its remarkup
-source: a link, a bold word, a list item's checkbox.
+Phizziwig shows the text looking like Phorge renders it, and only what the cursor is on shows its remarkup source: a
+link, a bold word, a list item's checkbox. Like Obsidian's live preview, the text is always the text being edited, so
+nothing moves when the cursor moves.
 
 ![A wiki page in the editor](docs/screenshots/editor.png)
 
 ### Rendering
 
-- **Exact rendering.** Blocks are rendered by the server through the endpoint the page's preview uses, so links to tasks,
-  diffs, wiki pages, users and embedded files look exactly like in the preview. Many blocks are rendered in one request,
-  and the result is cached per block. The space between blocks is the page's, measured with its CSS.
-- **Everything renders until the cursor is on it.** The text being edited stays rendered, except for what the cursor
-  or the selection touches, which shows its remarkup for editing:
+- **Text is always text.** Paragraphs, headers, lists, quotes, notes and rules show their source, styled like
+  Phorge's rendering with the page's own CSS (sizes, fonts and colors read from the page), with their markup hidden:
   - references, people, projects, links and URLs (`T12`, `@alice`, `#docs`, `{T12}`, `[[ page ]]`, `https://…`) show as
-    Phorge renders them; a click on one puts the cursor at its end, `Ctrl`+click opens it;
+    Phorge renders them, each rendered by the server; a click on one puts the cursor at its end, `Ctrl`+click opens it;
   - bold, italic, monospaced, struck through, highlighted and underlined text hides its markers;
-  - headers and quotes hide their markers, list items show their bullet, number or checkbox (which can be clicked).
-    These show when the cursor is in or before them; `Home` goes to the start of the text first.
-- **Blocks being edited** keep the size and place of their rendered version, so nothing moves. In a list, only the item
-  being edited is source at all; the other items stay rendered, numbered and indented as in the whole list. Click
-  rendered text to edit it, `Shift+↑/↓` select line by line, also into rendered blocks.
-- **Selecting with the mouse** across rendered blocks (or list items, tables) selects them as a whole, as the selection
-  shows while dragging; within the text being edited it selects exactly.
-- **Blank lines:** the first blank line between two blocks is the space between them on the page; more blank lines
-  are lines like any other while editing (Phorge ignores them).
+  - headers hide their markers unless the cursor is on their line; quotes (also the `>>!` of replies), the word of
+    `(NOTE)` notes and rules hide theirs; list items show their bullet, number or checkbox (a click on a bullet or number edits it, on a checkbox checks it, left of them goes to the start of the line);
+  - icons, keys and navigation paths (`{icon camera color=red}`, `{key Ctrl K}`, `{nav Home > Settings}`) show as
+    Phorge draws them;
+  - images, image macros and memes show as rendered, their `{F123}` or `{meme, …}` hidden;
+  - anchors (`{anchor #name}`), which Phorge does not show, show as their name with a `#` icon.
+
+  Only what the cursor or the selection touches shows its remarkup; markers before text (a header's `= `, a list
+  item's `- [ ] `) show when the cursor is in or before them, and `Home` goes to the start of the text first. A click,
+  `Home` or `End` next to formatted text puts the cursor outside of its markers, as the text looks: after `**bold**`,
+  not before its closing `**`. A click between two blocks goes to the nearer line. The
+  text does not have to match Phorge's rendering to the pixel, but nothing moves when the cursor comes or goes.
+
+- **Rendered blocks.** Code blocks, literal blocks and other blocks show as the server renders them (through the
+  endpoint the page's preview uses, many blocks in one request, cached per block), and show their source while the
+  cursor is in them, in the same place: a code block keeps room for its "```" lines. Blocks on consecutive lines are
+  as far apart as on the page, measured with its CSS. Tables are edited as tables, see below.
+- **Moving and selecting** works like in a text field: `↑`/`↓` and `Shift+↑/↓` go row by row (also through wrapped lines)
+  and keep the column, also through rendered blocks, and the mouse selects exactly the text it goes over (tables as a whole). While the mouse selects, rendered
+  blocks stay rendered, with the selected text highlighted.
+- **Blank lines** are as high as a line of text, also between blocks, so nothing moves when the cursor comes near
+  them (on the page, the space between blocks is Phorge's, and more blank lines than one are ignored).
 
   ![Editing a paragraph: only the highlighted word with the cursor shows its remarkup](docs/screenshots/editing.png)
 
@@ -43,20 +54,23 @@ source: a link, a bold word, a list item's checkbox.
   "Quote" keep working.
 - **Any theme:** the editor takes its colors from the page, so it follows Phorge's styles and tools
   like Dark Reader.
-- **When the server can not render** a block, the block shows its source, a note says so, and rendering is retried.
+- **When the server can not render** a block, the block shows its source (and a text block its images do not show), a
+  note says so, and rendering is retried.
 
 ### Tables
 
-- **Tables are tables:** they look like Phorge's tables and are edited cell by cell; the cell being edited shows its
-  remarkup. Typing in a cell changes only that cell in the text; changing rows or columns aligns the table, with columns
+- **Tables are tables:** they look like Phorge's tables and are edited cell by cell; the cell being edited has the live
+  preview of the text, so only what the cursor is on shows its remarkup. Typing in a cell changes only that cell in the text; changing rows or columns aligns the table, with columns
   at most 30 characters wide (a longer cell sticks out instead of widening its column).
 - **Table bar:** while the cursor is in a table, a bar next to it (above it when there is no room beside it) inserts and
   deletes rows and columns and toggles the header row. **`+` handles** appear on the left and top borders of the table
   when the mouse is near them and insert a row or column there.
 - **Keys:** `Tab`/`Shift+Tab` move between cells (and add a row at the end), `Enter` adds a row (on an empty last row it
   leaves the table), arrow keys move between cells and out of the table, `Alt+↑/↓` move rows, `Alt+Shift+←/→` move
-  columns, `Ctrl+Z` undoes, and typing `[[` in a cell adds the closing `]]`. Formatting buttons and the link bubble work
-  in cells.
+  columns, `Ctrl+Z` undoes, and typing `[[` in a cell adds the closing `]]`. A cell is edited like a line of the text:
+  formatting buttons and shortcuts, `Ctrl+K` and `Ctrl+Shift+K`, the link bubble, a URL pasted over selected text,
+  uploads (the upload button, pasting and dropping files), Phorge's autocomplete and the insert menu (with what fits in
+  a cell) work in cells.
 - **New tables** from the table button: pick the size in a grid, and the table opens for editing with its first header
   cell selected.
 - **As text:** the first button of the table bar switches to editing tables as aligned text (with `Tab` between cells)
@@ -69,7 +83,8 @@ source: a link, a bold word, a list item's checkbox.
 - **Link button and `Ctrl+K`** search wiki pages, tasks (by title) and people, or take a URL; with text selected, it
   becomes the link's text. On an existing link they change it.
 - **`Ctrl+Shift+K`** (anchor button) references a task, wiki page, project, person or other object, found by its title,
-  e.g. `T12`. On a reference, it opens with the reference filled in, showing what it refers to, and changes it.
+  e.g. `T12`. Tasks with the words in their titles come first, then those with them in their descriptions or comments; open ones
+  first in each. On a reference, it opens with the reference filled in, showing what it refers to, and changes it.
 - With the cursor in a link, a **bubble** offers to open, change or remove it. A URL pasted over selected text links it.
 - **Phorge's autocomplete menu** for `@user`, `#project`, `[[ wiki page`, `:emoji` and `((short URL`, with the
   same rules and keys (a port of its `PHUIXAutocomplete`).
@@ -88,8 +103,11 @@ source: a link, a bold word, a list item's checkbox.
 
 ### Writing
 
-- **Insert menu:** `/` on an empty line lists what can be inserted (heading, lists, table, note, code, image, mention, …);
-  type to filter, arrow keys and `Enter` insert.
+- **Insert menu:** `/` at the start of a line or after a space lists what can be inserted (headings, also by level as `/h2`, lists, table, note, important and warning boxes, code,
+  image, image macro (found by name, with its picture, in a list to scroll through), meme, task or revision card,
+  anchor, literal text, icon (found by name; a color word like `red` colors it, `spin` makes it spin), keyboard keys,
+  navigation path, ASCII art (`cowsay`, `figlet`), mention, emoji, …), grouped under headings (headings, lists,
+  blocks, links, text, images, ASCII art); in a table cell, what fits in a cell; type to filter, arrow keys and `Enter` insert. A `/` in a word or path (`and/or`, `/home`) is just text.
 
   ![The insert menu](docs/screenshots/insert-menu.png)
 
@@ -101,18 +119,26 @@ source: a link, a bold word, a list item's checkbox.
 - **Keyboard shortcuts:** `Ctrl+B`/`I`/`U`/`E` (bold, italic, underline, monospaced), `Ctrl+Shift+X`/`H`
   (strikethrough, highlight), `Ctrl+Shift+1`–`5` (heading levels), `Ctrl+Shift+7`/`8`/`9` (numbered, bulleted,
   checklist), `Ctrl+K` (link). They are named in the tooltips, also of Phorge's own buttons; `F1`, `Ctrl+/` (where
-  `/` needs no Shift) or the keyboard button shows them all. `Ctrl+F` is the browser's find, which also finds text in the
-  rendered blocks.
+  `/` needs no Shift) or the keyboard button shows them all. `Ctrl+F` is the browser's find.
 - **Wrapping:** typing `*`, `` ` ``, `{` or `[` over selected text puts the text in bold markers, backticks, braces or
   brackets.
-- **Lists** switch kinds: the bulleted, numbered and checklist buttons and shortcuts turn the items of the list level the
-  cursor is in (up to a blank line, or the selected lines) into that kind, and back into text if they already are. List
+- **Lists** switch kinds: the bulleted and numbered buttons and shortcuts turn the items of the list level the cursor is
+  in (up to a blank line, or the selected lines) into that kind, and back into text if they already are; their
+  checkboxes stay. The checklist button and shortcut give the item the cursor is in (or the selected ones) a checkbox, or
+  take it away, whatever kind of list it is in. List
   items are indented by two spaces, like Phorge's buttons write them (` -`, ` #`, ` - [ ]`): `# item` at the
   start of a line is a header. A list starting at the start of the line moves in as a whole.
-- **Lists and quotes** continue on `Enter`; `Enter` on an empty item ends them. `Tab`/`Shift+Tab` indent list items.
+- **Lists and quotes** continue on `Enter`; `Enter` on an empty item ends them, leaving its line empty. `Backspace` at
+  the start of the text of a quote line removes its `>`. `Enter` at the
+  start of the text of a list, quote or header makes room above it. `Tab`/`Shift+Tab` indent list items:
+  by two spaces, or in a list nested by repeating markers (`- item`, `-- nested`), by one marker.
   `Home` (Pos1) in a list item goes to the start of its text, after the marker and checkbox; pressed again, to the
-  start of the line. `↑`/`↓` land in the text of list items too, not before their markers.
-- **Checklists** can be checked and unchecked by clicking their boxes in the rendered text.
+  start of the line. `↑`/`↓` land in the text of list items too, not before their markers (from before a marker, before
+  the next one).
+- **Notes and list items have no line breaks** in remarkup: Phorge shows the lines of a note, and the lines continuing a
+  list item, as one line, until a blank line. While edited, such lines are marked with a faint `↪` in the margin; a note
+  of more lines than one shows on one line, like in Phorge, while the cursor is not in it.
+- **Checklists** can be checked and unchecked by clicking their boxes, also items without a bullet (`[ ] item`).
 - **Markdown habits:** `*italic*` becomes `//italic//` as it is typed (except in code, monospaced text and URLs; undo
   brings back the `*`). Markdown links `[text](https://…)` work as they are, Phorge renders them.
 
@@ -151,7 +177,7 @@ source: a link, a bold word, a list item's checkbox.
 ## Phuture
 
 Phuture puts a clock next to the actions of every item of Phorge's lists: dashboards, searches, workboards, project
-and people lists.
+and people lists, commits (audits). Lists of choices, like "Choose Subtype" when creating a task, have none.
 
 - **Snooze** an item until tomorrow, next Monday, in a week, in a month or a picked day. It is hidden on every list
   until that day begins in your time zone, also on a page that stays open over midnight.
@@ -232,15 +258,15 @@ shared.
   Every block but the last one of the text is followed by a separator, because Phorge renders some blocks
   differently at the end of a text.
 - `editor/` holds the CodeMirror 6 extensions:
-  - `livePreview.ts`: rendered blocks, the items of lists being edited (with `list.ts`, a port of Phorge's list
-    structure), mouse selection, checkboxes; `gaps.ts`: the space between blocks, measured with the page's CSS;
-    `sourceStyle.ts`: the source styling of edited blocks;
+  - `livePreview.ts`: which blocks show as source and which rendered, images beside the text, mouse selection, `↑`/`↓`;
+    `gaps.ts`: the space between blocks on consecutive lines, measured with the page's CSS; `sourceStyle.ts`: the
+    styling of the source (with `list.ts`, a port of Phorge's list structure, for list levels and numbers);
   - `tableEditor.ts`: tables edited as tables; `commands.ts`: keyboard commands and the table buttons;
     `tablePicker.ts`: the size grid for new tables;
   - `formatting.ts`, `actions.ts`: formatting commands and buttons, the shortcuts; `slashMenu.ts`: the insert menu;
   - `links.ts`, `picker.ts`: links and the search for pages and tasks; `autocomplete.ts`: Phorge's autocomplete;
   - `popup.ts`: Phorge's autocomplete popup, for the menus above;
-  - `inlinePreview.ts`: the text being edited rendered, except for what the cursor is on;
+  - `inlinePreview.ts`: the markup of the text hidden and its references rendered, except where the cursor is;
   - `upload.ts`, `pasting.ts` (with `paste.ts`), `imageMenu.ts`, `markdown.ts`; `host.ts`: the textarea.
 - `attach.ts` puts the editor in place of the textarea, keeps both in sync and takes fonts, sizes and colors from
   the page. `phorge.ts` holds everything that talks to the server or knows its page structure.

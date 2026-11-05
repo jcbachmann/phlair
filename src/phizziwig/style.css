@@ -34,10 +34,13 @@
 /*
  * No colors of its own: they come from the page (see pageStyle() in
  * attach.ts) or follow the text color, so the editor has the colors of the
- * page in any theme and with tools like Dark Reader.
+ * page in any theme and with tools like Dark Reader. It is as high as its
+ * text (and a few lines at least), not as the textarea it replaces: that
+ * one is high on some pages, and the editor would stay high when its text
+ * gets short.
  */
 .rme-editor {
-  min-height: var(--rme-height, 120px);
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--rme-border-color, #c7ccd9);
@@ -178,12 +181,6 @@
   height: 1lh;
 }
 
-/* Blank lines between blocks: the gap between rendered paragraphs. */
-.rme-editor .cm-line.rme-gap {
-  line-height: var(--rme-gap, 12px);
-  font-size: 2px;
-}
-
 /* Source of the blocks being edited. */
 .rme-markup,
 .rme-list-marker {
@@ -298,7 +295,8 @@
   position: relative;
   /* An item without text keeps its height; its marker is out of the flow. */
   min-height: 1.7em;
-  padding-left: calc(30px + var(--rme-depth) * 24px + var(--rme-check));
+  --rme-indent: calc(30px + var(--rme-depth) * 24px + var(--rme-check));
+  padding-left: var(--rme-indent);
 }
 
 .rme-editor .cm-line.rme-list-depth-1 {
@@ -317,21 +315,58 @@
   --rme-depth: 4;
 }
 
+/* How much further checklist items start than other items, read from the page by pageStyle(). */
 .rme-editor .cm-line.rme-list-check {
-  --rme-check: 6px;
+  --rme-check: var(--rme-check-indent, 6px);
 }
 
 /*
- * An item of a list being edited, rendered on its own (ListItemWidget) in lists
- * like those of the whole list. Those have no vertical margins: the widgets are
- * the lines of the list, and nested lists take theirs as padding.
+ * Lines that Phorge shows on the line before them (notes, list items; see
+ * sourceStyle.ts): a faint "↪" in the margin, like editors mark a line that
+ * continues the one before.
  */
-.rme-editor .rme-block.rme-list-item.phabricator-remarkup :is(ul, ol).remarkup-list {
-  margin-top: 0;
-  margin-bottom: 0;
+.rme-editor .cm-line.rme-joined {
+  position: relative;
 }
 
-/* The items around it only place the lists. */
+.rme-editor .cm-line.rme-joined::before {
+  /* As text, not as an emoji. */
+  content: "\21AA\FE0E";
+  position: absolute;
+  left: 1px;
+  font-size: 0.85em;
+  font-style: normal;
+  font-weight: normal;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.rme-editor .cm-line.rme-src-list.rme-joined::before {
+  left: auto;
+  right: calc(100% - var(--rme-indent) + 0.3em);
+}
+
+/* An anchor ("{anchor #name}"), which Phorge does not show: its name, dimmed, with an anchor. */
+.rme-anchor {
+  padding: 0 4px;
+  border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 3px;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.rme-anchor .phui-icon-view {
+  margin-right: 3px;
+  color: inherit;
+}
+
+/* Checked items are grey, like on the page. */
+.rme-editor .cm-line.rme-list-checked {
+  color: var(--rme-checked-color, inherit);
+}
+
+/* The items around a list item marker (ItemMarker) only place the lists. */
 .rme-editor .rme-list-around {
   list-style-type: none;
 }
@@ -340,40 +375,56 @@
   visibility: hidden;
 }
 
-.rme-editor .rme-block.rme-list-item.rme-nest-end {
-  padding-bottom: 4px;
-}
-
 /* The 4px bottom margin of nested lists (their top margin is 0 in Phorge). */
 .rme-editor .cm-line.rme-list-nest-end {
   padding-bottom: 4px;
 }
 
-/* The bullet or number of a list item being edited, as the page shows it (inlinePreview.ts). */
+/*
+ * The bullet or number of a list item being edited, as the page shows it
+ * (inlinePreview.ts): the browser's own marker of an empty item, whose text
+ * starts where the item text starts. A bullet drawn as text would sit where
+ * the font puts it, a few pixels off the rendered one in some fonts.
+ */
 .rme-src-list .rme-list-marker .rme-item-marker {
-  margin-right: 0.45em;
+  display: inline-block;
+  width: 0;
+  cursor: text;
   font-weight: normal;
   color: var(--rme-color, inherit);
 }
 
-/* Its checkbox: Phorge's, 6px before the text like on the page. */
-.rme-editor .rme-src-list .rme-item-check .remarkup-list-item {
-  display: inline-block;
-  position: relative;
-  width: 16px;
-  height: 1em;
-  margin: 0 6px 0 0;
+.rme-editor .rme-src-list .rme-item-marker :is(ul, ol).remarkup-list,
+.rme-editor .rme-src-list .rme-item-marker li {
+  width: 0;
+  margin: 0;
   padding: 0;
+}
+
+.rme-src-list .rme-item-marker li::marker {
+  font-family: inherit;
+}
+
+/* Its checkbox: Phorge's checklist item (see ItemMarker), ending where the text starts. */
+.rme-editor .rme-src-list .rme-item-check {
+  display: inline-block;
+  font-weight: normal;
   cursor: pointer;
 }
 
-.rme-editor .rme-src-list .rme-item-check .remarkup-list-item::before {
-  top: 0;
+.rme-editor .rme-src-list .rme-item-check ul.remarkup-list {
+  margin: 0;
+  padding: 0;
 }
 
+.rme-editor .rme-src-list .rme-item-check li {
+  display: block;
+}
+
+/* Its right edge where the text starts; not moved with a transform, which would round it differently. */
 .rme-src-list .rme-list-marker {
   position: absolute;
-  transform: translateX(-100%);
+  right: calc(100% - var(--rme-indent));
   white-space: pre;
 }
 
@@ -412,8 +463,20 @@
   font: inherit;
 }
 
+/* A rule: its line with Phorge's rule across it (the color read by pageStyle()), its "---" dimmed. */
 .rme-editor .cm-line.rme-src-rule {
   color: color-mix(in srgb, currentColor 50%, transparent);
+  background: linear-gradient(var(--rme-rule-color, #dde8ef), var(--rme-rule-color, #dde8ef)) center / 100% 1px
+    no-repeat;
+}
+
+/* Room for the "```" lines of a code block, which show while it is edited, so nothing moves then. */
+.rme-editor .rme-block-code.rme-fence-before .remarkup-code {
+  padding-top: calc(var(--rme-code-padding-y, 12px) + var(--rme-code-line-height, 15px));
+}
+
+.rme-editor .rme-block-code.rme-fence-after .remarkup-code {
+  padding-bottom: calc(var(--rme-code-padding-y, 12px) + var(--rme-code-line-height, 15px));
 }
 
 /* The table buttons, in a bar above the table being edited (see tableBar). */
@@ -507,9 +570,20 @@
   overflow-x: auto;
 }
 
-/* Rendered blocks within a selection being made with the mouse. */
-.rme-block.rme-selected {
-  background: color-mix(in srgb, Highlight 25%, transparent);
+/*
+ * The selected text of rendered blocks while the mouse selects
+ * (livePreview.ts), instead of the browser's selection, which would show all
+ * of a block. The text keeps its color: where the two overlap, Firefox paints
+ * the text in the color of its selection, over the highlight.
+ */
+::highlight(rme-selection) {
+  background-color: color-mix(in srgb, Highlight 45%, transparent);
+}
+
+.rme-mouse-selecting .rme-block::selection,
+.rme-mouse-selecting .rme-block ::selection {
+  background-color: transparent;
+  color: inherit;
 }
 
 /* An emoji in the table source: two columns wide, like the alignment counts it. */
@@ -627,11 +701,6 @@ body:has(.rme-active) .phui-remarkup-preview {
   font: inherit;
 }
 
-/* Checkboxes of rendered checklists can be clicked (Phorge draws them as ::before). */
-.rme-block .remarkup-list-with-checkmarks .remarkup-list-item::before {
-  cursor: pointer;
-}
-
 /* A long press on an image opens the editor's image menu, not the browser's. */
 .rme-editor a[data-rme-file] img {
   -webkit-touch-callout: none;
@@ -645,11 +714,6 @@ body:has(.rme-active) .phui-remarkup-preview {
 /* A menu without room for all its items scrolls (see Popup.placeAt). */
 .rme-autocomplete .phuix-autocomplete-list {
   overflow-y: auto;
-}
-
-/* The link bubble of a table cell, placed below the cell. */
-.rme-editor .cm-tooltip.rme-cell-bubble {
-  position: absolute;
 }
 
 /*
@@ -688,4 +752,65 @@ body:has(.rme-active) .phui-remarkup-preview {
 /* Below the source, images need not keep their place in a paragraph (see imagesOf). */
 .rme-preview-below > p:empty {
   display: none;
+}
+
+/* The editor of a table cell being edited: as plain as the cell (tableEditor.ts). */
+.rme-editor .rme-cell-editor {
+  background: transparent;
+  font: inherit;
+}
+
+.rme-editor .rme-cell-editor.cm-focused {
+  outline: none;
+}
+
+.rme-editor .rme-cell-editor .cm-scroller {
+  font: inherit;
+  line-height: inherit;
+  overflow: visible;
+}
+
+.rme-editor .rme-cell-editor .cm-content {
+  padding: 0;
+  min-height: 1lh;
+  caret-color: currentColor;
+}
+
+.rme-editor .rme-cell-editor .cm-line {
+  padding: 0;
+}
+
+/* Pictures in the results of a search, e.g. of image macros: beside the name. */
+/* The groups of the insert menu: a quiet heading above each. */
+.rme-autocomplete .rme-popup-group {
+  padding: 6px 8px 2px;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  cursor: default;
+}
+
+.rme-autocomplete .rme-popup-group:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.rme-popup-long .phuix-autocomplete-list {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.rme-popup-with-image {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rme-popup-image {
+  flex: none;
+  width: 96px;
+  height: 56px;
+  object-fit: contain;
 }

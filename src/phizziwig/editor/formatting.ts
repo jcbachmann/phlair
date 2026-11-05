@@ -141,6 +141,59 @@ export const cycleNote: Command = (view) => {
   return true;
 };
 
+/** Makes the cursor's block a note of a kind ("IMPORTANT: Text"), or text again if it is one. */
+export function setNote(word: (typeof NOTE_WORDS)[number]): Command {
+  return (view) => {
+    const { state } = view;
+    const line = state.doc.lineAt(blockAtCursor(state)?.from ?? state.selection.main.head);
+    if (!line.text.trim() && state.selection.main.empty) {
+      const text = `${word}: Note text`;
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: text },
+        selection: EditorSelection.range(line.from + word.length + 2, line.from + text.length),
+        userEvent: "input.format",
+      });
+      return true;
+    }
+    const match = NOTE_PREFIX.exec(line.text);
+    const current = match ? (match[1] ?? match[2]) : null;
+    const insert = current === word ? "" : `${word}: `;
+    const changes = state.changes({ from: line.from, to: line.from + (match ? match[0].length : 0), insert });
+    view.dispatch({
+      changes,
+      selection: state.selection.map(changes, 1),
+      userEvent: "input.format",
+      scrollIntoView: true,
+    });
+    return true;
+  };
+}
+
+/**
+ * Inserts an anchor to link to ("{anchor #name}") at the cursor, named after
+ * the selected text (as Phorge normalizes anchor names), or with its name
+ * selected for typing.
+ */
+export const insertAnchor: Command = (view) => {
+  const range = view.state.selection.main;
+  const selected = view.state.sliceDoc(range.from, range.to);
+  const name =
+    selected
+      .toLowerCase()
+      .replace(/[\x00-\x2F\x3A-\x60\x7B-\x7F]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "name";
+  const text = `{anchor #${name}}`;
+  view.dispatch({
+    changes: { from: range.from, insert: text },
+    selection: selected
+      ? EditorSelection.cursor(range.to + text.length)
+      : EditorSelection.range(range.from + 9, range.from + 9 + name.length),
+    userEvent: "input.format",
+    scrollIntoView: true,
+  });
+  return true;
+};
+
 /** Inserts "---" as a block of its own after the current line. */
 export const insertRule: Command = (view) => {
   const { state } = view;
@@ -161,7 +214,8 @@ export const insertRule: Command = (view) => {
 };
 
 /** Inserts text on an empty line, or after the current line as a block of its own. */
-function insertBlock(view: EditorView, text: string, select: [number, number]): boolean {
+/** Inserts a block on the line of the cursor, if empty, else after it, and selects part of it. */
+export function insertBlock(view: EditorView, text: string, select: [number, number]): boolean {
   const { state } = view;
   const line = state.doc.lineAt(state.selection.main.head);
   const empty = !line.text.trim();
@@ -176,12 +230,12 @@ function insertBlock(view: EditorView, text: string, select: [number, number]): 
   return true;
 }
 
-/** The kinds of lists, by the marker of their items. */
-type ListKind = "-" | "#" | "[ ]";
+/** The kinds of lists, by the marker of their items. A checkbox is independent of them. */
+type ListKind = "-" | "#";
 
 function listKind(text: string): ListKind | null {
   const item = LIST_ITEM.exec(text);
-  return item ? (item[4] ? "[ ]" : /^[#\d]/.test(item[2]) ? "#" : "-") : null;
+  return item ? (/^[#\d]/.test(item[2]) ? "#" : "-") : null;
 }
 
 /** How often an item repeats its marker for nesting ("**", "##"). */
@@ -191,7 +245,7 @@ function markerRepeat(item: RegExpExecArray): number {
 
 function itemMarker(kind: ListKind, repeat: number): string {
   const marker = kind === "#" ? "#" : repeat > 1 ? "*" : "-";
-  return marker.repeat(repeat) + (kind === "[ ]" ? " [ ] " : " ");
+  return `${marker.repeat(repeat)} `;
 }
 
 /**
@@ -235,9 +289,9 @@ const LIST_INDENT = "  ";
 
 /**
  * Makes the selected lines, or the items of the cursor's list level, items of
- * a kind of list ("- ", "# ", "- [ ] "), switching from other kinds. On items
- * of that kind it makes them text again. A list with items at the start of a
- * line moves in by LIST_INDENT, all of it, so its nesting stays.
+ * a kind of list ("- ", "# "), switching from the other kind; their checkboxes
+ * stay. On items of that kind it makes them text again. A list with items at
+ * the start of a line moves in by LIST_INDENT, all of it, so its nesting stays.
  */
 export function toggleList(kind: ListKind): Command {
   return (view) => {
@@ -252,7 +306,8 @@ export function toggleList(kind: ListKind): Command {
     const targets = new Set(state.selection.main.empty ? listLevel(state, line) : selectedLines(state));
     const convert = (text: string): string => {
       const item = LIST_ITEM.exec(text);
-      if (!text.trim() || (!remove && listKind(text) === kind)) {
+      // A checkbox alone ("[ ] item") is an item of a bulleted list.
+      if (!text.trim() || (!remove && listKind(text) === kind && item![2])) {
         return text;
       }
       if (remove) {
@@ -260,7 +315,7 @@ export function toggleList(kind: ListKind): Command {
         return item ? item[5] : text;
       }
       return item
-        ? item[1] + itemMarker(kind, markerRepeat(item)) + item[5]
+        ? item[1] + itemMarker(kind, markerRepeat(item)) + (item[4] ?? "") + item[5]
         : text.replace(/^(\s*)/, `$1${itemMarker(kind, 1)}`);
     };
     const region = new Set(targets);
@@ -278,8 +333,35 @@ export function toggleList(kind: ListKind): Command {
   };
 }
 
-/** Turns lines into checklist items, or checklist items back into text. */
-export const toggleChecklist = toggleList("[ ]");
+/**
+ * Gives the selected lines, or the cursor's line, a checkbox, or takes it
+ * away, whatever the other items of their list have: a checkbox is
+ * independent of the kind of the list. A line that is no list item becomes
+ * one, of a bulleted list.
+ */
+export const toggleChecklist: Command = (view) => {
+  const { state } = view;
+  const line = state.doc.lineAt(state.selection.main.head);
+  if (state.selection.main.empty && !line.text.trim()) {
+    const marker = `${LIST_INDENT}- [ ] `;
+    return insertBlock(view, marker, [marker.length, marker.length]);
+  }
+  const remove = !!LIST_ITEM.exec(line.text)?.[4];
+  changeLines(view, (text) => {
+    const item = LIST_ITEM.exec(text);
+    if (!text.trim() || !!item?.[4] !== remove) {
+      return text;
+    }
+    if (remove) {
+      // A checkbox alone ("[ ] item") was the item: its text stays.
+      return item![2] ? item![1] + item![2] + item![3] + item![5] : item![5];
+    }
+    return item
+      ? item[1] + item[2] + item[3] + "[ ] " + item[5]
+      : text.replace(/^(\s*)/, (indent) => `${indent || LIST_INDENT}- [ ] `);
+  });
+  return true;
+};
 
 /** Quotes the lines, or unquotes them. */
 export const toggleQuote: Command = (view) => {

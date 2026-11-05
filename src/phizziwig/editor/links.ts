@@ -240,10 +240,12 @@ export function linkBubble(link: Link, change: () => void, remove: () => void): 
   return dom;
 }
 
+/** Whether the editor has the focus; a table cell's editor (tableEditor.ts) has it while it exists. */
+const focused = (state: EditorState) => state.field(previewField, false)?.focused ?? true;
+
 function bubble(state: EditorState): Tooltip | null {
-  const { focused } = state.field(previewField);
   const range = state.selection.main;
-  const link = focused && range.empty ? linkAt(state) : null;
+  const link = focused(state) && range.empty ? linkAt(state) : null;
   if (!link) {
     return null;
   }
@@ -263,11 +265,7 @@ function bubble(state: EditorState): Tooltip | null {
 const linkBubbleField = StateField.define<Tooltip | null>({
   create: bubble,
   update(value, tr) {
-    if (
-      !tr.docChanged &&
-      !tr.selection &&
-      tr.startState.field(previewField).focused === tr.state.field(previewField).focused
-    ) {
+    if (!tr.docChanged && !tr.selection && focused(tr.startState) === focused(tr.state)) {
       return value;
     }
     const next = bubble(tr.state);

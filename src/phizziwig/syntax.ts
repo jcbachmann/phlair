@@ -9,8 +9,12 @@ export function inMonospace(before: string): boolean {
   return (before.match(/`/g)?.length ?? 0) % 2 === 1 || (before.match(/##/g)?.length ?? 0) % 2 === 1;
 }
 
-/** A list item: indentation, marker, space, an optional checkbox and the text. */
-export const LIST_ITEM = /^(\s*)([-*]+|#+|\d+[.)])(\s+)(\[[ xX]?\]\s+)?(.*)$/;
+/**
+ * A list item: indentation, marker, space, an optional checkbox and the text.
+ * A checkbox alone is a list item too ("[ ] item", like Phorge): its marker
+ * and space are empty.
+ */
+export const LIST_ITEM = /^(\s*)((?:[-*]+|#+|\d+[.)])(?=\s)|(?=\[[ xX]?\]\s))(\s*)(\[[ xX]?\]\s+)?(.*)$/;
 
 /** A checklist item marker, e.g. "- [ ] " or "  * [X] ". */
 export const CHECKBOX = /^(\s*)[-*] \[[ xX]?\]\s?/;

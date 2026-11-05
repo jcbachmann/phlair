@@ -28,9 +28,10 @@ test("the browser extension adds the editor in Chromium", async ({ browserName, 
     await context.addCookies(state.cookies);
     const page = await context.newPage();
     await page.goto(`${baseURL}/phriction/edit/2/`);
-    await expect(page.locator(".rme-block .remarkup-note").first()).toBeVisible();
+    // Rendered by the server through the extension, which fetches with the session.
+    await expect(page.locator(".rme-editor a.phui-tag-view").first()).toBeVisible();
 
-    await page.locator(".rme-block .remarkup-note").first().click();
+    await page.locator(".cm-line.rme-src-note").first().click();
     await page.keyboard.press("Home");
     await page.keyboard.type("Hi ");
     await expect(page.locator("textarea.remarkup-assist-textarea")).toHaveValue(/Hi NOTE: This is a note\./);

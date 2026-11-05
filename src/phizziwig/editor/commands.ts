@@ -27,7 +27,7 @@ import { CONTROL, TOOLBAR } from "../phorge";
 import { LIST_ITEM, QUOTE_LINE } from "../syntax";
 import { toolbarButton } from "../toolbar";
 import { hostTextarea } from "./host";
-import { blockAtCursor, inListBlock, previewField, switchTableMode, tableModeField } from "./livePreview";
+import { blockAtCursor, clicked, inListBlock, previewField, switchTableMode, tableModeField } from "./livePreview";
 import { focusCell, focusedCell, focusedCellSource, runOnFocusedCell } from "./tableEditor";
 
 interface TableContext {
@@ -153,7 +153,11 @@ function tableEnter(view: EditorView): boolean {
   return applyTableEdit(view, block, insertRow(table, at, true));
 }
 
-/** Enter continues lists and quotes; on an empty item it ends them. */
+/**
+ * Enter continues lists and quotes; on an empty item it ends them. At the
+ * start of the text of a block's first line (a list, quote or header, whose
+ * marker shows rendered), it makes room above the block, without a marker.
+ */
 function continueMarkup(view: EditorView): boolean {
   const { state } = view;
   const range = state.selection.main;
@@ -161,17 +165,36 @@ function continueMarkup(view: EditorView): boolean {
     return false;
   }
   const line = state.doc.lineAt(range.head);
-  const inList = blockAtCursor(state, "list");
+  const block = blockAtCursor(state);
+  const inList = block?.kind === "list";
   const item = inList ? LIST_ITEM.exec(line.text) : null;
-  const quote = !item && blockAtCursor(state, "quote") ? QUOTE_LINE.exec(line.text) : null;
+  const quote = !item && block?.kind === "quote" ? QUOTE_LINE.exec(line.text) : null;
+  const header = block?.kind === "header" ? /^(=+|#+)\s*/.exec(line.text) : null;
+  const marker = item ? line.text.length - item[5].length : quote ? quote[1].length : header ? header[0].length : null;
+  if (
+    marker !== null &&
+    block &&
+    line.from === block.from &&
+    range.head <= line.from + marker &&
+    marker < line.length
+  ) {
+    view.dispatch({
+      changes: { from: line.from, insert: "\n" },
+      selection: { anchor: range.head + 1 },
+      scrollIntoView: true,
+      userEvent: "input",
+    });
+    return true;
+  }
   if (!item && !quote) {
     return false;
   }
   const content = item ? item[5] : quote![2];
   if (content.trim() === "" && range.head === line.to) {
-    // An empty item ends the list or quote, with a blank line after it.
-    const next = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
-    const insert = next && next.text.trim() === "" ? "" : "\n";
+    // An empty item ends the list or quote: its line stays, empty, with the
+    // cursor on it. At the end of the text, the cursor goes to a new line
+    // after it, so what is typed next is not part of the last item.
+    const insert = line.number === state.doc.lines ? "\n" : "";
     view.dispatch({
       changes: { from: line.from, to: line.to, insert },
       selection: { anchor: line.from + insert.length },
@@ -191,20 +214,65 @@ function continueMarkup(view: EditorView): boolean {
   return true;
 }
 
-/** Tab and Shift+Tab indent and outdent list items. */
+/**
+ * Backspace at the start of the text of a quote line, whose marker does not
+ * show: removes the marker ("> ") instead of its space, which would seem to
+ * do nothing, like Enter on an empty quote line does.
+ */
+function removeQuoteMarker(view: EditorView): boolean {
+  const { state } = view;
+  const range = state.selection.main;
+  if (!range.empty) {
+    return false;
+  }
+  const line = state.doc.lineAt(range.head);
+  const quote = blockAtCursor(state)?.kind === "quote" ? QUOTE_LINE.exec(line.text) : null;
+  const marker = quote ? quote[1].length : 0;
+  if (!marker || range.head !== line.from + marker) {
+    return false;
+  }
+  view.dispatch({
+    changes: { from: line.from, to: range.head },
+    selection: { anchor: line.from },
+    userEvent: "delete.backward",
+  });
+  return true;
+}
+
+/** A marker repeated for nesting, like "--" in "-- item", by its list item match. */
+const repeatedMarker = (item: RegExpExecArray): boolean => /^(-{2,}|\*{2,}|#{2,})$/.test(item[2]);
+
+/**
+ * Tab and Shift+Tab indent and outdent list items: by two spaces, or in a
+ * list nested by repeating markers ("- item", "-- nested"), by one marker.
+ */
 function indentListItem(view: EditorView, outdent: boolean): boolean {
+  const { doc } = view.state;
   const list = blockAtCursor(view.state, "list");
   if (!list) {
     return false;
   }
+  let repeated = false;
+  for (let n = doc.lineAt(list.from).number; n <= doc.lineAt(list.contentTo).number; n++) {
+    const item = LIST_ITEM.exec(doc.line(n).text);
+    repeated ||= !!item && repeatedMarker(item);
+  }
   const changes = [];
   for (const range of view.state.selection.ranges) {
-    for (let n = view.state.doc.lineAt(range.from).number; n <= view.state.doc.lineAt(range.to).number; n++) {
-      const line = view.state.doc.line(n);
-      if (!LIST_ITEM.test(line.text)) {
+    for (let n = doc.lineAt(range.from).number; n <= doc.lineAt(range.to).number; n++) {
+      const line = doc.line(n);
+      const item = LIST_ITEM.exec(line.text);
+      if (!item) {
         continue;
       }
-      if (!outdent) {
+      if (repeated && /^([-*]+|#+)$/.test(item[2])) {
+        const at = line.from + item[1].length;
+        if (!outdent) {
+          changes.push({ from: at, insert: item[2][0] });
+        } else if (item[2].length > 1) {
+          changes.push({ from: at, to: at + 1 });
+        }
+      } else if (!outdent) {
         changes.push({ from: line.from, insert: "  " });
       } else {
         // Not further out than the list's first item: "# item" at the start of a line is a header.
@@ -236,6 +304,11 @@ function lineBoundary(forward: boolean, extend: boolean) {
         const text = item ? line.from + line.text.length - item[5].length : null;
         // At the end of a wrapped row, the cursor keeps belonging to that row (its assoc).
         let target = view.moveToLineBoundary(range, forward, true);
+        // Outside of hidden markers, like a click.
+        const outside = clicked(view, target.head);
+        if (outside !== target.head) {
+          target = EditorSelection.cursor(outside, target.assoc);
+        }
         if (text !== null && target.head < text) {
           // The first row of the item: its text starts after the marker.
           target = EditorSelection.cursor(text);
@@ -257,6 +330,7 @@ export const markupKeymap = Prec.high(
     { key: "Tab", run: tableCommands.nextCell },
     { key: "Shift-Tab", run: tableCommands.previousCell },
     { key: "Tab", run: (view) => indentListItem(view, false) },
+    { key: "Backspace", run: removeQuoteMarker },
     { key: "Shift-Tab", run: (view) => indentListItem(view, true) },
     { key: "Enter", run: tableEnter },
     { key: "Enter", run: continueMarkup },
@@ -288,7 +362,8 @@ const ICONS = {
  * the focused cell becomes the cursor in the text, and the other way round.
  */
 function toggleTableMode(view: EditorView): boolean {
-  if (view.state.field(tableModeField) === "table") {
+  const mode = view.state.field(tableModeField);
+  if (mode !== "text") {
     const cell = focusedCellSource(view);
     // The editor would take the selection in the cell as its cursor on focus.
     window.getSelection()?.removeAllRanges();
@@ -402,7 +477,8 @@ export const tableBar = ViewPlugin.fromClass(
     }
 
     place() {
-      const asTable = this.view.state.field(tableModeField) === "table";
+      const mode = this.view.state.field(tableModeField);
+      const asTable = mode !== "text";
       this.modeButton.firstElementChild!.classList.toggle("fa-file-text-o", asTable);
       this.modeButton.firstElementChild!.classList.toggle("fa-table", !asTable);
       this.modeButton.setAttribute("aria-label", asTable ? "Edit the table as text" : "Edit the table as a table");

@@ -16,6 +16,10 @@ export interface Target {
   reference: string;
   /** Where a link with a text of its own points, e.g. "/T12" or "wiki/page/". */
   target: string;
+  /** A picture of it, e.g. of an image macro. */
+  image?: string;
+  /** The color of its icon, e.g. of an icon to insert. */
+  iconColor?: string;
 }
 
 interface Task {
@@ -25,20 +29,55 @@ interface Task {
 
 const URL_LIKE = /^(https?:\/\/|www\.|mailto:)\S+$/i;
 
-/** Tasks by number or by words of their title. */
+const TASKS = 8;
+
+/**
+ * Tasks by number, or by words: those with the words in their title first,
+ * then those with them anywhere (description, comments), each open ones first.
+ */
 async function findTasks(query: string): Promise<Target[]> {
   const id = /^T?(\d+)$/i.exec(query)?.[1];
   const words = query.split(/\s+/).filter((w) => w.length > 1);
   if (!id && !words.length) {
     return [];
   }
-  // "~word" finds titles containing the word, also as part of longer words.
-  const constraints = id ? { ids: [Number(id)] } : { query: words.map((w) => `~${w}`).join(" ") };
-  const result = (await conduit("maniphest.search", { constraints, limit: 6 })) as { data: Task[] };
-  return result.data.map((task) => ({
+  let tasks: Task[];
+  // The open ones, when the search tells them apart.
+  let open: Set<number> | null = null;
+  if (id) {
+    tasks = ((await conduit("maniphest.search", { constraints: { ids: [Number(id)] } })) as { data: Task[] }).data;
+  } else {
+    // "~word" finds the word also as part of longer words; "title:" only in titles.
+    const find = async (query: string, statuses?: string[]) =>
+      (
+        (await conduit("maniphest.search", {
+          constraints: { query, ...(statuses ? { statuses } : {}) },
+          limit: TASKS,
+        })) as { data: Task[] }
+      ).data;
+    const inTitle = words.map((w) => `title:~${w}`).join(" ");
+    const anywhere = words.map((w) => `~${w}`).join(" ");
+    const [titleOpen, title, textOpen, text] = await Promise.all([
+      find(inTitle, ["open"]),
+      find(inTitle),
+      find(anywhere, ["open"]),
+      find(anywhere),
+    ]);
+    open = new Set([...titleOpen, ...textOpen].map((task) => task.id));
+    const seen = new Set<number>();
+    tasks = [
+      ...titleOpen,
+      ...title.filter((task) => !open!.has(task.id)),
+      ...textOpen,
+      ...text.filter((task) => !open!.has(task.id)),
+    ].filter((task) => !seen.has(task.id) && seen.add(task.id));
+    tasks = tasks.slice(0, TASKS);
+  }
+  return tasks.map((task) => ({
     label: `T${task.id}: ${task.fields.name}`,
     icon: "fa-anchor",
     detail: task.fields.status.name,
+    closed: open !== null && !open.has(task.id),
     reference: `T${task.id}`,
     target: `/T${task.id}`,
   }));
@@ -84,6 +123,8 @@ export interface PickerOptions {
   /** Where the popup is placed: below a position of the text, or below an element (a table cell). */
   at: number | HTMLElement;
   pick: (target: Target) => void;
+  /** What to search, also with nothing typed yet; tasks, pages, people, … by default (search()). */
+  search?: (query: string) => Promise<Target[]>;
 }
 
 let current: Picker | null = null;
@@ -94,7 +135,8 @@ class Picker {
   private results: Target[] = [];
   private focus: number | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private query = "";
+  /** The query searched for; null before the first search, which runs also with nothing typed. */
+  private query: string | null = null;
   /** The query the shown results are for. */
   private shownQuery: string | null = null;
 
@@ -116,8 +158,8 @@ class Picker {
     this.input.addEventListener("input", () => this.changed());
     this.input.addEventListener("keydown", (event) => this.onKeyDown(event));
     this.input.addEventListener("blur", () => setTimeout(() => this.close(false), 0));
-    // Measured now, with the block being edited showing its source: with the
-    // focus in the input, it renders again before CodeMirror's next measure.
+    // Measured with the block being edited showing its source, which it
+    // keeps while the picker has the focus (livePreview.ts).
     syncFocus(view);
     const at = typeof options.at === "number" ? view.coordsAtPos(options.at) : null;
     this.popup.placeAt(view, at ?? options.at);
@@ -135,7 +177,7 @@ class Picker {
     this.query = query;
     clearTimeout(this.timer);
     this.timer = setTimeout(async () => {
-      const results = await search(query);
+      const results = await (this.options.search ?? search)(query);
       if (this.query === query && current === this) {
         this.results = results;
         this.shownQuery = query;
@@ -151,6 +193,8 @@ class Picker {
       icon: r.icon,
       closed: r.closed,
       detail: r.detail,
+      image: r.image,
+      iconColor: r.iconColor,
     }));
     this.popup.setItems(items, this.focus, (i) => this.accept(i));
     this.input.setAttribute("aria-expanded", String(items.length > 0));

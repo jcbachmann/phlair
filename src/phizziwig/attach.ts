@@ -11,18 +11,27 @@ import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { minimalChange } from "./diff";
 import { phabricatorAutocomplete } from "./editor/autocomplete";
 import { markupKeymap, tableBar } from "./editor/commands";
-import { ACTIONS, nativeTooltips, OVERVIEW_KEYS, SHORTCUTS_BY_ICON, shortcuts, showShortcuts } from "./editor/actions";
-import { addFormattingButtons } from "./editor/formatting";
+import {
+  ACTIONS,
+  cellShortcuts,
+  nativeTooltips,
+  OVERVIEW_KEYS,
+  SHORTCUTS_BY_ICON,
+  shortcuts,
+  showShortcuts,
+} from "./editor/actions";
+import { addFormattingButtons, inlineFormat } from "./editor/formatting";
 import { cursor } from "./editor/cursor";
 import { clearGaps } from "./editor/gaps";
 import { hostTextarea } from "./editor/host";
 import { imageMenu } from "./editor/imageMenu";
 import { editLink, links } from "./editor/links";
-import { livePreview, renderedEffect } from "./editor/livePreview";
+import { cellSupport, livePreview, renderedEffect } from "./editor/livePreview";
+import { INLINE_FORMATS } from "./syntax";
 import { markdownHabits } from "./editor/markdown";
-import { pasting } from "./editor/pasting";
-import { slashMenu } from "./editor/slashMenu";
-import { inlinePreview } from "./editor/inlinePreview";
+import { linkSelection, pasting } from "./editor/pasting";
+import { cellSlashMenu, slashMenu } from "./editor/slashMenu";
+import { cellPreview, inlinePreview } from "./editor/inlinePreview";
 import { sourceStyle } from "./editor/sourceStyle";
 import { formatFocusedCell } from "./editor/tableEditor";
 import { showTablePicker } from "./editor/tablePicker";
@@ -71,7 +80,35 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
   code.textContent = "x";
   codeBlock.append(code);
   probe.append(codeBlock);
+  const rule = document.createElement("hr");
+  probe.append(rule);
+  // A list item and a checked checklist item: how much further the text of the second starts, and its color.
+  const lists = ["", " remarkup-list-with-checkmarks"].map((checks) => {
+    const list = document.createElement("ul");
+    list.className = `remarkup-list${checks}`;
+    const item = document.createElement("li");
+    item.className = `remarkup-list-item${checks && " remarkup-checked-item"}`;
+    if (checks) {
+      // As Phorge renders it: the hidden input, then a space.
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      item.append(input, " ");
+    }
+    item.append("x");
+    list.append(item);
+    probe.append(list);
+    return item;
+  });
   context.append(probe);
+  const textStart = (item: HTMLElement) => {
+    const range = document.createRange();
+    const text = item.lastChild!;
+    range.setStart(text, text.textContent!.length - 1);
+    range.setEnd(text, text.textContent!.length);
+    return range.getBoundingClientRect().left;
+  };
+  editor.style.setProperty("--rme-check-indent", `${textStart(lists[1]) - textStart(lists[0])}px`);
+  editor.style.setProperty("--rme-checked-color", getComputedStyle(lists[1]).color);
 
   headers.forEach((header, i) => {
     const style = getComputedStyle(header);
@@ -101,6 +138,12 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
   editor.style.setProperty("--rme-quote-background", quoteStyle.backgroundColor);
   editor.style.setProperty("--rme-quote-border-color", quoteStyle.borderLeftColor);
   editor.style.setProperty("--rme-link-color", getComputedStyle(link).color);
+  // A rule is its border or its background, depending on the style.
+  const ruleStyle = getComputedStyle(rule);
+  editor.style.setProperty(
+    "--rme-rule-color",
+    parseFloat(ruleStyle.borderTopWidth) > 0 ? ruleStyle.borderTopColor : ruleStyle.backgroundColor,
+  );
   probe.remove();
 
   // The textarea is hidden, but has its colors.
@@ -113,15 +156,19 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
 const editors = new Set<LiveEditor>();
 let restyleTimer: ReturnType<typeof setTimeout> | undefined;
 
-// Dark Reader and similar tools add and remove styles and mark the root
-// element while the page is open.
-new MutationObserver(() => {
+function restyleSoon(): void {
   clearTimeout(restyleTimer);
   restyleTimer = setTimeout(() => editors.forEach((editor) => editor.restyle()), 100);
-}).observe(document.documentElement, {
+}
+
+// Dark Reader and similar tools add and remove styles and mark the root
+// element while the page is open.
+new MutationObserver(restyleSoon).observe(document.documentElement, {
   attributes: true,
   attributeFilter: ["class", "style", "data-darkreader-mode", "data-darkreader-scheme"],
 });
+// Fonts that arrive later change what pageStyle() measures (e.g. how far checklist items start).
+document.fonts?.addEventListener("loadingdone", restyleSoon);
 
 /**
  * Toolbar buttons the editor does itself instead of Phorge, by icon.
@@ -195,12 +242,17 @@ class LiveEditor {
   ) {
     this.lastValue = textarea.value;
     this.bar = root.querySelector<HTMLElement>(TOOLBAR)!;
-    this.renderer = new BlockRenderer(rendererFor(textarea), () => {
-      if (!this.destroyed) {
-        this.view.dispatch({ effects: renderedEffect.of(null) });
-        this.showStatus();
-      }
-    });
+    this.renderer = new BlockRenderer(
+      rendererFor(textarea),
+      () => {
+        if (!this.destroyed) {
+          this.view.dispatch({ effects: renderedEffect.of(null) });
+          this.showStatus();
+        }
+      },
+      // While parts of the text wait for the server, e.g. for tests and screen readers.
+      (busy) => this.wrapper?.setAttribute("aria-busy", String(busy)),
+    );
 
     this.wrapper = document.createElement("div");
     this.wrapper.className = "rme-editor";
@@ -228,6 +280,17 @@ class LiveEditor {
           EditorState.allowMultipleSelections.of(false),
           placeholder(textarea.placeholder || "Write here…"),
           livePreview(this.renderer),
+          // The editors of table cells.
+          cellSupport.of({
+            extensions: (main) => [cellPreview(main), phabricatorAutocomplete, cellSlashMenu, cellShortcuts, links],
+            format: (icon) =>
+              icon === "fa-link"
+                ? editLink
+                : INLINE_FORMATS.some((format) => format.icon === icon)
+                  ? inlineFormat(icon)
+                  : null,
+            linkSelection,
+          }),
           // Before sourceStyle, whose marks then wrap its widgets: the rendered list markers hang like the source ones.
           inlinePreview,
           sourceStyle,

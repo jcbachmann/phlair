@@ -36,10 +36,26 @@ export class BlockRenderer {
   private destroyed = false;
   private readonly separator = `RMESEP${Math.random().toString(36).slice(2, 10)}`;
 
+  private wasBusy = false;
+
   constructor(
     private readonly render: RenderFunction,
     private readonly onRendered: () => void,
+    /** Called when blocks start or stop waiting for the server. */
+    private readonly onBusy: (busy: boolean) => void = () => {},
   ) {}
+
+  /** Whether blocks wait for the server. */
+  get busy(): boolean {
+    return this.queued.size > 0 || this.inFlight.size > 0;
+  }
+
+  private noteBusy(): void {
+    if (this.busy !== this.wasBusy) {
+      this.wasBusy = this.busy;
+      this.onBusy(this.wasBusy);
+    }
+  }
 
   private key({ text, last }: RenderItem): string {
     return last ? `\u0000${text}` : text;
@@ -104,6 +120,7 @@ export class BlockRenderer {
     if (!this.queued.size) {
       return;
     }
+    this.noteBusy();
     clearTimeout(this.timer);
     this.timer = setTimeout(() => void this.flush(), delay);
   }
@@ -137,6 +154,7 @@ export class BlockRenderer {
     if (!this.destroyed) {
       this.scheduleRetry();
       this.onRendered();
+      this.noteBusy();
     }
   }
 

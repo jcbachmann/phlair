@@ -12,6 +12,8 @@ import {
   imageSite,
   openNewWikiPage,
   openWithEditor,
+  PNG_BYTES,
+  settled,
   textarea,
 } from "./helpers";
 
@@ -20,32 +22,52 @@ const source = (page: Page) => textarea(page).inputValue();
 const selected = (page: Page) =>
   textarea(page).evaluate((t: HTMLTextAreaElement) => t.value.slice(t.selectionStart, t.selectionEnd));
 
-/** Starts a new wiki page with a text, all blocks rendered. */
+/** Starts a new wiki page with a text, without the focus, with all that the server renders. */
 async function startWith(page: Page, text: string): Promise<void> {
   await openNewWikiPage(page, "Features");
   await editor(page).click();
   await page.keyboard.insertText(text);
   await blur(page);
-  // No line with text shows its source (blank lines are lines like any other).
-  await expect(page.locator(".rme-editor .cm-line").filter({ hasText: /\S/ })).toHaveCount(0);
+  await settled(page);
 }
 
-/** The screen box of a text in a rendered block. */
-function textBox(page: Page, text: string) {
-  return page.evaluate((text) => {
-    const walker = document.createTreeWalker(document.querySelector(".rme-editor")!, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const index = node.textContent!.indexOf(text);
-      if (index >= 0) {
-        const range = document.createRange();
-        range.setStart(node, index);
-        range.setEnd(node, index + text.length);
-        const { left, right, top, bottom } = range.getBoundingClientRect();
-        return { left, right, y: (top + bottom) / 2 };
+/** Where the bullet or number of a list item starts on the screen: drawn outside its item, as wide as inside it. */
+function markerLeft(page: Page, item: string) {
+  return page.locator(".cm-line", { hasText: item }).evaluate((line) => {
+    const own = line.querySelector<HTMLElement>(".rme-item-marker li:not(.rme-list-around)")!;
+    const range = document.createRange();
+    range.selectNodeContents(own.firstChild!);
+    const outside = range.getBoundingClientRect().left;
+    own.style.listStylePosition = "inside";
+    const inside = range.getBoundingClientRect().left;
+    own.style.listStylePosition = "";
+    return outside - (inside - outside);
+  });
+}
+
+/** The rendered text highlighted as selected while the mouse selects, by block. */
+const highlighted = (page: Page) =>
+  page.evaluate(() => [...(CSS.highlights.get("rme-selection") ?? [])].map((range) => range.toString().trim()));
+
+/** The screen box of a text in a rendered block (of its nth occurrence). */
+function textBox(page: Page, text: string, nth = 0) {
+  return page.evaluate(
+    ([text, nth]) => {
+      const walker = document.createTreeWalker(document.querySelector(".rme-editor")!, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const index = node.textContent!.indexOf(text);
+        if (index >= 0 && nth-- === 0) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + text.length);
+          const { left, right, top, bottom } = range.getBoundingClientRect();
+          return { left, right, y: (top + bottom) / 2 };
+        }
       }
-    }
-    throw new Error(`${text} not found`);
-  }, text);
+      throw new Error(`${text} not found`);
+    },
+    [text, nth] as const,
+  );
 }
 
 /**
@@ -108,15 +130,15 @@ async function paste(page: Page, content: { html?: string; text?: string }, plai
 }
 
 test.describe("fixed bugs", () => {
-  test("blocks render like in the whole text, also the last one", async ({ page }) => {
+  test("blocks are what they are in the whole text, also the last one", async ({ page }) => {
     // "## Section" followed by text is a header, "# item" at the end a list.
     await startWith(page, "## Section\n\nText.\n\n# item");
     const preview = page.locator(".phui-remarkup-preview .phui-preview-body");
     await expect(preview).toContainText("item");
-    for (const selector of [".remarkup-header", "ol", "p"]) {
-      await expect(page.locator(`.rme-block ${selector}`)).toHaveCount(await preview.locator(selector).count());
-    }
-    await expect(page.locator(".rme-block .remarkup-header")).toHaveText("Section");
+    await expect(preview.locator(".remarkup-header")).toHaveText("Section");
+    await expect(preview.locator("ol li")).toHaveText("item");
+    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("Section");
+    await expect(page.locator(".cm-line.rme-src-list")).toHaveText(/^\u200bitem$/);
   });
 
   test("typing in a table cell after undo changes only that cell", async ({ page }) => {
@@ -131,25 +153,25 @@ test.describe("fixed bugs", () => {
     await expect.poll(() => source(page)).toBe("| abcy | def |\n| 1 | 2 |");
   });
 
-  test("the mouse selects rendered blocks whole, as the selection shows while selecting", async ({ page }) => {
-    await startWith(page, "First paragraph here.\n\nSecond paragraph here.\n\nThird.");
+  test("the mouse selects rendered text exactly, as the selection shows while selecting", async ({ page }) => {
+    await startWith(page, "First paragraph here.\n\n```\nsome code here\n```\n\nThird.");
     const from = await textBox(page, "paragraph here.");
-    const second = await textBox(page, "Second");
+    const code = await textBox(page, "code here");
     await page.mouse.move(from.left + 1, from.y);
     await page.mouse.down();
-    await page.mouse.move(second.left + 30, second.y, { steps: 5 });
-    // Nothing switches to its source while the mouse selects.
-    await expect(page.locator(".rme-editor .cm-line").filter({ hasText: /\S/ })).toHaveCount(0);
-    await expect(page.locator(".rme-block.rme-selected")).toHaveText([
-      "First paragraph here.",
-      "Second paragraph here.",
-    ]);
+    await page.mouse.move(code.left + 1, code.y, { steps: 5 });
+    // The code block keeps showing rendered while the mouse selects.
+    await expect(page.locator(".rme-block-code")).toHaveCount(1);
+    // Only its selected text shows selected, not all of it, also not by the browser's selection.
+    await expect.poll(() => highlighted(page)).toEqual(["some"]);
+    await expect(page.locator(".cm-editor")).toHaveClass(/rme-mouse-selecting/);
     await page.mouse.up();
-    expect(await selected(page)).toBe("First paragraph here.\n\nSecond paragraph here.");
-    await expect(page.locator(".rme-block.rme-selected")).toHaveCount(0);
+    expect(await selected(page)).toBe("paragraph here.\n\n```\nsome ");
+    await expect.poll(() => highlighted(page)).toEqual([]);
+    await expect(page.locator(".cm-editor")).not.toHaveClass(/rme-mouse-selecting/);
     // Bold acts on that selection.
     await page.keyboard.press("Control+b");
-    await expect.poll(() => source(page)).toBe("**First paragraph here.\n\nSecond paragraph here.**\n\nThird.");
+    await expect.poll(() => source(page)).toBe("First **paragraph here.\n\n```\nsome **code here\n```\n\nThird.");
   });
 
   test("blocks that fail to render say so and can be retried", async ({ page }) => {
@@ -163,17 +185,17 @@ test.describe("fixed bugs", () => {
     await blur(page);
     const status = page.locator(".rme-status");
     await expect(status).toContainText("Preview unavailable for 1 block, shown as text.");
-    await expect(page.locator(".cm-line", { hasText: "Some **text**." })).toBeVisible();
+    // The text shows all the same, formatted.
+    await expect(page.locator(".cm-line .rme-bold")).toHaveText("text");
     fail = false;
     await status.getByRole("link", { name: "Retry" }).click();
     // Right away, not with the automatic retry 2 s after the failure.
-    await expect(page.locator(".rme-block strong")).toHaveText("text", { timeout: 1000 });
-    await expect(status).toBeHidden();
+    await expect(status).toBeHidden({ timeout: 1000 });
   });
 
   test("Tab in a paragraph does not jump into a table", async ({ page }) => {
     await startWith(page, "Text.\n\n| a | b |\n| 1 | 2 |");
-    await page.locator(".rme-block p", { hasText: "Text." }).click();
+    await page.locator(".cm-line", { hasText: "Text." }).click();
     await page.keyboard.press("Tab");
     expect(await page.evaluate(() => !!document.activeElement?.closest(".rme-table-editor"))).toBe(false);
   });
@@ -191,7 +213,7 @@ test.describe("fixed bugs", () => {
 
   test("the image menu closes when the text changes", async ({ page }) => {
     await startWith(page, "Before.\n\n{F1}");
-    await page.locator(".rme-block img").click({ button: "right" });
+    await page.locator(".rme-image-preview img").click({ button: "right" });
     await expect(page.locator(".rme-image-menu")).toBeVisible();
     // Like Phorge's "Quote" action, which changes the textarea.
     await textarea(page).evaluate((t: HTMLTextAreaElement) => {
@@ -262,8 +284,9 @@ test.describe("editing aids", () => {
     await expect.poll(() => source(page)).toBe("make it **//bold//**\n\n  - item");
     await page.keyboard.press("Control+Shift+7");
     await expect.poll(() => source(page)).toBe("make it **//bold//**\n\n  # item");
+    // The checkbox comes to the item, which stays numbered.
     await page.keyboard.press("Control+Shift+9");
-    await expect.poll(() => source(page)).toBe("make it **//bold//**\n\n  - [ ] item");
+    await expect.poll(() => source(page)).toBe("make it **//bold//**\n\n  # [ ] item");
 
     await page.keyboard.press("Control+/");
     const overview = page.locator(".rme-shortcuts");
@@ -283,29 +306,17 @@ test.describe("editing aids", () => {
     await expect.poll(() => source(page)).toBe("| name | value |\n| a | __b__ |");
   });
 
-  test("checklist boxes can be checked in the rendered text", async ({ page }) => {
+  test("checklist boxes can be checked with a click, also without the focus", async ({ page }) => {
     await startWith(page, "- [ ] open\n- [X] done");
-    // The block shows the change before the server renders it again.
-    await page.route("**/phriction/preview/**", async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      await route.fallback();
-    });
-    // Phorge draws the boxes at the start of the items.
-    const items = page.locator(".rme-block .remarkup-list-with-checkmarks > li");
-    await items.first().click({ position: { x: 8, y: 10 } });
-    expect(await source(page)).toBe("- [X] open\n- [X] done");
-    // Still rendered, now checked.
-    expect(await page.locator(".rme-editor .cm-line").filter({ hasText: /\S/ }).count()).toBe(0);
-    expect(await items.first().getAttribute("class")).toContain("remarkup-checked-item");
-    await items.nth(1).click({ position: { x: 8, y: 10 } });
+    const box = (text: string) => page.locator(".cm-line.rme-src-list", { hasText: text }).locator(".rme-item-check");
+    await box("open").click();
+    await expect.poll(() => source(page)).toBe("- [X] open\n- [X] done");
+    await expect(box("open").locator("li")).toHaveClass(/remarkup-checked-item/);
+    await box("done").click();
     await expect.poll(() => source(page)).toBe("- [X] open\n- [ ] done");
-    await expect(items.nth(1)).toHaveClass(/remarkup-unchecked-item/);
-    // A click on the text edits it; its box still shows as a box.
-    await page.locator(".rme-block li", { hasText: "open" }).click({ position: { x: 40, y: 10 } });
-    const line = page.locator(".cm-line.rme-src-list", { hasText: "open" });
-    await expect(line.locator(".rme-item-check .remarkup-checked-item")).toBeVisible();
-    await line.locator(".rme-item-check").click();
-    await expect.poll(() => source(page)).toBe("- [ ] open\n- [ ] done");
+    await expect(box("done").locator("li")).toHaveClass(/remarkup-unchecked-item/);
+    // The boxes stay boxes: the clicks did not show the source.
+    await expect(page.locator(".cm-line.rme-src-list", { hasText: "open" })).toHaveText(/^ open$/);
   });
 
   test("the table button asks for the size and opens the table for editing", async ({ page }) => {
@@ -414,7 +425,7 @@ test.describe("editing aids", () => {
       .toBe("An *idea* and `*not*`, ##a *b* c## and https://x.com/a/*b* [a site](https://example.com)");
     // Markdown links are Phorge's links: they render.
     await blur(page);
-    await expect(page.locator(".rme-block a", { hasText: "a site" })).toHaveAttribute("href", "https://example.com");
+    await expect(page.locator(".rme-editor a", { hasText: "a site" })).toHaveAttribute("href", "https://example.com");
   });
 
   test("pasting rich text and spreadsheet cells gives remarkup", async ({ page }) => {
@@ -475,13 +486,13 @@ test.describe("editing aids", () => {
     await expect.poll(() => source(page)).toBe("1. one\n2. two");
   });
 
-  test("Ctrl+click opens a link of a rendered block", async ({ page, context }) => {
+  test("Ctrl+click opens a link", async ({ page, context }) => {
     await startWith(page, "Go to [[ https://example.com/ | the site ]].");
     const opened = context.waitForEvent("page");
-    await page.locator(".rme-block a", { hasText: "the site" }).click({ modifiers: ["Control"] });
+    await page.locator(".rme-editor a", { hasText: "the site" }).click({ modifiers: ["Control"] });
     expect((await opened).url()).toBe("https://example.com/");
     // Still rendered: Ctrl+click does not edit.
-    await expect(page.locator(".rme-editor .cm-line").filter({ hasText: /\S/ })).toHaveCount(0);
+    await expect(page.locator(".cm-line")).toHaveText("Go to the site.");
   });
 
   test("autocomplete results can be picked with the arrow keys and the mouse", async ({ page }) => {
@@ -507,7 +518,7 @@ test.describe("reported issues", () => {
     // A new text makes a new image, which Phorge makes on request.
     const above = `Hello ${Date.now()}`;
     await startWith(page, `{meme, src=rmecat, above=${above}, below=there}`);
-    const image = page.locator(".rme-block img.phabricator-remarkup-macro");
+    const image = page.locator(".rme-editor img.phabricator-remarkup-macro");
     await expect(image).toHaveAttribute("src", /\S/);
     await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
     expect(await image.getAttribute("id")).toBeNull();
@@ -614,12 +625,13 @@ test.describe("reported issues", () => {
   });
 });
 
-test("a click between a heading and the line below it types on that line", async ({ page }) => {
+test("a click between a heading and the line below it, nearer that line, types on that line", async ({ page }) => {
   await startWith(page, "= Title\nText line.\n\nMore.");
   const between = async () => {
-    const heading = (await page.locator(".rme-block h2").boundingBox())!;
-    const text = (await page.locator(".rme-block p, .cm-line", { hasText: "Text line." }).first().boundingBox())!;
-    await page.mouse.click(heading.x + 50, (heading.y + heading.height + text.y) / 2);
+    const heading = (await page.locator(".cm-line.rme-src-h").boundingBox())!;
+    const text = (await page.locator(".cm-line", { hasText: "Text line." }).boundingBox())!;
+    // At the left edge, so at the start of the line.
+    await page.mouse.click(heading.x + 1, text.y - 2);
   };
   await between();
   await page.keyboard.type("abc ");
@@ -630,57 +642,48 @@ test("a click between a heading and the line below it types on that line", async
   await expect.poll(() => source(page)).toBe("= Title\nxabc Text line.\n\nMore.");
 });
 
-test("blocks are as far apart as in Phorge's preview", async ({ page }) => {
-  const text = [
-    "Paragraph.",
-    "= Heading",
-    "== Heading right after",
-    "Paragraph.",
-    "---",
-    "Paragraph.",
-    "NOTE: A note.",
-    "- A list",
-    "> A quote.",
-    "```\ncode\n```",
-    "| a | b |\n| 1 | 2 |",
-    "=== Heading",
-    // Blocks on consecutive lines.
-    "= Sprint Review\n== Changelog\nText right below.",
-    "---\n---\n\n---",
-    "Last.",
-  ].join("\n\n");
+test("blocks on consecutive lines are as far apart as in Phorge's preview, a blank line is a line", async ({
+  page,
+}) => {
+  const text = ["= Sprint Review\n== Changelog\nText right below.", "---\n---", "Last."].join("\n\n");
   await startWith(page, text);
   await page.addStyleTag({ content: ".phui-remarkup-preview { display: block !important; }" });
   const preview = page.locator(".phui-remarkup-preview .phui-preview-body .phabricator-remarkup");
   await expect(preview).toContainText("Last.");
-  // Gaps between the blocks: in the editor between the rendered blocks, in the
-  // preview between its elements.
+  // Gaps between the blocks: in the editor between the lines that are not
+  // blank (a rule's "---" hides), in the preview between its elements.
   const gaps = (selector: string) =>
-    page
-      .locator(selector)
-      .evaluateAll((blocks) =>
-        blocks
-          .slice(1)
-          .map((b, i) => Math.round(b.getBoundingClientRect().top - blocks[i].getBoundingClientRect().bottom)),
+    page.locator(selector).evaluateAll((elements) => {
+      const blocks = elements.filter(
+        (el) => !el.classList.contains("cm-line") || el.textContent!.trim() || el.classList.contains("rme-src-rule"),
       );
-  const expected = await gaps(".phui-remarkup-preview .phui-preview-body .phabricator-remarkup > *");
+      return blocks
+        .slice(1)
+        .map((b, i) => Math.round(b.getBoundingClientRect().top - blocks[i].getBoundingClientRect().bottom));
+    });
+  const lines = ".rme-editor .cm-content > .cm-line";
+  const inPreview = await gaps(".phui-remarkup-preview .phui-preview-body .phabricator-remarkup > *");
+  const line = await editor(page).evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
+  // Heading, heading, paragraph, rule, rule, paragraph: blank lines after the paragraph and the second rule.
+  const expected = inPreview.map((gap, i) => (i === 2 || i === 4 ? Math.round(line) : gap));
   // Within a pixel: positions are rounded.
   await expect
-    .poll(async () => (await gaps(".rme-editor .rme-block")).map((gap, i) => Math.abs(gap - expected[i]) <= 1))
+    .poll(async () => (await gaps(lines)).map((gap, i) => Math.abs(gap - expected[i]) <= 1))
     .toEqual(expected.map(() => true));
-  // Entering a block keeps the gaps and the text below in place.
-  const before = await gaps(".rme-editor .rme-block");
-  const last = () => page.locator(".rme-block", { hasText: "Last." }).evaluate((el) => el.getBoundingClientRect().top);
+  // Entering a block, or the blank line, keeps the gaps and the text below in place.
+  const before = await gaps(lines);
+  const last = () => page.locator(".cm-line", { hasText: "Last." }).evaluate((el) => el.getBoundingClientRect().top);
   const top = await last();
-  await page.locator(".rme-block h3", { hasText: "Heading right after" }).click();
-  await expect(page.locator(".cm-line.rme-src-h2")).toBeVisible();
+  await page.locator(".cm-line.rme-src-h2", { hasText: "Changelog" }).click();
+  expect(await last()).toBeCloseTo(top, 0);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect
+    .poll(() => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart))
+    .toBe(text.indexOf("\n\n---") + 1);
   expect(await last()).toBeCloseTo(top, 0);
   await blur(page);
-  await expect.poll(() => gaps(".rme-editor .rme-block")).toEqual(before);
-  // Also a heading right below another one.
-  await page.locator(".rme-block h3", { hasText: "Changelog" }).click();
-  await expect(page.locator(".cm-line.rme-src-h2", { hasText: "Changelog" })).toBeVisible();
-  expect(await last()).toBeCloseTo(top, 0);
+  await expect.poll(() => gaps(lines)).toEqual(before);
 });
 
 test("table source columns line up with emoji in cells", async ({ page }) => {
@@ -772,7 +775,7 @@ test.describe("touch screens", () => {
   test("a long press on an image opens the image menu", async ({ page, browserName }) => {
     test.skip(browserName === "firefox", "Firefox has no touch events on desktop");
     await startWith(page, "Before.\n\n{F1}");
-    await page.locator(".rme-block img").evaluate((img) => {
+    await page.locator(".rme-image-preview img").evaluate((img) => {
       const box = img.getBoundingClientRect();
       const touch = new Touch({ identifier: 1, target: img, clientX: box.left + 5, clientY: box.top + 5 });
       img.dispatchEvent(new TouchEvent("touchstart", { touches: [touch], bubbles: true }));
@@ -912,7 +915,7 @@ test.describe("in Phorge's pages", () => {
     await saved;
     await page.reload();
     await addPhlair(page);
-    await expect(page.locator(".rme-block strong")).toHaveText("one");
+    await expect(page.locator(".cm-line .rme-bold")).toHaveText("one");
 
     // Posting the comment reloads the page; the userscript would run again.
     await editor(page).click();
@@ -1065,7 +1068,7 @@ test.describe("review fixes", () => {
   test("a click on repeated text lands on the clicked occurrence", async ({ page }) => {
     await startWith(page, "- Yes\n- Yes");
     await page
-      .locator(".rme-block li")
+      .locator(".cm-line.rme-src-list")
       .nth(1)
       .click({ position: { x: 20, y: 8 } });
     const line = await textarea(page).evaluate(
@@ -1131,10 +1134,12 @@ test.describe("second test round", () => {
     const box = (await menu.boundingBox())!;
     expect(box.y).toBeGreaterThanOrEqual(0);
     expect(box.y + box.height).toBeLessThanOrEqual(520);
-    // The second item: referencing.
+    // The second of the items with "link": the anchor.
+    await page.keyboard.type("link");
+    await expect(page.locator(".rme-autocomplete .jx-result")).toHaveText([/^Link/, /^Anchor/]);
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
-    await expect(page.locator(".rme-picker")).toContainText("Reference:");
+    await expect.poll(() => source(page)).toBe("{anchor #name}");
   });
 
   test("the link commands change a selected link instead of linking it again", async ({ page }) => {
@@ -1166,7 +1171,7 @@ test.describe("second test round", () => {
     for (let i = 0; i < 5; i++) {
       await page.keyboard.press("ArrowRight");
     }
-    const bubble = page.locator(".rme-cell-bubble");
+    const bubble = page.locator(".rme-table-editor .rme-link-bubble");
     await expect(bubble.getByRole("link", { name: "Open" })).toBeVisible();
     await bubble.getByRole("link", { name: "Remove link" }).click();
     await expect.poll(() => source(page)).toBe("| Element | Source |\n| Fe | site |");
@@ -1182,8 +1187,8 @@ test.describe("second test round", () => {
 
   test("a click on the blank line between a paragraph and a heading opens it for typing", async ({ page }) => {
     await startWith(page, "Some text.\n\n= Heading");
-    const text = (await page.locator(".rme-block p").boundingBox())!;
-    const heading = (await page.locator(".rme-block h2").boundingBox())!;
+    const text = (await page.locator(".cm-line", { hasText: "Some text." }).boundingBox())!;
+    const heading = (await page.locator(".cm-line.rme-src-h").boundingBox())!;
     // Held like a person clicks: the editor gets the focus before the button is up.
     await page.mouse.move(text.x + 40, (text.y + text.height + heading.y) / 2);
     await page.mouse.down();
@@ -1201,10 +1206,10 @@ test.describe("second test round", () => {
   test("text flows around a floating image while it is edited", async ({ page }) => {
     await startWith(page, `{F1, float, layout=left} ${"Text flowing around the image. ".repeat(4)}\n\nNext paragraph.`);
     const next = () =>
-      page.locator(".rme-block", { hasText: "Next paragraph." }).evaluate((e) => e.getBoundingClientRect().top);
+      page.locator(".cm-line", { hasText: "Next paragraph." }).evaluate((e) => e.getBoundingClientRect().top);
     const before = await next();
-    const paragraph = (await page.locator(".rme-block p").first().boundingBox())!;
-    await page.mouse.click(paragraph.x + paragraph.width - 20, paragraph.y + 30);
+    const paragraph = (await page.locator(".cm-line").first().boundingBox())!;
+    await page.mouse.click(paragraph.x + paragraph.width - 20, paragraph.y + 10);
     const image = (await page.locator(".rme-preview-float img").boundingBox())!;
     const textLeft = await page.locator(".cm-line", { hasText: "Text flowing" }).evaluate((line) => {
       const range = document.createRange();
@@ -1313,15 +1318,17 @@ test.describe("third test round", () => {
     await expect(page.locator(".rme-autocomplete")).toHaveCount(0);
   });
 
-  test("a block starting with an image shows it above its text while edited", async ({ page }) => {
+  test("a block starting with an image shows it above its text, also while edited", async ({ page }) => {
     await startWith(page, "{F1}\nBelow the image.");
     const image = () =>
       page
-        .locator(".rme-editor img")
+        .locator(".rme-image-preview img")
         .first()
         .evaluate((img) => img.getBoundingClientRect().top);
     const before = await image();
-    await page.locator(".rme-block", { hasText: "Below the image." }).click({ position: { x: 300, y: 5 } });
+    await page.locator(".cm-line", { hasText: "Below the image." }).click({ position: { x: 300, y: 5 } });
+    // Its reference shows on its line when the cursor is there.
+    await page.keyboard.press("ArrowUp");
     const line = page.locator(".cm-line", { hasText: "{F1}" });
     await expect(line).toBeVisible();
     expect(await line.evaluate((l) => l.getBoundingClientRect().top)).toBeGreaterThan(
@@ -1358,50 +1365,51 @@ test.describe("fourth test round", () => {
   test("the list buttons of Phorge's toolbar switch the kind of the list level, indented", async ({ page }) => {
     const toolbarButton = (icon: string) => page.locator(`.remarkup-assist-bar .remarkup-assist.${icon}`).first();
     await startWith(page, "- a\n  - b\n- c\n\nText");
-    await page.locator(".rme-block li", { hasText: /^c$/ }).click();
+    await page.locator(".cm-line.rme-src-list", { hasText: /^\u200bc$/ }).click();
     // "# a" at the start of a line would be a header: the whole list moves in.
     await toolbarButton("fa-list-ol").click();
     await expect.poll(() => source(page)).toBe("  # a\n    - b\n  # c\n\nText");
+    // A checkbox for the item only.
     await toolbarButton("fa-check-square-o").click();
-    await expect.poll(() => source(page)).toBe("  - [ ] a\n    - b\n  - [ ] c\n\nText");
+    await expect.poll(() => source(page)).toBe("  # a\n    - b\n  # [ ] c\n\nText");
     await toolbarButton("fa-list-ul").click();
-    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - c\n\nText");
+    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText");
     // Shift+Tab does not take an item out to the start of the line.
     await page.keyboard.press("Shift+Tab");
-    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - c\n\nText");
+    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText");
 
     await page.keyboard.press("Control+End");
     await toolbarButton("fa-list-ol").click();
-    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - c\n\n  # Text");
+    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\n  # Text");
     // Without its indentation: indented text is a code block.
     await toolbarButton("fa-list-ol").click();
-    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - c\n\nText");
+    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText");
 
     await page.keyboard.press("End");
     await page.keyboard.press("Enter");
     await page.keyboard.press("Enter");
     await toolbarButton("fa-list-ol").click();
     await page.keyboard.type("one");
-    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - c\n\nText\n\n  # one");
+    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText\n\n  # one");
     await toolbarButton("fa-bold").click();
-    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - c\n\nText\n\n  # one**bold text**");
+    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText\n\n  # one**bold text**");
     await toolbarButton("fa-bold").click();
-    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - c\n\nText\n\n  # onebold text");
+    await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText\n\n  # onebold text");
   });
 
   test("Shift+Up and Down select line by line, also into rendered blocks", async ({ page }) => {
     await startWith(page, "Intro\n\n  - one\n  - two\n  - three\n\nEnd");
-    await page.locator(".rme-block", { hasText: "Intro" }).click();
+    await page.locator(".cm-line", { hasText: "Intro" }).click();
     await page.keyboard.press("End");
     for (let i = 0; i < 3; i++) {
       await page.keyboard.press("Shift+ArrowDown");
     }
-    // Line by line (where in the next line depends on the rendered list markers).
-    await expect.poll(() => selected(page)).toMatch(/^\n\n {2}- one\n?[ -]*$/);
+    // Line by line, near the column of the end of "Intro" (in the text of the items, after their markers).
+    await expect.poll(() => selected(page)).toMatch(/^\n\n {2}- one\n {2}- t?w?o?$/);
     await page.keyboard.press("Shift+ArrowDown");
-    await expect.poll(() => selected(page)).toMatch(/^\n\n {2}- one\n {2}- t?w?o?\n?[ -]*$/);
+    await expect.poll(() => selected(page)).toMatch(/^\n\n {2}- one\n {2}- two\n {2}- t?h?r?$/);
 
-    await page.locator(".rme-block", { hasText: "End" }).click();
+    await page.locator(".cm-line", { hasText: "End" }).click();
     await page.keyboard.press("Home");
     await page.keyboard.press("Shift+ArrowUp");
     await page.keyboard.press("Shift+ArrowUp");
@@ -1410,7 +1418,7 @@ test.describe("fourth test round", () => {
 
   test("Ctrl+Shift+K on a reference opens its search near it, filled in, and changes it", async ({ page }) => {
     await startWith(page, "See T1 for the details of the calibration, which are many and long. ".repeat(4));
-    await page.locator(".rme-block").first().click();
+    await page.locator(".cm-line").first().click();
     await page.keyboard.press("Control+Home");
     for (let i = 0; i < 5; i++) {
       await page.keyboard.press("ArrowRight");
@@ -1471,74 +1479,53 @@ test.describe("fifth test round", () => {
     "After",
   ];
 
-  test("in a list, only the item with the cursor shows its source; the others stay where they are", async ({
-    page,
-  }) => {
+  test("moving through a list moves no text, and items are numbered like in the whole list", async ({ page }) => {
     await startWith(page, LIST.join("\n"));
     const positions = async () => Promise.all(TEXTS.map((text) => textBox(page, text)));
-    const rendered = await positions();
-    for (const [line, items] of [
-      [3, 6],
-      [5, 6],
-      [7, 6],
-      [8, 6],
-      [14, 4],
-      [13, 4],
-    ]) {
-      await page.locator(".rme-block", { hasText: "Intro" }).click();
+    const unfocused = await positions();
+    for (const line of [3, 5, 7, 8, 14, 13]) {
+      await page.locator(".cm-line", { hasText: "Intro" }).click();
       await page.keyboard.press("Control+Home");
       for (let i = 1; i < line; i++) {
         await page.keyboard.press("ArrowDown");
       }
-      const source = LIST[line - 1];
-      // The other items of the list show rendered, each on its own.
-      await expect(page.locator(".rme-list-item")).toHaveCount(items - 1);
-      // Its text, after its marker, which shows rendered.
-      const text = source.replace(/^\s*(?:[-*#]+|\d+[.)])\s+(?:\[.\]\s+)?/, "");
-      await expect(page.locator(".cm-line.rme-src-list")).toHaveText(new RegExp(`${text}$`));
       const now = await positions();
       now.forEach((box, i) => {
-        expect(Math.abs(box.y - rendered[i].y), `${TEXTS[i]} with line ${line} edited`).toBeLessThan(1.5);
-        expect(Math.abs(box.left - rendered[i].left), `${TEXTS[i]} with line ${line} edited`).toBeLessThan(2);
+        expect(Math.abs(box.y - unfocused[i].y), `${TEXTS[i]} with the cursor on line ${line}`).toBeLessThan(1.5);
+        expect(Math.abs(box.left - unfocused[i].left), `${TEXTS[i]} with the cursor on line ${line}`).toBeLessThan(2);
       });
     }
     // Numbered like in the whole list: from 3, the nested list with letters.
-    await expect(page.locator(".rme-list-item li:not(.rme-list-around)", { hasText: "first" })).toHaveJSProperty(
-      "value",
-      3,
-    );
-    await expect(page.locator(".rme-list-item li:not(.rme-list-around)", { hasText: "sub a" })).toHaveCSS(
-      "list-style-type",
-      "upper-alpha",
-    );
+    const marker = (text: string) =>
+      page.locator(".cm-line.rme-src-list", { hasText: text }).locator(".rme-item-marker li:not(.rme-list-around)");
+    await expect(marker("first")).toHaveJSProperty("value", 3);
+    await expect(marker("sub a")).toHaveCSS("list-style-type", "upper-alpha");
   });
 
-  test("the rendered items of a list being edited stay rendered while typing, and their boxes can be checked", async ({
-    page,
-  }) => {
+  test("list items can be typed and their boxes checked", async ({ page }) => {
     await startWith(page, LIST.join("\n"));
-    await page.locator(".rme-block", { hasText: "Intro" }).click();
+    await page.locator(".cm-line", { hasText: "Intro" }).click();
     await page.keyboard.press("Control+Home");
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("End");
-    await expect(page.locator(".rme-list-item")).toHaveCount(5);
     await page.keyboard.type(" and more");
     await page.keyboard.press("Enter");
     await page.keyboard.type("new");
-    await expect(page.locator(".rme-list-item")).toHaveCount(6);
     await expect.poll(() => source(page)).toContain("  - one item and more\n  - new\n  - two item");
 
-    const item = page.locator(".rme-list-item li", { hasText: "three item" });
-    const box = (await item.boundingBox())!;
-    await page.mouse.click(box.x + 8, box.y + 10);
+    await page.locator(".cm-line.rme-src-list", { hasText: "three item" }).locator(".rme-item-check").click();
     await expect.poll(() => source(page)).toContain("  - [ ] three item");
-    await expect(page.locator(".cm-line.rme-src-list", { hasText: "new" }).locator(".rme-item-marker")).toHaveText("•");
+    // The browser's own bullet, like on the page.
+    await expect(page.locator(".cm-line.rme-src-list", { hasText: "new" }).locator(".rme-item-marker li")).toHaveCSS(
+      "list-style-type",
+      "disc",
+    );
   });
 
   test("Home goes to the text of a list item first, then to the start of the line", async ({ page }) => {
     await startWith(page, "  - [ ] the item");
-    await page.locator(".rme-block").click();
+    await page.locator(".cm-line").first().click();
     await page.keyboard.press("End");
     const caret = () => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
     await page.keyboard.press("Home");
@@ -1557,7 +1544,7 @@ test.describe("references while editing", () => {
 
   test("references in the line being edited show rendered, unless the cursor is on them", async ({ page }) => {
     await startWith(page, TEXT);
-    await page.locator(".rme-block").click();
+    await page.locator(".cm-line").first().click();
     await page.keyboard.press("End");
     const refs = page.locator(".rme-editor .cm-line .rme-inline-ref");
     await expect(refs).toHaveText(["T1", "@alice", "T1: Calibrate the detector", "the task"]);
@@ -1580,7 +1567,7 @@ test.describe("references while editing", () => {
 
   test("a click on a rendered reference puts the cursor at its end, showing its source", async ({ page }) => {
     await startWith(page, TEXT);
-    await page.locator(".rme-block").click();
+    await page.locator(".cm-line").first().click();
     await page.keyboard.press("End");
     await page.locator(".rme-inline-ref", { hasText: "@alice" }).click();
     await expect(page.locator(".rme-inline-ref")).toHaveText(["T1", "T1: Calibrate the detector", "the task"]);
@@ -1593,7 +1580,7 @@ test.describe("sixth test round", () => {
   test("Up and Down land in the text of list items, not before their markers", async ({ page }) => {
     const text = "Intro\n\n  - one\n  - [ ] two";
     await startWith(page, text);
-    await page.locator(".rme-block", { hasText: "Intro" }).click();
+    await page.locator(".cm-line", { hasText: "Intro" }).click();
     await page.keyboard.press("Home");
     const caret = () => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
     await page.keyboard.press("ArrowDown");
@@ -1666,34 +1653,32 @@ test.describe("sixth test round", () => {
 test.describe("seventh test round", () => {
   const TEXT = "First paragraph here.\n\n| a | b |\n| c | d |\n\nMiddle paragraph here.\n\nLast paragraph.";
 
-  test("dragging over rendered text selects it whole, as it shows, from rendered text or from the source", async ({
+  test("dragging over rendered text selects it as it shows, from rendered text or from the source", async ({
     page,
   }) => {
     await startWith(page, TEXT);
-    const selectedBlocks = () =>
-      page
-        .locator(".rme-block.rme-selected")
-        .evaluateAll((blocks) => blocks.map((b) => b.textContent!.trim().slice(0, 5)));
-    // From a rendered paragraph down into the middle of the table.
-    const first = (await textBox(page, "First"))!;
+    // From a paragraph down into the middle of the table, which is selected whole.
+    const first = (await textBox(page, "paragraph"))!;
     const cell = (await page.locator(".rme-table-editor td", { hasText: "c" }).boundingBox())!;
-    await page.mouse.move(first.left + 20, first.y);
+    await page.mouse.move(first.left + 1, first.y);
     await page.mouse.down();
     await page.mouse.move(cell.x + 5, cell.y + 5, { steps: 6 });
-    await expect.poll(selectedBlocks).toEqual(["First", "abcd"]);
+    await expect.poll(() => highlighted(page)).toEqual(["abcd"]);
     const shown = await selected(page);
     await page.mouse.up();
-    expect(shown).toBe("First paragraph here.\n\n| a | b |\n| c | d |");
+    expect(shown).toBe("paragraph here.\n\n| a | b |\n| c | d |");
     await expect.poll(() => selected(page)).toBe(shown);
+    // Selected whole, the table stays a table: nothing moves.
+    await expect(page.locator(".rme-table-editor")).toHaveCount(1);
 
     // From the source of a paragraph being edited up into the table.
-    await page.locator(".rme-block", { hasText: "Middle" }).click();
+    await page.locator(".cm-line", { hasText: "Middle" }).click();
     const middle = (await page.locator(".cm-line", { hasText: "Middle" }).boundingBox())!;
     const table = (await page.locator(".rme-table-editor td", { hasText: "b" }).boundingBox())!;
     await page.mouse.move(middle.x + 60, middle.y + middle.height / 2);
     await page.mouse.down();
     await page.mouse.move(table.x + 5, table.y + 5, { steps: 6 });
-    await expect.poll(selectedBlocks).toEqual(["abcd"]);
+    await expect.poll(async () => (await highlighted(page)).length).toBe(1);
     const fromSource = await selected(page);
     await page.mouse.up();
     expect(fromSource).toMatch(/^\| a \| b \|\n\| c \| d \|\n\nMiddl?e?/);
@@ -1704,7 +1689,7 @@ test.describe("seventh test round", () => {
     await startWith(page, "Above\n\nBelow");
     const below = async () => (await textBox(page, "Below")).y;
     const before = await below();
-    await page.locator(".rme-block", { hasText: "Above" }).click();
+    await page.locator(".cm-line", { hasText: "Above" }).click();
     const line = (await page.locator(".cm-line", { hasText: "Above" }).boundingBox())!.height;
     await page.keyboard.press("End");
     await page.keyboard.press("Enter");
@@ -1721,7 +1706,7 @@ test.describe("everything renders until the cursor is on it", () => {
 
   test("formatting hides its markers, except where the cursor is", async ({ page }) => {
     await startWith(page, "Some **bold** and //it// and `code` with #demo_project");
-    await page.locator(".rme-block").click();
+    await page.locator(".cm-line").first().click();
     await page.keyboard.press("Home");
     await expect(line(page, "Some")).toHaveText("Some bold and it and code with Demo Project");
     for (let i = 0; i < 6; i++) {
@@ -1735,22 +1720,17 @@ test.describe("everything renders until the cursor is on it", () => {
     await expect(line(page, "Some")).toHaveText("Some **bold** and //it// and `code` with #demo_project");
   });
 
-  test("headers and quotes hide their markers until the cursor is in or before them", async ({ page }) => {
+  test("headers show their markers while the cursor is on their line, quotes while it is in or before them", async ({
+    page,
+  }) => {
     await startWith(page, "== Title ==\n\n> Quoted");
-    await page.locator(".rme-block h3").click();
+    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("Title");
+    await page.locator(".cm-line.rme-src-h").click();
+    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("== Title ==");
     await page.keyboard.press("End");
-    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("Title ==");
-    await page.keyboard.press("ArrowLeft");
-    await page.keyboard.press("ArrowLeft");
-    await page.keyboard.press("ArrowLeft");
-    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("Title");
-    // Home goes to the start of the text first, then before the marker.
-    await page.keyboard.press("Home");
-    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("Title");
-    await page.keyboard.press("Home");
-    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("== Title");
+    await expect(page.locator(".cm-line.rme-src-h")).toHaveText("== Title ==");
 
-    await page.locator(".rme-block blockquote").click();
+    await page.locator(".cm-line.rme-src-quote").click();
     await page.keyboard.press("End");
     await expect(page.locator(".cm-line.rme-src-quote")).toHaveText("Quoted");
     await page.keyboard.press("Home");
@@ -1788,6 +1768,965 @@ test.describe("the cursor", () => {
     await blur(page);
     await page.locator(".rme-table-editor td", { hasText: "1" }).click();
     await expect(cursor).toBeHidden();
-    await expect(page.locator(".rme-table-editor td:focus")).not.toHaveCSS("caret-color", "rgba(0, 0, 0, 0)");
+    await expect(page.locator(".rme-table-editor td .cm-content:focus")).not.toHaveCSS(
+      "caret-color",
+      "rgba(0, 0, 0, 0)",
+    );
+  });
+});
+
+test.describe("eighth test round", () => {
+  test("dragging from the end of a list item to the end of the one before selects only the item", async ({ page }) => {
+    const text = "Intro.\n\n  - one entry\n  - two entry\n  - three entry\n\nEnd.";
+    await startWith(page, text);
+    await page.locator(".cm-line.rme-src-list", { hasText: "two entry" }).click();
+    await page.keyboard.press("End");
+    const two = (await page.locator(".cm-line", { hasText: "two entry" }).boundingBox())!;
+    const one = (await page.locator(".cm-line.rme-src-list", { hasText: "one entry" }).boundingBox())!;
+    // From the end of the item being edited up to the end of the one before it.
+    await page.mouse.move(two.x + two.width - 3, two.y + two.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(one.x + one.width - 3, one.y + one.height / 2, { steps: 6 });
+    // The item before does not show selected: only the end of its line is.
+    expect((await highlighted(page)).join("")).toBe("");
+    await page.mouse.up();
+    expect(await selected(page)).toBe("\n  - two entry");
+    await page.keyboard.press("Control+x");
+    await expect.poll(() => source(page)).toBe("Intro.\n\n  - one entry\n  - three entry\n\nEnd.");
+  });
+
+  test("Shift+Up keeps the column like a text field, over blank lines and rendered lists", async ({ page }) => {
+    await startWith(page, "First paragraph is here.\nSecond line.\n\n  - one\n  - two\n\nEnd paragraph here.");
+    await page.locator(".cm-line", { hasText: "End paragraph" }).click();
+    await page.keyboard.press("End");
+    const steps = [
+      "\nEnd paragraph here.",
+      // At the end of the shorter lines.
+      "\n\nEnd paragraph here.",
+      "\n  - two\n\nEnd paragraph here.",
+      "\n  - one\n  - two\n\nEnd paragraph here.",
+      "\n\n  - one\n  - two\n\nEnd paragraph here.",
+    ];
+    for (const step of steps) {
+      await page.keyboard.press("Shift+ArrowUp");
+      await expect.poll(() => selected(page)).toBe(step);
+    }
+    // Back in a long enough line: at the column it started from, not at the start of the line.
+    await page.keyboard.press("Shift+ArrowUp");
+    await expect.poll(() => selected(page)).toMatch(/^.{1,20}\nSecond line\.\n\n {2}- one/);
+    expect(await selected(page)).not.toMatch(/^First/);
+  });
+
+  for (const font of ["", "serif", "monospace"]) {
+    test(`bullets, numbers and checkboxes stay in place when the cursor comes to their item${font ? ` (${font})` : ""}`, async ({
+      page,
+    }) => {
+      await openNewWikiPage(page, "Markers");
+      if (font) {
+        // E.g. Ubuntu's fonts, whose bullets were a few pixels off.
+        await page.addStyleTag({ content: `.rme-editor, .rme-editor * { font-family: ${font} !important; }` });
+        // The editor measures the page again, like when Dark Reader changes it.
+        await page.evaluate(() => document.documentElement.classList.add("rme-test-font"));
+      }
+      await editor(page).click();
+      await page.keyboard.insertText(
+        "Intro.\n\n  - alpha\n  - beta\n    - gamma\n  - delta\n\nMiddle.\n\n  3. one\n  4. two\n    # sub a\n    # sub b\n\nChecks.\n\n  - [ ] open box\n  - [X] checked box\n\n[X] bare box",
+      );
+      await blur(page);
+      await settled(page);
+      const content = (await page.locator(".rme-editor .cm-content").boundingBox())!;
+      for (const item of ["beta", "gamma", "two", "sub b", "checked box", "bare box"]) {
+        const box = await textBox(page, item);
+        // The marker before the text, and the start of the text (its place and color), on the item's line.
+        const clip = { x: content.x, y: box.y - 9, width: box.left + 12 - content.x, height: 18 };
+        const rendered = await page.screenshot({ clip });
+        await page.mouse.click(box.left + 2, box.y);
+        await page.keyboard.press("End");
+        await expect(page.locator(".cm-line.rme-src-list", { hasText: item })).toBeVisible();
+        expect(await page.screenshot({ clip }), `the marker of ${item}`).toEqual(rendered);
+        await blur(page);
+      }
+    });
+  }
+
+  test("files dropped or pasted into a table cell go into the cell", async ({ page, browserName }) => {
+    await startWith(page, "| a | b |\n| c | d |");
+    const cell = page.locator(".rme-table-editor td", { hasText: "d" });
+    await cell.evaluate((node) => {
+      const data = new DataTransfer();
+      data.items.add(new File(["hello"], "note.txt", { type: "text/plain" }));
+      const box = node.getBoundingClientRect();
+      const init = { bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5, dataTransfer: data };
+      node.dispatchEvent(new DragEvent("dragover", init));
+      node.dispatchEvent(new DragEvent("drop", init));
+    });
+    await expect.poll(() => source(page)).toMatch(/^\| a \| b \|\n\| c \| d\{F\d+\} \|$/);
+    const metadata = await page.locator('input[name="content_metadata"]').inputValue();
+    expect(JSON.parse(metadata).attachedFilePHIDs).toHaveLength(1);
+
+    // Firefox ignores clipboardData of synthetic events.
+    if (browserName === "chromium") {
+      await page.locator(".rme-table-editor td", { hasText: "c" }).click();
+      await page.keyboard.press("End");
+      await page.evaluate(() => {
+        const data = new DataTransfer();
+        data.items.add(new File(["hello"], "other.txt", { type: "text/plain" }));
+        document.activeElement!.dispatchEvent(
+          new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }),
+        );
+      });
+      await expect.poll(() => source(page)).toMatch(/^\| a \| b \|\n\| c\{F\d+\} \| d\{F\d+\} \|$/);
+    }
+  });
+
+  test("the upload button puts the file where the caret is in a table cell, also when tables are edited as text", async ({
+    page,
+  }) => {
+    const upload = async () => {
+      await page.locator(".remarkup-assist.fa-cloud-upload").click();
+      const dialog = page.locator(".jx-client-dialog");
+      await dialog
+        .locator('input[type="file"]')
+        .setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: PNG_BYTES });
+      await dialog.locator("button[name=__submit__]").click();
+      await expect(dialog).toHaveCount(0);
+    };
+    await startWith(page, "| a | b |\n| cell | d |");
+    await page.locator(".rme-table-editor td", { hasText: "cell" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await upload();
+    await expect.poll(() => source(page)).toMatch(/^\| a \| b \|\n\| ce\{F\d+\}ll \| d \|$/);
+
+    await page.locator(".rme-table-bar").getByRole("button", { name: "Edit the table as text" }).click();
+    const line = (await page.locator(".cm-line", { hasText: "| a | b |" }).boundingBox())!;
+    await page.mouse.click(line.x + 5, line.y + line.height / 2);
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await upload();
+    await expect.poll(() => source(page)).toMatch(/^\| a \| b\{F\d+\} \|\n\| ce\{F\d+\}ll \| d \|$/);
+  });
+});
+
+test.describe("ninth test round", () => {
+  test("lists nested by repeated markers are indented by markers", async ({ page }) => {
+    await startWith(page, "- level 1\n-- level 2\n--- level 3\n- back");
+    // Nested, like by indentation.
+    await expect(page.locator(".cm-line.rme-list-depth-2")).toHaveText(/level 3$/);
+    await page.locator(".cm-line.rme-src-list", { hasText: "back" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Tab");
+    await expect.poll(() => source(page)).toBe("- level 1\n-- level 2\n--- level 3\n-- back");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("next");
+    await expect.poll(() => source(page)).toBe("- level 1\n-- level 2\n--- level 3\n-- back\n-- next");
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect.poll(() => source(page)).toBe("- level 1\n-- level 2\n--- level 3\n-- back\n- next");
+    // The item shows its bullet where the rendered one is, not its markers.
+    await expect(page.locator(".cm-line.rme-src-list", { hasText: "next" })).toHaveText(/^​next$/);
+  });
+
+  test("checklist items without a bullet ([ ] item) can be checked, also while editing", async ({ page }) => {
+    await startWith(page, "Intro.\n\n[ ] open\n[] empty\n[X] done");
+    await page.locator(".cm-line.rme-src-list", { hasText: "open" }).locator(".rme-item-check").click();
+    await expect.poll(() => source(page)).toBe("Intro.\n\n[X] open\n[] empty\n[X] done");
+    // While editing, the item shows its checkbox, which can be clicked, and Enter adds one more.
+    await page.locator(".cm-line.rme-src-list", { hasText: "empty" }).click({ position: { x: 60, y: 8 } });
+    await page.keyboard.press("End");
+    const check = page.locator(".cm-line", { hasText: "empty" }).locator(".rme-item-check .remarkup-list-item");
+    // Its marker is the checkbox, with the space Phorge puts after it.
+    await expect(page.locator(".cm-line", { hasText: "empty" })).toHaveText(/^ empty$/);
+    await check.click();
+    await expect.poll(() => source(page)).toBe("Intro.\n\n[X] open\n[X] empty\n[X] done");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("new");
+    await expect.poll(() => source(page)).toBe("Intro.\n\n[X] open\n[X] empty\n[ ] new\n[X] done");
+  });
+
+  test("Up and Down keep the column through list items and blank lines, like a text field", async ({ page }) => {
+    const text = "Intro paragraph.\n\n  - one entry\n  - two entry\n  - three entry\n\nEnd paragraph.";
+    await startWith(page, text);
+    await page.locator(".cm-line.rme-src-list", { hasText: "one entry" }).click({ position: { x: 5, y: 8 } });
+    await page.keyboard.press("Home");
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.press("ArrowRight");
+    }
+    const line = () =>
+      textarea(page).evaluate((t: HTMLTextAreaElement) => t.value.slice(0, t.selectionStart).split("\n").pop());
+    await expect.poll(line).toBe("  - one ");
+    for (const [key, expected] of [
+      ["ArrowDown", "  - two "],
+      ["ArrowDown", "  - thre"],
+      ["ArrowDown", ""],
+      ["ArrowDown", "End para"],
+      ["ArrowUp", ""],
+      ["ArrowUp", "  - thre"],
+      ["ArrowUp", "  - two "],
+    ]) {
+      await page.keyboard.press(key);
+      await expect.poll(line, `${key} to ${expected}`).toBe(expected);
+    }
+  });
+});
+
+test.describe("tenth test round", () => {
+  test("nothing moves when the cursor goes through the text, line by line", async ({ page }) => {
+    const text = [
+      "= Title =",
+      "Some **bold**, //italic// and `code` with T1 and [[ https://example.com | a link ]].",
+      "== Section",
+      "  - first item\n  - second **item**\n    - nested\n  - [ ] open box\n  - [X] done box",
+      "> A quote\n> over two lines",
+      "NOTE: A note.",
+      "  # one\n  # two",
+      "```\ncode block\n```",
+      "| a | b |\n| 1 | 2 |",
+      "---",
+      "Last line.",
+    ].join("\n\n");
+    await startWith(page, text);
+    // The bottom of the last line, and the tops of all lines.
+    const layout = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll(".rme-editor .cm-content > *")].map((el) =>
+          Math.round(el.getBoundingClientRect().top),
+        ),
+      );
+    const unfocused = await layout();
+    await page.locator(".cm-line", { hasText: "Title" }).click();
+    await page.keyboard.press("Control+Home");
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      expect((await layout()).at(-1), `the cursor on line ${i + 1}: ${lines[i]}`).toBe(unfocused.at(-1));
+      await page.keyboard.press("ArrowDown");
+    }
+  });
+});
+
+test.describe("eleventh test round", () => {
+  test("Enter on an empty item ends the list without adding a line; at the start of a block it makes room above", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Enter");
+    await editor(page).click();
+    await page.keyboard.insertText("  - one\n  - \nNext line.");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("  - one\n\nNext line.");
+    await expect.poll(() => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart)).toBe(8);
+
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.insertText("Intro.\n\n  - one\n  - two\n\n= Title");
+    // At the start of the first item's text (its bullet shows rendered), and of the header's.
+    await page.locator(".cm-line", { hasText: "one" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("Intro.\n\n\n  - one\n  - two\n\n= Title");
+    // The header shows its markers: Home goes before them.
+    await page.locator(".cm-line", { hasText: "Title" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("Intro.\n\n\n  - one\n  - two\n\n\n= Title");
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe("Intro.\n\n\n  - one\n  - two\n\n\nx= Title");
+  });
+
+  test("a header shows its markers while the cursor is on its line", async ({ page }) => {
+    await startWith(page, "== Title ==\n\nText.");
+    const header = page.locator(".cm-line.rme-src-h");
+    await expect(header).toHaveText("Title");
+    await page.locator(".cm-line", { hasText: "Text." }).click();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await expect(header).toHaveText("== Title ==");
+    await page.keyboard.press("ArrowDown");
+    await expect(header).toHaveText("Title");
+  });
+
+  test("Up and Down from before the marker of a list item land before the marker of the next", async ({ page }) => {
+    await startWith(page, "  - one entry\n  - two entry\n  - three entry");
+    const caret = () => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
+    await page.locator(".cm-line", { hasText: "two entry" }).click();
+    // The start of the text, then the start of the line.
+    await page.keyboard.press("Home");
+    await expect.poll(caret).toBe(18);
+    await page.keyboard.press("Home");
+    await expect.poll(caret).toBe(14);
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(caret).toBe(0);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(caret).toBe(28);
+    // From the start of the text: at the start of the text.
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(caret).toBe(18);
+  });
+
+  test("/ opens the insert menu also after a space, but not in a word or path", async ({ page }) => {
+    await openNewWikiPage(page, "Slash");
+    await editor(page).click();
+    await page.keyboard.type("Pick and/or ");
+    await expect(page.locator(".rme-popup, .phuix-autocomplete").filter({ hasText: "Insert" })).toHaveCount(0);
+    await page.keyboard.type("/horiz");
+    const menu = page.locator(".jx-result", { hasText: "Horizontal line" });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Enter");
+    // Only "/horiz" is gone; the line stays and the rule comes after it.
+    await expect.poll(() => source(page)).toBe("Pick and/or \n\n---\n\n");
+  });
+
+  test("the reference search finds tasks by their title, then by their text, open ones first", async ({ page }) => {
+    await openNewWikiPage(page, "Reference search");
+    const word = `zq${Date.now().toString(36)}`;
+    const task = async (title: string, description: string, status?: string) =>
+      conduit(page, "maniphest.edit", {
+        transactions: [
+          { type: "title", value: title },
+          { type: "description", value: description },
+          ...(status ? [{ type: "status", value: status }] : []),
+        ],
+      });
+    // Newest first in Phorge's own order: the reverse of the expected one.
+    await task("Archived note", `Its text mentions ${word}.`, "resolved");
+    await task("Another task", `Its text mentions ${word}.`);
+    await task(`Old ${word} work`, "", "resolved");
+    await task(`Fix the ${word} board`, "");
+    // The daemons index the tasks for the search.
+    await expect
+      .poll(async () => (await conduit(page, "maniphest.search", { constraints: { query: `~${word}` } })).data.length, {
+        timeout: 30000,
+      })
+      .toBe(4);
+    await editor(page).click();
+    await page.keyboard.press("Control+Shift+k");
+    await page.locator(".rme-picker input").fill(word);
+    const tasks = page.locator(".rme-picker .jx-result", { has: page.locator(".fa-anchor") });
+    await expect(tasks).toHaveCount(4);
+    await expect(tasks).toContainText([`Fix the ${word} board`, `Old ${word} work`, "Another task", "Archived note"]);
+  });
+
+  test("Phorge's autocomplete works in table cells", async ({ page }) => {
+    await startWith(page, "| a | b |\n| c | d |");
+    await page.locator(".rme-table-editor td", { hasText: "d" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" #demo");
+    await expect(page.locator(".jx-result").first()).toHaveText("Demo Project");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("| a | b |\n| c | d #demo_project  |");
+    await page.keyboard.type("[[demo");
+    await expect(page.locator(".jx-result").first()).toHaveText("Remarkup Demo");
+    await page.keyboard.press("Enter");
+    // The link's own "]]", not the ones the cell added for "[[".
+    await expect.poll(() => source(page)).toBe("| a | b |\n| c | d #demo_project [[ demo/ ]]  |");
+  });
+});
+
+test.describe("twelfth test round", () => {
+  const LONG = (name: string) => `${name} ${"with words that wrap around the line ".repeat(9)}`;
+
+  for (const [start, keys] of [
+    ["the start of its text", ["Home"]],
+    ["before its marker", ["Home", "Home"]],
+  ] as const) {
+    test(`Up goes through every row of a wrapped list item, from ${start} of the next`, async ({ page }) => {
+      await startWith(page, `Intro.\n\n  - ${LONG("first")}\n  - ${LONG("second")}`);
+      const rows = await page
+        .locator(".cm-line", { hasText: "first" })
+        .evaluate((line) =>
+          Math.round(line.getBoundingClientRect().height / parseFloat(getComputedStyle(line).lineHeight)),
+        );
+      expect(rows).toBeGreaterThanOrEqual(3);
+      await page.locator(".cm-line", { hasText: "second" }).click({ position: { x: 300, y: 8 } });
+      for (const key of keys) {
+        await page.keyboard.press(key);
+      }
+      const line = () =>
+        textarea(page).evaluate((t: HTMLTextAreaElement) => t.value.slice(0, t.selectionStart).split("\n").length);
+      // Each Up a row of the first item, from its last to its first, then the line above it.
+      let stayed = 0;
+      for (let i = 0; i < rows + 1; i++) {
+        await page.keyboard.press("ArrowUp");
+        if ((await line()) === 3) {
+          stayed++;
+        } else {
+          break;
+        }
+      }
+      expect(stayed).toBe(rows);
+      expect(await line()).toBe(2);
+    });
+  }
+
+  test("a click on the bullet or number of a list item edits it", async ({ page }) => {
+    await startWith(page, "  - one\n  - two\n\n  # first\n  # second");
+    const caret = () => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
+    for (const [item, at] of [
+      ["two", 11],
+      ["second", 30],
+    ] as const) {
+      const text = await textBox(page, item);
+      await page.mouse.click(text.left - 3, text.y);
+      // After the marker, which shows its source.
+      await expect.poll(caret).toBe(at);
+      await expect(page.locator(".cm-line", { hasText: item })).toHaveText(new RegExp(`^ {2}[-#] ${item}$`));
+    }
+  });
+});
+
+test.describe("thirteenth test round", () => {
+  const caret = (page: Page) => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
+
+  test("a click next to formatted text puts the cursor outside of its markers", async ({ page }) => {
+    await startWith(page, "Some **bold** text\n\nEnds **bolder**");
+    // On the right half of the last letter, and right of a line ending in it.
+    const bold = await textBox(page, "bold");
+    await page.mouse.click(bold.right - 1, bold.y);
+    await expect.poll(() => caret(page)).toBe(13);
+    const bolder = await textBox(page, "bolder");
+    await page.mouse.click(bolder.right + 40, bolder.y);
+    await expect.poll(() => caret(page)).toBe(35);
+    // On the left half of the first letter.
+    await page.mouse.click(bold.left + 1, bold.y);
+    await expect.poll(() => caret(page)).toBe(5);
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe("Some x**bold** text\n\nEnds **bolder**");
+  });
+
+  test("a click between two blocks goes to the nearer line, where the mouse is", async ({ page }) => {
+    await startWith(page, "Some text above.\n  - [ ] open box");
+    const spacer = (await page.locator(".rme-spacer").boundingBox())!;
+    const text = await textBox(page, "text above");
+    // Nearer the checklist item: in its text, not before its checkbox.
+    await page.mouse.click(text.left, spacer.y + spacer.height - 1);
+    await expect.poll(() => caret(page)).toBe(25);
+    // Nearer the text above: where the mouse is in it.
+    await page.mouse.click(text.left + 1, spacer.y + 1);
+    await expect.poll(() => caret(page)).toBe(5);
+  });
+
+  test("a click on or right of a bullet or number edits it", async ({ page }) => {
+    await startWith(page, "  - one\n  - two\n\n  1. first\n  2. second");
+    for (const [item, at] of [
+      ["two", 11],
+      ["second", 32],
+    ] as const) {
+      const text = await textBox(page, item);
+      const left = await markerLeft(page, item);
+      // On the marker, which is drawn by the browser, and between it and the text.
+      for (const x of [left + 2, (left + text.left) / 2, text.left - 2]) {
+        await page.locator(".cm-line", { hasText: "one" }).click();
+        await page.mouse.click(x, text.y);
+        await expect.poll(() => caret(page), `${Math.round(text.left - x)}px left of ${item}`).toBe(at);
+      }
+    }
+  });
+
+  test("Backspace at the start of a quote line removes its marker, in a list item a character", async ({ page }) => {
+    await startWith(page, "  - one\n  - two\n\n> quoted\n> ");
+    await page.locator(".cm-line", { hasText: "quoted" }).click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("Backspace");
+    await expect.poll(() => source(page)).toBe("  - one\n  - two\n\n> quoted\n");
+    // In a list item, Backspace deletes what is before the cursor, like anywhere.
+    await page.locator(".cm-line", { hasText: "two" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Backspace");
+    await expect.poll(() => source(page)).toBe("  - one\n  -two\n\n> quoted\n");
+  });
+});
+
+test.describe("fourteenth test round", () => {
+  const caret = (page: Page) => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
+
+  test("Home and End put the cursor outside of hidden markers", async ({ page }) => {
+    await startWith(page, "Ends **bolder**\n**Starts** bold");
+    await page.locator(".cm-line", { hasText: "Ends" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("End");
+    await expect.poll(() => caret(page)).toBe(15);
+    await page.locator(".cm-line", { hasText: "Starts" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Home");
+    await expect.poll(() => caret(page)).toBe(16);
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe("Ends **bolder**\nx**Starts** bold");
+  });
+
+  test("a click left of a bullet, number or checkbox goes to the start of the line", async ({ page }) => {
+    await startWith(page, "  - one\n  - two\n\n  1. first\n  2. second\n\n  - [ ] box item\n  - [ ] other box");
+    for (const [item, start] of [
+      ["two", 8],
+      ["second", 28],
+      ["other box", 58],
+    ] as const) {
+      await page.locator(".cm-line", { hasText: "one" }).click();
+      const text = await textBox(page, item);
+      const line = (await page.locator(".cm-line", { hasText: item }).boundingBox())!;
+      // In the indentation, left of the marker.
+      await page.mouse.click(line.x + 3, text.y);
+      await expect.poll(() => caret(page), item).toBe(start);
+    }
+  });
+});
+
+test.describe("fifteenth test round", () => {
+  const caret = (page: Page) => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
+
+  test("a click left of a list marker that shows its source goes to the start of the line", async ({ page }) => {
+    await startWith(page, "  - one\n  - two");
+    const line = page.locator(".cm-line", { hasText: "two" });
+    await line.click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Home");
+    // The cursor before the marker: it shows "  - two".
+    await expect(line).toHaveText("  - two");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => caret(page)).toBe(11);
+    const box = (await line.boundingBox())!;
+    await page.mouse.click(box.x + 3, box.y + box.height / 2);
+    await expect.poll(() => caret(page)).toBe(8);
+  });
+
+  test("lines that Phorge shows on the line before them are marked: of notes and list items", async ({ page }) => {
+    await startWith(
+      page,
+      "WARNING: This text\ngoes into\nthe same line\n\n  - an item\n    continued here\n  - next item\n\nA paragraph\nkeeps its lines.",
+    );
+    // The note while it is edited; the list item always.
+    await expect(page.locator(".cm-line.rme-joined")).toHaveText(["continued here"]);
+    await page.locator(".rme-block-note").click();
+    await expect(page.locator(".cm-line.rme-joined")).toHaveText(["goes into", "the same line", "continued here"]);
+    await expect(page.locator(".cm-line.rme-joined").first()).toHaveAttribute(
+      "title",
+      /Phorge shows this line on the line before it/,
+    );
+  });
+});
+
+test.describe("sixteenth test round", () => {
+  const caret = (page: Page) => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
+
+  test("a note of more lines shows on one line like in Phorge, until it is edited", async ({ page }) => {
+    await startWith(page, "WARNING: This text\ngoes into\nthe same line\n\nAfter.\n\nNOTE: One line.");
+    const rendered = page.locator(".rme-block-note .remarkup-warning");
+    await expect(rendered).toHaveText("WARNING: This text goes into the same line");
+    // A note of one line is text like any other.
+    await expect(page.locator(".cm-line.remarkup-note")).toHaveText("NOTE: One line.");
+    // After a note, a blank line is the only space: no gap like between blocks on consecutive lines.
+    const line = await editor(page).evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
+    const gap = () =>
+      page.evaluate(
+        () =>
+          [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "After.")!.getBoundingClientRect()
+            .top - document.querySelector(".rme-block-note")!.getBoundingClientRect().bottom,
+      );
+    await page.waitForTimeout(500);
+    await expect.poll(gap).toBeCloseTo(line, 0);
+    await rendered.click();
+    await expect(page.locator(".rme-block-note")).toHaveCount(0);
+    await expect(page.locator(".cm-line.rme-joined")).toHaveText(["goes into", "the same line"]);
+  });
+
+  test("an anchor shows with its name, not as a project, until the cursor is on it", async ({ page }) => {
+    await startWith(page, "See {anchor #demo_project} here.");
+    const anchor = page.locator(".cm-line .rme-anchor");
+    await expect(anchor).toHaveText("demo_project");
+    await expect(page.locator(".cm-line .phui-tag-view")).toHaveCount(0);
+    await anchor.click();
+    await expect(page.locator(".cm-line")).toHaveText("See {anchor #demo_project} here.");
+  });
+});
+
+test.describe("seventeenth test round", () => {
+  test("a checkbox is added to or removed from the selected items only, of any kind of list", async ({ page }) => {
+    await startWith(page, "  - one\n  - two\n  - three\n\n  # first\n  # second");
+    const toolbarButton = page.locator(".remarkup-assist-bar .remarkup-assist.fa-check-square-o").first();
+    await page.locator(".cm-line", { hasText: "two" }).click();
+    await toolbarButton.click();
+    await expect.poll(() => source(page)).toBe("  - one\n  - [ ] two\n  - three\n\n  # first\n  # second");
+    await page.locator(".cm-line", { hasText: "second" }).click();
+    await toolbarButton.click();
+    await expect.poll(() => source(page)).toBe("  - one\n  - [ ] two\n  - three\n\n  # first\n  # [ ] second");
+    await toolbarButton.click();
+    await expect.poll(() => source(page)).toBe("  - one\n  - [ ] two\n  - three\n\n  # first\n  # second");
+    // Switching the kind of the list keeps the checkboxes.
+    await page.locator(".cm-line", { hasText: "one" }).click();
+    await page.locator(".remarkup-assist-bar .remarkup-assist.fa-list-ol").first().click();
+    await expect.poll(() => source(page)).toBe("  # one\n  # [ ] two\n  # three\n\n  # first\n  # second");
+  });
+
+  test("the insert menu has anchors, important and warning boxes, emoji and headings by level", async ({ page }) => {
+    await openNewWikiPage(page, "Insert menu");
+    await editor(page).click();
+    await page.keyboard.type("/anch");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("setup");
+    await expect.poll(() => source(page)).toBe("{anchor #setup}");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("/warn");
+    await expect(page.locator(".jx-result").first()).toContainText("Warning box");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("{anchor #setup}\n\nWARNING: Note text");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("/h2");
+    await expect(page.locator(".jx-result").first()).toContainText("Heading 2");
+  });
+
+  test("the editor is as high as its text, also after deleting much of it", async ({ page }) => {
+    await startWith(page, Array.from({ length: 30 }, (_, i) => `Line ${i}`).join("\n\n"));
+    const height = () => page.locator(".rme-editor").evaluate((el) => el.getBoundingClientRect().height);
+    expect(await height()).toBeGreaterThan(1000);
+    await page.locator(".cm-line", { hasText: "Line 0" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Control+Shift+End");
+    await page.keyboard.press("Delete");
+    await expect.poll(height).toBeLessThan(130);
+  });
+
+  test("table cells have the live preview: only what the cursor is on shows its source", async ({ page }) => {
+    await startWith(page, "| Name | Note |\n| --- | --- |\n| Fe | See **bold** text |\n| Cu | plain |");
+    await page.locator(".rme-table-editor td", { hasText: "Cu" }).click();
+    const live = page.locator(".rme-table-editor .rme-cell-editor");
+    await expect(live).toHaveCount(1);
+    const cell = page.locator(".rme-table-editor td", { hasText: "See" });
+    const box = (await cell.boundingBox())!;
+    await page.mouse.click(box.x + 4, box.y + box.height / 2);
+    await expect(live.locator(".cm-line")).toHaveText("See bold text");
+    await page.keyboard.press("End");
+    await page.keyboard.type(" more");
+    await expect
+      .poll(() => source(page))
+      .toBe("| Name | Note |\n| --- | --- |\n| Fe | See **bold** text more |\n| Cu | plain |");
+    // Next to the bold text, its markers.
+    await page.keyboard.press("Home");
+    for (let i = 0; i < 5; i++) {
+      await page.keyboard.press("ArrowRight");
+    }
+    await expect(live.locator(".cm-line")).toHaveText("See **bold** text more");
+    // Tab goes on to the next cell, Escape leaves the table, which shows rendered.
+    await page.keyboard.press("Tab");
+    await expect(live.locator(".cm-line")).toHaveText("Cu");
+    await page.keyboard.press("Escape");
+    await expect(live).toHaveCount(0);
+    await expect(cell.locator("strong")).toHaveText("bold");
+  });
+});
+
+test.describe("eighteenth test round", () => {
+  /** A table with live cells, its cell with "See" being edited. */
+  async function liveCell(page: Page) {
+    // The choice of the former "live" mode, which tried out what cells are now: tables as tables.
+    await page.addInitScript(() => localStorage.setItem("phizziwig-table-mode", "live"));
+    await startWith(page, "| Name | Note |\n| --- | --- |\n| Fe | See T1 and [[ /w/ | wiki ]] end |");
+    const cell = page.locator(".rme-table-editor td", { hasText: "See" });
+    const box = (await cell.boundingBox())!;
+    await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+    await expect(page.locator(".rme-cell-editor")).toHaveCount(1);
+    return page.locator(".rme-cell-editor .cm-line");
+  }
+
+  test("in a live cell, a click on a rendered reference or link puts the cursor at it", async ({ page }) => {
+    const line = await liveCell(page);
+    // Rendered right away, also references the cell did not show before.
+    const reference = line.locator(".rme-inline-ref", { hasText: "T1" });
+    await expect(reference).toBeVisible();
+    await reference.click();
+    await page.keyboard.type("Z");
+    await expect.poll(() => source(page)).toContain("| See T1Z and [[ /w/ | wiki ]] end |");
+    await page.keyboard.press("Backspace");
+    await line.locator(".rme-inline-ref", { hasText: "wiki" }).click();
+    await page.keyboard.type("Z");
+    await expect.poll(() => source(page)).toContain("| See T1 and [[ /w/ | wiki ]]Z end |");
+  });
+
+  test("in a live cell, the insert menu offers what fits in a cell", async ({ page }) => {
+    const line = await liveCell(page);
+    await page.keyboard.press("End");
+    await page.keyboard.type(" /");
+    const items = page.locator(".rme-autocomplete .jx-result, .phuix-autocomplete .jx-result");
+    await expect(items.first()).toBeVisible();
+    const labels = await items.allTextContents();
+    expect(labels.some((label) => label.includes("Image macro"))).toBe(true);
+    expect(labels.some((label) => label.includes("Table"))).toBe(false);
+    await page.keyboard.type("anch");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("here");
+    await expect.poll(() => source(page)).toContain("| See T1 and [[ /w/ | wiki ]] end {anchor #here} |");
+    await expect(line).toBeVisible();
+  });
+
+  test("image macros are found by name with their pictures, and go on a line of their own", async ({ page }) => {
+    await openNewWikiPage(page, "Macros");
+    await editor(page).click();
+    await page.keyboard.type("Hello /macro");
+    await page.keyboard.press("Enter");
+    const result = page.locator(".rme-picker .jx-result", { hasText: "rmecat" });
+    await expect(result.locator("img.rme-popup-image")).toHaveAttribute("src", /rmecat/);
+    await result.click();
+    await expect.poll(() => source(page)).toBe("Hello \nrmecat");
+  });
+
+  test("cards and literal text from the insert menu, anchors with a # icon", async ({ page }) => {
+    await openNewWikiPage(page, "Cards");
+    await editor(page).click();
+    await page.keyboard.type("/card");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("T1");
+    await expect(page.locator(".rme-picker .jx-result").first()).toContainText("Calibrate the detector");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("{T1}");
+    await page.keyboard.type(" /literal");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("**as is**");
+    await expect.poll(() => source(page)).toBe("{T1} %%%**as is**%%%");
+    await page.keyboard.press("End");
+    await page.keyboard.insertText(" {anchor #top}");
+    await page.keyboard.press("Home");
+    await expect(page.locator(".rme-anchor .fa-hashtag")).toBeVisible();
+  });
+});
+
+test.describe("nineteenth test round", () => {
+  const TABLE = "| Name | Note |\n| --- | --- |\n| Fe | some words here |";
+
+  /** The table, its cell with "some words" being edited, "words" selected. */
+  async function selectInCell(page: Page) {
+    await startWith(page, TABLE);
+    await page.locator(".rme-table-editor td", { hasText: "some" }).click();
+    await page.keyboard.press("Home");
+    for (let i = 0; i < 5; i++) {
+      await page.keyboard.press("ArrowRight");
+    }
+    await page.keyboard.press("Control+Shift+ArrowRight");
+  }
+
+  test("in a cell, the insert menu, the link keys and URLs pasted over text work like in the text", async ({
+    page,
+  }) => {
+    await selectInCell(page);
+    await page.keyboard.press("Control+k");
+    const picker = page.locator(".rme-picker");
+    await expect(picker).toContainText("Link to:");
+    await page.locator(".rme-picker input").fill("https://example.com/k");
+    await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Link to");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toContain("| some [[ https://example.com/k | words ]] here |");
+    // The link is changed with the same key, also by its bubble.
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.locator(".rme-table-editor .rme-link-bubble")).toContainText("Change");
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe(TABLE);
+
+    // A reference with the selected text as its text.
+    await page.locator(".rme-table-editor td", { hasText: "some" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Control+Shift+ArrowRight");
+    await page.keyboard.press("Control+Shift+K");
+    await expect(picker).toContainText("Reference:");
+    await page.locator(".rme-picker input").fill("T1");
+    await expect(page.locator(".rme-picker .jx-result").first()).toContainText("Calibrate the detector");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toMatch(/\| \[\[ \S*T1 \| some \]\] words here \|$/);
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe(TABLE);
+
+    // A URL pasted over selected text links it. (Firefox takes only the
+    // clipboard's text, copied before the cell is edited: copying ends that.)
+    const firefox = page.context().browser()?.browserType().name() === "firefox";
+    if (firefox) {
+      await page.locator("input[name=title]").fill("https://example.com/p");
+      await page.locator("input[name=title]").selectText();
+      await page.keyboard.press("Control+c");
+    }
+    await page.locator(".rme-table-editor td", { hasText: "some" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Control+Shift+ArrowLeft");
+    if (firefox) {
+      await page.keyboard.press("Control+v");
+    } else {
+      await page.evaluate(() => {
+        const data = new DataTransfer();
+        data.setData("text/plain", "https://example.com/p");
+        document.activeElement!.dispatchEvent(
+          new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+        );
+      });
+    }
+    await expect.poll(() => source(page)).toContain("| some words [[ https://example.com/p | here ]] |");
+
+    // The insert menu, with what fits in a cell.
+    await page.keyboard.press("End");
+    await page.keyboard.type(" /anch");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toContain("| some words [[ https://example.com/p | here ]] {anchor #x} |");
+  });
+
+  test("a table edited as text keeps its source while a search for it is open", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("phizziwig-table-mode", "text"));
+    await startWith(page, TABLE);
+    await page.locator(".rme-block-table").click();
+    await page.locator(".cm-line", { hasText: "some" }).click();
+    await page.keyboard.press("Control+k");
+    // Once the search has its results, the editor has long noticed losing the focus.
+    await page.locator(".rme-picker input").fill("https://example.com");
+    await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Link to");
+    await expect(page.locator(".cm-line", { hasText: "some" })).toBeVisible();
+    await expect(page.locator(".rme-block-table")).toHaveCount(0);
+    // The focus going elsewhere closes the search, and the table shows rendered.
+    await page.locator("input[name=title]").click();
+    await expect(page.locator(".rme-picker")).toHaveCount(0);
+    await expect(page.locator(".rme-block-table")).toHaveCount(1);
+  });
+
+  test("the image macros scroll in a short list, their pictures loading when scrolled to", async ({ page }) => {
+    const names = Array.from({ length: 60 }, (_, i) => `testmacro${String(i).padStart(2, "0")}`);
+    const loaded = new Set<string>();
+    await page.route("**/api/macro.query", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          result: Object.fromEntries(names.map((name) => [name, { uri: `/rme-test-macro/${name}.png` }])),
+          error_code: null,
+          error_info: null,
+        }),
+      }),
+    );
+    await page.route("**/rme-test-macro/*", (route) => {
+      loaded.add(route.request().url().split("/").pop()!);
+      return route.fulfill({ contentType: "image/png", body: PNG_BYTES });
+    });
+    await openNewWikiPage(page, "Macros");
+    await editor(page).click();
+    await page.keyboard.type("/macro");
+    await page.keyboard.press("Enter");
+    const list = page.locator(".rme-picker .phuix-autocomplete-list");
+    await expect(list.locator(".jx-result")).toHaveCount(60);
+    const [height, full] = await list.evaluate((el) => [el.clientHeight, el.scrollHeight]);
+    expect(height).toBeLessThan(400);
+    expect(full).toBeGreaterThan(height * 3);
+    await expect.poll(() => loaded.size).toBeGreaterThan(0);
+    expect(loaded.has("testmacro59.png")).toBe(false);
+    await list.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect.poll(() => loaded.has("testmacro59.png")).toBe(true);
+  });
+
+  test("ASCII art from the insert menu: a cow saying something, big letters", async ({ page }) => {
+    await openNewWikiPage(page, "Art");
+    await editor(page).click();
+    await page.keyboard.type("/cow");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Moo!");
+    await expect.poll(() => source(page)).toBe("cowsay{{{\nMoo!\n}}}");
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("/big");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Hi");
+    await expect.poll(() => source(page)).toBe("cowsay{{{\nMoo!\n}}}\n\nfiglet{{{Hi}}}");
+    await blur(page);
+    // Drawn by Phorge.
+    await expect(page.locator(".rme-block", { hasText: "Moo!" })).toContainText("(oo)");
+  });
+});
+
+test.describe("twentieth test round", () => {
+  test("icons, keys and navigation paths show as Phorge draws them, their source where the cursor is", async ({
+    page,
+  }) => {
+    // A reference in a path is part of it.
+    await startWith(page, "Icon {icon camera color=red} keys {key Ctrl K} path {nav Tasks > T1} end.");
+    const line = page.locator(".cm-line", { hasText: "end." });
+    await expect(line.locator(".phui-icon-view.fa-camera.red")).toBeVisible();
+    await expect(line.locator("kbd")).toHaveCount(2);
+    await expect(line.locator(".remarkup-nav-sequence")).toHaveText("Tasks → T1");
+    await expect(line).not.toContainText("{icon");
+    // The cursor in one shows its source, the others stay drawn.
+    await line.click();
+    await page.keyboard.press("Home");
+    for (let i = 0; i < 7; i++) {
+      await page.keyboard.press("ArrowRight");
+    }
+    await expect(line).toContainText("{icon camera color=red}");
+    await expect(line.locator("kbd")).toHaveCount(2);
+    await expect(line).not.toContainText("{nav");
+  });
+
+  test("icons, keys and navigation paths from the insert menu", async ({ page }) => {
+    await openNewWikiPage(page, "Icons");
+    await editor(page).click();
+    await page.keyboard.type("/icon");
+    await page.keyboard.press("Enter");
+    // Found by name, a color word colors it.
+    await page.locator(".rme-picker input").fill("camera red");
+    const first = page.locator(".rme-picker .jx-result").first();
+    await expect(first).toContainText("camera, red");
+    // In the color Phorge draws it in, not the menu's.
+    const red = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.className = "phui-icon-view phui-font-fa fa-flag red";
+      document.body.append(probe);
+      return getComputedStyle(probe).color;
+    });
+    await expect(first.locator(".fa-camera.red")).toHaveCSS("color", red);
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("{icon camera color=red}");
+    // All of them to browse, in a list that scrolls.
+    await page.keyboard.type(" /icon");
+    await page.keyboard.press("Enter");
+    const list = page.locator(".rme-picker .phuix-autocomplete-list");
+    await expect.poll(() => list.locator(".jx-result").count()).toBeGreaterThan(300);
+    expect(await list.evaluate((el) => el.clientHeight)).toBeLessThan(400);
+    await page.locator(".rme-picker input").fill("cog spin");
+    await expect(first).toContainText("cog, spinning");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("{icon camera color=red} {icon cog spin}");
+
+    await page.keyboard.type(" /keys");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Ctrl S");
+    await page.keyboard.press("End");
+    await page.keyboard.type(" /nav");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Wiki > Edit");
+    await expect
+      .poll(() => source(page))
+      .toBe("{icon camera color=red} {icon cog spin} {key Ctrl S} {nav Wiki > Edit}");
+  });
+});
+
+test.describe("twenty-first test round", () => {
+  test("the insert menu groups its items under headings", async ({ page }) => {
+    await openNewWikiPage(page, "Groups");
+    await editor(page).click();
+    await page.keyboard.type("/");
+    const groups = page.locator(".rme-autocomplete .rme-popup-group");
+    await expect(groups).toHaveText(["Headings", "Lists", "Blocks", "Links", "Text", "Images", "ASCII art"]);
+    // Each item under its heading.
+    const next = (group: string) =>
+      page
+        .locator(".rme-autocomplete .rme-popup-group", { hasText: new RegExp(`^${group}$`) })
+        .evaluate((heading) => heading.nextElementSibling?.textContent);
+    expect(await next("Lists")).toContain("Bulleted list");
+    expect(await next("ASCII art")).toContain("Cow says");
+    // Filtering keeps the headings of what is left; the keys pick items, not headings.
+    await page.keyboard.type("li");
+    await expect(groups).toHaveText(["Lists", "Blocks", "Links", "Text"]);
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator(".rme-autocomplete .jx-result.focused")).toHaveText(/Numbered list/);
   });
 });

@@ -156,7 +156,7 @@ try {
   const context = contexts[0].context;
   await send("browsingContext.navigate", { context, url: `${BASE}/phriction/edit/2/`, wait: "complete" });
 
-  await waitFor(context, "document.querySelector('.rme-block .remarkup-note')", "rendered blocks");
+  await waitFor(context, "document.querySelector('.rme-editor a.phui-tag-view')", "rendered references");
   check("renders blocks with the server (content script fetch with the session)", true);
   check(
     "applies CodeMirror's styles",
@@ -164,13 +164,13 @@ try {
   );
   check(
     "applies the editor's styles",
-    await evaluate(context, "getComputedStyle(document.querySelector('.rme-block')).whiteSpace === 'normal'"),
+    await evaluate(context, "getComputedStyle(document.querySelector('.cm-line.rme-src-note')).paddingLeft === '12px'"),
   );
 
   // Click the first note and type at its start.
   const box = await evaluate(
     context,
-    "(() => { const r = document.querySelector('.rme-block .remarkup-note').getBoundingClientRect(); return `${r.left + 5},${r.top + r.height / 2}`; })()",
+    "(() => { const r = document.querySelector('.cm-line.rme-src-note').getBoundingClientRect(); return `${r.left + 5},${r.top + r.height / 2}`; })()",
   );
   const [x, y] = box.split(",").map((n) => Math.round(Number(n)));
   await send("input.performActions", {
@@ -187,7 +187,7 @@ try {
       },
     ],
   });
-  await waitFor(context, "document.querySelector('.cm-line.rme-src-note')", "the note's source");
+  await waitFor(context, "document.querySelector('.rme-editor .cm-focused')", "the focus in the editor");
   // "\uE011" is the Home key; "?" opens the shortcut help of the page.
   await typeText(context, "\uE011Hi? ");
   await waitFor(

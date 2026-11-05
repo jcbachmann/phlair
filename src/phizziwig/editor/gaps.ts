@@ -1,10 +1,12 @@
-// The space between blocks, as on the page: Phorge's CSS gives each
-// element its margins (28px above a heading, 24px around a rule, ...), and the
-// margins of neighbors collapse. Rendered blocks have no margins in the editor
-// (CodeMirror measures lines without them), so the blank line between two
-// blocks takes their place: as high as the gap between the two elements when
-// the page lays them out. That gap is measured with the page's CSS, per pair of
-// elements, so it also holds for Phorge and other styles.
+// The space between blocks on consecutive lines (e.g. a paragraph right
+// above a list), as on the page: Phorge's CSS gives each element its margins
+// (28px above a heading, 24px around a rule, ...), and the margins of
+// neighbors collapse. Rendered blocks have no margins in the editor
+// (CodeMirror measures lines without them), so a spacer takes their place: as
+// high as the gap between the two elements when the page lays them out. That
+// gap is measured with the page's CSS, per pair of elements, so it also holds
+// for Phorge and other styles. A blank line between blocks is a line like any
+// other, as high as a line of text.
 
 import { type EditorState, StateEffect, StateField } from "@codemirror/state";
 import { type EditorView, ViewPlugin } from "@codemirror/view";
@@ -155,7 +157,7 @@ function measure(view: EditorView, keys: string[]): Map<string, number> {
   const gaps = new Map<string, number>();
   pairs.forEach((pair, i) => {
     const [, a, b] = Array.from(pair.children);
-    // At least a sliver, so the blank line can still be clicked.
+    // At least a sliver, so the spacer can still be clicked.
     gaps.set(keys[i], Math.max(2, b.getBoundingClientRect().top - a.getBoundingClientRect().bottom));
   });
   container.remove();

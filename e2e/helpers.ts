@@ -43,6 +43,11 @@ export async function openWithEditor(page: Page, path: string): Promise<void> {
   await expect(editor(page)).toBeVisible();
 }
 
+/** Waits until the editor has the server's rendering of all it shows (references, images, rendered blocks). */
+export async function settled(page: Page): Promise<void> {
+  await expect(page.locator(".rme-editor").first()).toHaveAttribute("aria-busy", "false");
+}
+
 export function editor(page: Page): Locator {
   return page.locator(".rme-editor .cm-content").first();
 }

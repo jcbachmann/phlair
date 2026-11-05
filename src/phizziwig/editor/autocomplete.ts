@@ -1,7 +1,8 @@
 // Phorge's autocomplete for users, projects, wiki pages, emoji and short
 // URLs, ported from PHUIXAutocomplete. That one is bound to a textarea, so
 // this reimplements it for the editor: the same triggers and rules, and the
-// same menu markup, so Phorge's CSS makes it look the same.
+// same menu markup, so Phorge's CSS makes it look the same. It completes in
+// the text and in table cells, through a Host for each.
 //
 // Derived from Phabricator (Copyright Phacility, Inc., Apache License 2.0;
 // see licenses/Phabricator-LICENSE.txt and Phabricator-NOTICE.txt), changed.
@@ -10,6 +11,17 @@ import { Prec } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { typeahead, type TypeaheadResult } from "../phorge";
 import { Popup } from "./popup";
+
+/** Where the completed text is: the editor's text, or a table cell's. Positions are offsets in it. */
+export interface Host {
+  slice(from: number, to: number): string;
+  selection(): { from: number; to: number; head: number };
+  /** The start of the line of a position. */
+  lineStart(pos: number): number;
+  replace(from: number, to: number, insert: string): void;
+  /** Where a position is on the screen, for the menu. */
+  place(popup: Popup, at: number): void;
+}
 
 interface Spec {
   datasource: string;
@@ -82,7 +94,12 @@ function trimSuffixes(text: string): string {
   return text;
 }
 
-class Autocomplete {
+/** Characters that start a completion. */
+export function isTrigger(char: string): boolean {
+  return char.length === 1 && char in SPECS;
+}
+
+export class Autocomplete {
   private trigger: string | null = null;
   /** Position after the trigger character. */
   private head = 0;
@@ -99,7 +116,7 @@ class Autocomplete {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private popup: Popup | null = null;
 
-  constructor(private readonly view: EditorView) {}
+  constructor(private readonly host: Host) {}
 
   get active(): boolean {
     return this.trigger !== null;
@@ -109,41 +126,31 @@ class Autocomplete {
     return this.active && this.query.length > 0;
   }
 
-  update(update: ViewUpdate): void {
-    if (this.active && (update.docChanged || update.selectionSet)) {
-      if (update.docChanged) {
-        this.head = update.changes.mapPos(this.head, -1);
-        this.tail = update.changes.mapPos(this.tail, 1);
-      }
+  /** The text changed: moves the completion's range like the positions move, and looks again. */
+  changed(mapPos: (pos: number, assoc: -1 | 1) => number): void {
+    if (this.active) {
+      this.head = mapPos(this.head, -1);
+      this.tail = mapPos(this.tail, 1);
       this.refresh();
-    }
-    // A typed trigger character starts a completion.
-    for (const tr of update.transactions) {
-      if (!tr.isUserEvent("input.type")) {
-        continue;
-      }
-      tr.changes.iterChanges((_fromA, _toA, _fromB, toB, inserted) => {
-        const char = inserted.toString();
-        if (char.length === 1 && SPECS[char]) {
-          this.activate(char, toB);
-        }
-      });
-    }
-    if (this.visible && (update.geometryChanged || update.viewportChanged)) {
-      this.position();
     }
   }
 
-  private activate(char: string, head: number): void {
-    const doc = this.view.state.doc;
-    const prior = head >= 2 ? doc.sliceString(head - 2, head - 1) : "";
+  /** The cursor moved: looks again. */
+  moved(): void {
+    if (this.active) {
+      this.refresh();
+    }
+  }
+
+  /** A trigger character was typed; head is the position after it. */
+  activate(char: string, head: number): void {
+    const prior = head >= 2 ? this.host.slice(head - 2, head - 1) : "";
     // A repeated trigger like "[[" or "((" continues the active completion.
     if (prior === char || !PRIOR.has(prior)) {
       return;
     }
     // On a line indented by whitespace only, the user is probably typing code.
-    const line = doc.lineAt(head);
-    if (/^\s+$/.test(doc.sliceString(line.from, head - 1))) {
+    if (/^\s+$/.test(this.host.slice(this.host.lineStart(head), head - 1))) {
       return;
     }
     this.trigger = char;
@@ -164,16 +171,15 @@ class Autocomplete {
 
   private refresh(): void {
     const spec = SPECS[this.trigger!];
-    const { state } = this.view;
-    const range = state.selection.main;
-    if (state.doc.sliceString(this.head - 1, this.head) !== this.trigger) {
+    const range = this.host.selection();
+    if (this.host.slice(this.head - 1, this.head) !== this.trigger) {
       return this.deactivate();
     }
     // The cursor left the typed text.
     if (range.from < this.head || range.to > this.tail) {
       return this.deactivate();
     }
-    const text = state.doc.sliceString(this.head, this.tail);
+    const text = this.host.slice(this.head, this.tail);
     this.text = text;
     // "# " is a numbered list, not a project.
     if (text.startsWith(" ")) {
@@ -284,7 +290,7 @@ class Autocomplete {
 
   /** Enter or Tab: inserts the focused result. Returns false to let the key through. */
   accept(): boolean {
-    if (this.view.state.selection.main.head === this.head) {
+    if (this.host.selection().head === this.head) {
       // Nothing typed after the trigger yet, e.g. a line ending in "#".
       this.deactivate();
       return false;
@@ -306,12 +312,9 @@ class Autocomplete {
     const suffix = SUFFIXES.find((s) => this.text.endsWith(s)) ?? " ";
     const insert = result.autocomplete + suffix;
     const from = this.head - 1;
-    this.view.dispatch({
-      changes: { from, to: this.tail, insert },
-      selection: { anchor: from + insert.length },
-      userEvent: "input.complete",
-    });
+    const tail = this.tail;
     this.deactivate();
+    this.host.replace(from, tail, insert);
   }
 
   private render(): void {
@@ -337,8 +340,10 @@ class Autocomplete {
     this.position();
   }
 
-  private position(): void {
-    this.popup?.placeAt(this.view, this.head - 1);
+  position(): void {
+    if (this.popup) {
+      this.host.place(this.popup, this.head - 1);
+    }
   }
 
   destroy(): void {
@@ -346,24 +351,97 @@ class Autocomplete {
   }
 }
 
-const autocompletePlugin = ViewPlugin.fromClass(Autocomplete);
+/** The completion of the editor's text. */
+class TextAutocomplete {
+  readonly menu: Autocomplete;
+
+  constructor(view: EditorView) {
+    this.menu = new Autocomplete({
+      slice: (from, to) => view.state.doc.sliceString(from, to),
+      selection: () => view.state.selection.main,
+      lineStart: (pos) => view.state.doc.lineAt(pos).from,
+      replace: (from, to, insert) => {
+        // A completed link replaces the "]]" a table cell closed it with (tableEditor.ts).
+        if (insert.startsWith("[[") && view.state.sliceDoc(to, to + 2) === "]]") {
+          to += 2;
+        }
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length },
+          userEvent: "input.complete",
+        });
+      },
+      place: (popup, at) => popup.placeAt(view, at),
+    });
+  }
+
+  update(update: ViewUpdate): void {
+    if (update.docChanged) {
+      // The "]]" that closes a link typed in a table cell comes after what is typed.
+      const closing = update.transactions.some((tr) => tr.isUserEvent("input.close"));
+      this.menu.changed((pos, assoc) => update.changes.mapPos(pos, closing ? -1 : assoc));
+    } else if (update.selectionSet) {
+      this.menu.moved();
+    }
+    // A typed trigger character starts a completion.
+    for (const tr of update.transactions) {
+      if (!tr.isUserEvent("input.type")) {
+        continue;
+      }
+      tr.changes.iterChanges((_fromA, _toA, _fromB, toB, inserted) => {
+        if (isTrigger(inserted.toString())) {
+          this.menu.activate(inserted.toString(), toB);
+        }
+      });
+    }
+    if (this.menu.visible && (update.geometryChanged || update.viewportChanged)) {
+      this.menu.position();
+    }
+  }
+
+  destroy(): void {
+    this.menu.destroy();
+  }
+}
+
+const autocompletePlugin = ViewPlugin.fromClass(TextAutocomplete);
 
 function withMenu(run: (menu: Autocomplete) => boolean) {
   return (view: EditorView): boolean => {
-    const menu = view.plugin(autocompletePlugin);
+    const menu = view.plugin(autocompletePlugin)?.menu;
     return menu?.active ? run(menu) : false;
   };
+}
+
+/**
+ * The keys of a completion: arrow keys, Enter, Tab and Escape. Returns
+ * whether the key was used, e.g. for a table cell's own key handling.
+ */
+export function completionKey(menu: Autocomplete, key: string): boolean {
+  switch (key) {
+    case "ArrowDown":
+      return menu.visible && (menu.moveFocus(1), true);
+    case "ArrowUp":
+      return menu.visible && (menu.moveFocus(-1), true);
+    case "Enter":
+    case "Tab":
+      return menu.accept();
+    case "Escape":
+      menu.deactivate();
+      return true;
+    default:
+      return false;
+  }
 }
 
 export const phabricatorAutocomplete = [
   autocompletePlugin,
   Prec.highest(
     keymap.of([
-      { key: "ArrowDown", run: withMenu((m) => m.visible && (m.moveFocus(1), true)) },
-      { key: "ArrowUp", run: withMenu((m) => m.visible && (m.moveFocus(-1), true)) },
-      { key: "Enter", run: withMenu((m) => m.accept()) },
-      { key: "Tab", run: withMenu((m) => m.accept()) },
-      { key: "Escape", run: withMenu((m) => (m.deactivate(), true)) },
+      ...["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].map((key) => ({
+        key,
+        run: withMenu((m) => completionKey(m, key)),
+      })),
     ]),
   ),
 ];

@@ -1,15 +1,17 @@
 // Tables shown and edited as tables, with Phorge's table markup and CSS.
 //
-// A table that the text cursor is not in is a TableWidget. Its cells are
-// editable: the focused cell shows its remarkup, the others their rendered
-// content. Typing in a cell changes only that cell's text in the source;
-// structural changes (rows, columns, header) rewrite the table aligned.
+// A table that the text cursor is not in is a TableWidget. Its cells show
+// their rendered content; the cell being edited has an editor of its own
+// (editCell()) with the cell's remarkup, like a line of the text. Typing in a
+// cell changes only that cell's text in the source; structural changes
+// (rows, columns, header) rewrite the table aligned.
 
 import { isolateHistory, redo, undo } from "@codemirror/commands";
-import { type EditorView, WidgetType } from "@codemirror/view";
+import { EditorSelection, EditorState, Prec } from "@codemirror/state";
+import { standardKeymap } from "@codemirror/commands";
+import { EditorView, keymap, WidgetType } from "@codemirror/view";
 import { minimalChange } from "../diff";
 import { submitForm } from "../phorge";
-import { matchesKey } from "../keys";
 import { INLINE_FORMATS } from "../syntax";
 import {
   type CellPos,
@@ -27,24 +29,211 @@ import {
   type Table,
 } from "../table";
 import { hostTextarea } from "./host";
-import { addLink, changeLink, findLinks, linkBubble, unlinked } from "./links";
-import { openLinkOnModClick } from "./livePreview";
+import { hasText, uploadFiles } from "./upload";
+import { cellSupport, openLinkOnModClick, type TableMode, tableModeField } from "./livePreview";
 import { parseHtml, setHtml } from "../html";
 
 interface TableDom extends HTMLElement {
   /** The source text of the table, as of the last update. */
   rmeText?: string;
   rmeHtml?: string;
+  rmeMode?: TableMode;
+}
+
+/**
+ * The editors of the cells being edited, by cell: a CodeMirror editor of the
+ * cell's source, with the live preview of the text (only what the cursor is
+ * on shows its source). Its text is written into the table like typing in
+ * the text (onInput()).
+ */
+const cellEditors = new WeakMap<HTMLElement, EditorView>();
+
+/** The cell being edited, if any. */
+let editedCell: { dom: TableDom; cell: HTMLElement } | null = null;
+
+/**
+ * Whether an event happened in a cell's editor. By the path of the event when
+ * it happened: the editor's handlers may have removed its target meanwhile
+ * (e.g. a rendered link, which then shows its source).
+ */
+function inCellEditor(event: Event): boolean {
+  return event.composedPath().some((node) => node instanceof Element && node.classList.contains("rme-cell-editor"));
+}
+
+/** While the text of a cell's editor is set from the source: not written back. */
+let settingCell = false;
+
+/** A cell's text: of its editor, or of the cell. */
+function cellText(cell: HTMLElement): string {
+  return cellEditors.get(cell)?.state.doc.toString() ?? cell.textContent ?? "";
+}
+
+/** The selection in a cell being edited, as offsets in its text. */
+function cellSelection(cell: HTMLElement): [number, number] | null {
+  const editor = cellEditors.get(cell);
+  if (!editor) {
+    return null;
+  }
+  const { from, to } = editor.state.selection.main;
+  return [from, to];
+}
+
+/** Replaces text of a cell being edited like typing. */
+function replaceInCell(cell: HTMLElement, from: number, to: number, insert: string): void {
+  const editor = cellEditors.get(cell);
+  editor?.focus();
+  editor?.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + insert.length },
+    userEvent: "input",
+  });
+}
+
+/**
+ * "[[" typed in a cell is closed right away: a "|" outside of a link would
+ * split the cell, so the one of "[[ target | name ]]" can only be typed in a
+ * closed link. Typed as two changes, so the completion of pages ("[[")
+ * starts like in the text and does not take the "]]" in.
+ */
+const closeLinks = EditorView.inputHandler.of((view, from, to, text) => {
+  const { state } = view;
+  if (text !== "[" || state.sliceDoc(from - 1, from) !== "[" || state.sliceDoc(to, to + 2) === "]]") {
+    return false;
+  }
+  view.dispatch({ changes: { from, to, insert: "[" }, selection: { anchor: from + 1 }, userEvent: "input.type" });
+  view.dispatch({
+    changes: { from: from + 1, insert: "]]" },
+    selection: EditorSelection.cursor(from + 1),
+    userEvent: "input.close",
+  });
+  return true;
+});
+
+/** Starts the editor of a cell, and puts its cursor at a place or where the mouse is. */
+function editCell(
+  view: EditorView,
+  dom: TableDom,
+  cell: HTMLElement,
+  where: "start" | "end" | "all" | { x: number; y: number },
+): void {
+  // One cell at a time: the one edited before ends now, not when it notices losing the focus.
+  if (editedCell && editedCell.cell !== cell) {
+    stopEditing(editedCell.dom, editedCell.cell);
+  }
+  let editor = cellEditors.get(cell);
+  if (!editor) {
+    const { row, col } = positionOf(cell);
+    const source = parseTable(dom.rmeText ?? "").rows[row]?.cells[col] ?? "";
+    cell.dataset.editing = "1";
+    delete cell.dataset.written;
+    cell.replaceChildren();
+    const support = view.state.facet(cellSupport);
+    editor = new EditorView({
+      parent: cell,
+      state: EditorState.create({
+        doc: source,
+        extensions: [
+          EditorView.lineWrapping,
+          EditorView.editorAttributes.of({ class: "rme-cell-editor" }),
+          EditorView.contentAttributes.of({ class: "phabricator-remarkup", "aria-label": "Table cell" }),
+          support ? support.extensions(view) : [],
+          closeLinks,
+          // Keys of the table (Tab, Enter, arrows at the ends, Escape, undo, …) go to it (onKeyDown()).
+          Prec.low(
+            keymap.of(
+              standardKeymap.filter(
+                (binding) =>
+                  !["ArrowUp", "ArrowDown", "Enter", "Mod-Enter", "PageUp", "PageDown"].includes(binding.key!),
+              ),
+            ),
+          ),
+          // One line, and "|" only in "[[ link | name ]]": else it would split the cell.
+          EditorState.transactionFilter.of((tr) => {
+            if (!tr.docChanged || settingCell) {
+              return tr;
+            }
+            const text = tr.newDoc.toString();
+            if (!/[\r\n]/.test(text) && !/\|/.test(text.replace(/\[\[[^\]]*\]\]/g, ""))) {
+              return tr;
+            }
+            return [];
+          }),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged && !settingCell) {
+              onInput(view, dom, cell, update.state.doc.toString());
+            }
+          }),
+          EditorView.domEventHandlers({
+            paste(event, editor) {
+              const data = event.clipboardData;
+              if (data?.files.length && !hasText(data)) {
+                event.preventDefault();
+                void uploadToCell(view, cell, Array.from(data.files));
+                return true;
+              }
+              // Plain text on one line, "|" not splitting the cell; a URL over selected text links it.
+              event.preventDefault();
+              const text = (data?.getData("text/plain") ?? "").replace(/[\r\n]+/g, " ").replace(/\|/g, "¦");
+              if (!support?.linkSelection(editor, text.trim())) {
+                editor.dispatch(editor.state.replaceSelection(text), { userEvent: "input.paste" });
+              }
+              return true;
+            },
+            blur() {
+              // Unless the focus stays in the cell, or goes to a search for it
+              // (link, reference, image macro) or one of Phorge's dialogs (upload, meme).
+              setTimeout(() => {
+                const focus = document.activeElement;
+                if (!cell.contains(focus) && !focus?.closest(".rme-picker, .jx-client-dialog")) {
+                  stopEditing(dom, cell);
+                }
+              });
+              return false;
+            },
+          }),
+        ],
+      }),
+    });
+    cellEditors.set(cell, editor);
+    editedCell = { dom, cell };
+  }
+  editor.focus();
+  const length = editor.state.doc.length;
+  const anchor =
+    typeof where === "object"
+      ? (editor.posAtCoords(where) ?? length)
+      : where === "start"
+        ? 0
+        : where === "all"
+          ? 0
+          : length;
+  editor.dispatch({ selection: { anchor, head: where === "all" ? length : anchor } });
+}
+
+/** Updates the live preview of the cell being edited, e.g. when renderings arrive. */
+export function refreshCellEditor(): void {
+  cellEditors.get(editedCell?.cell as HTMLElement)?.dispatch({});
+}
+
+/** Ends the editor of a cell: it shows rendered again. */
+function stopEditing(dom: TableDom, cell: HTMLElement): void {
+  const editor = cellEditors.get(cell);
+  if (!editor) {
+    return;
+  }
+  if (editedCell?.cell === cell) {
+    editedCell = null;
+  }
+  cellEditors.delete(cell);
+  editor.destroy();
+  delete cell.dataset.editing;
+  delete cell.dataset.source;
+  cell.textContent = "";
+  sync(dom, dom.rmeText ?? "", dom.rmeHtml);
 }
 
 /** The cell the user is typing in; updates must not overwrite its text. */
 let typingCell: HTMLElement | null = null;
-
-const editable = (() => {
-  const probe = document.createElement("td");
-  probe.contentEditable = "plaintext-only";
-  return probe.contentEditable === "plaintext-only" ? "plaintext-only" : "true";
-})();
 
 /** The rendered HTML of each cell, by row and column, or null. */
 function renderedCells(html: string | undefined): string[][] | null {
@@ -81,8 +270,8 @@ function sync(dom: TableDom, text: string, html: string | undefined): void {
         for (let col = 0; col < columns; col++) {
           const cell = document.createElement(isHeader(row) ? "th" : "td");
           cell.dataset.col = String(col);
-          cell.contentEditable = editable;
-          cell.spellcheck = true;
+          // Edited in an editor of their own (editCell()).
+          cell.contentEditable = "false";
           // Tab moves between cells; the page's tab order skips them.
           cell.tabIndex = -1;
           tr.append(cell);
@@ -102,14 +291,25 @@ function sync(dom: TableDom, text: string, html: string | undefined): void {
       if (cell === typingCell) {
         continue;
       }
-      if (cell.dataset.editing) {
-        // Only text changed elsewhere (e.g. undo) replaces what is typed;
-        // spaces being typed at the end are not in the source yet.
-        if ((cell.textContent ?? "").trim() !== source) {
-          cell.textContent = source;
-          // What the cell wrote is gone, so is the length it wrote.
-          delete cell.dataset.written;
-          placeCaret(cell, "end");
+      const editor = cellEditors.get(cell);
+      if (editor) {
+        // Only text changed elsewhere (e.g. undo) replaces what is typed (spaces
+        // being typed at the end are not in the source yet); the live preview
+        // updates (renderings).
+        settingCell = true;
+        try {
+          const text = editor.state.doc.toString();
+          if (text.trim() !== source) {
+            // What the cell wrote is gone, so is the length it wrote.
+            delete cell.dataset.written;
+          }
+          editor.dispatch(
+            text.trim() === source
+              ? {}
+              : { changes: { from: 0, to: text.length, insert: source }, selection: { anchor: source.length } },
+          );
+        } finally {
+          settingCell = false;
         }
         continue;
       }
@@ -132,31 +332,13 @@ function positionOf(cell: HTMLElement): { row: number; col: number } {
   return { row: Number((cell.parentElement as HTMLElement).dataset.row), col: Number(cell.dataset.col) };
 }
 
-/** Offset of the caret in a cell's text, or null if the selection is not a caret in it. */
-function caretOffset(cell: HTMLElement): number | null {
-  const selection = window.getSelection();
-  if (!selection?.rangeCount || !selection.isCollapsed) {
-    return null;
-  }
-  const range = selection.getRangeAt(0);
-  if (!cell.contains(range.startContainer)) {
-    return null;
-  }
-  const before = document.createRange();
-  before.selectNodeContents(cell);
-  before.setEnd(range.startContainer, range.startOffset);
-  return before.toString().length;
-}
+/** The keys a cell's editor leaves to the table: see onKeyDown(). */
+const TABLE_KEYS = /^(Tab|Enter|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|z|Z|y|Y)$/;
 
-function placeCaret(cell: HTMLElement, where: "start" | "end" | "all"): void {
-  const range = document.createRange();
-  range.selectNodeContents(cell);
-  if (where !== "all") {
-    range.collapse(where === "start");
-  }
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
+/** Offset of the caret in a cell's text, or null if the selection is not a caret in it. */
+function cellCaret(cell: HTMLElement): number | null {
+  const range = cellEditors.get(cell)?.state.selection.main;
+  return range?.empty ? range.head : null;
 }
 
 /** The table widgets of the editor whose table starts at a position. */
@@ -179,9 +361,8 @@ export function focusCell(
   const dom = tableDomAt(view, from);
   const tr = dom?.querySelector<HTMLElement>(`tr[data-row="${row}"]`);
   const cell = tr?.querySelector<HTMLElement>(`[data-col="${col}"]`) ?? tr?.lastElementChild;
-  if (cell instanceof HTMLElement) {
-    cell.focus();
-    placeCaret(cell, where);
+  if (dom && cell instanceof HTMLElement) {
+    editCell(view, dom, cell, where);
   }
 }
 
@@ -250,13 +431,9 @@ function cellLocation(view: EditorView, dom: TableDom, cell: HTMLElement) {
 }
 
 /** Writes the text of a cell into the source, changing only that cell. */
-function onInput(view: EditorView, dom: TableDom, cell: HTMLElement): void {
-  let value = cell.textContent ?? "";
-  if (/[\r\n]/.test(value)) {
-    value = value.replace(/[\r\n]+/g, " ");
-    cell.textContent = value;
-    placeCaret(cell, "end");
-  }
+function onInput(view: EditorView, dom: TableDom, cell: HTMLElement, typed: string): void {
+  // Firefox may type a space as a no-break space; the source gets a space.
+  const value = typed.replace(/\u00a0/g, " ");
   const text = dom.rmeText ?? "";
   const { row, col, tableFrom: from, lineFrom, line, range } = cellLocation(view, dom, cell);
   typingCell = cell;
@@ -296,17 +473,7 @@ function onInput(view: EditorView, dom: TableDom, cell: HTMLElement): void {
   }
 }
 
-/** A "|" outside of "[[ link | name ]]" would split the cell, so it is not typed. */
-/** Whether the caret is inside "[[ ... ]]": only there a "|" does not split the cell (see splitRow()). */
-function insideLink(cell: HTMLElement): boolean {
-  const text = cell.textContent ?? "";
-  const offset = caretOffset(cell) ?? 0;
-  const before = text.slice(0, offset);
-  const after = text.slice(offset);
-  const close = after.indexOf("]]");
-  return before.lastIndexOf("[[") > before.lastIndexOf("]]") && close >= 0 && !after.slice(0, close).includes("[[");
-}
-
+/** The keys of the table in a cell (TABLE_KEYS): moving between cells, rows, undo, … */
 function onKeyDown(view: EditorView, dom: TableDom, cell: HTMLElement, event: KeyboardEvent): void {
   const table = parseTable(dom.rmeText ?? "");
   const { row, col } = positionOf(cell);
@@ -354,18 +521,13 @@ function onKeyDown(view: EditorView, dom: TableDom, cell: HTMLElement, event: Ke
     } else {
       focusCell(view, view.posAtDOM(dom), target, col, "end");
     }
-  } else if (event.key === "ArrowLeft" && !mod && !event.shiftKey && caretOffset(cell) === 0) {
+  } else if (event.key === "ArrowLeft" && !mod && !event.shiftKey && cellCaret(cell) === 0) {
     if (col > 0 || shown > 0) {
       handled();
       const target = col > 0 ? { row, col: col - 1 } : { row: rows[shown - 1], col: columnCount(table) - 1 };
       focusCell(view, view.posAtDOM(dom), target.row, target.col, "end");
     }
-  } else if (
-    event.key === "ArrowRight" &&
-    !mod &&
-    !event.shiftKey &&
-    caretOffset(cell) === (cell.textContent ?? "").length
-  ) {
+  } else if (event.key === "ArrowRight" && !mod && !event.shiftKey && cellCaret(cell) === cellText(cell).length) {
     const last = col === columnCount(table) - 1;
     if (!last || shown < rows.length - 1) {
       handled();
@@ -379,95 +541,7 @@ function onKeyDown(view: EditorView, dom: TableDom, cell: HTMLElement, event: Ke
     // The editor's undo history, not the cell's.
     handled();
     (event.key.toLowerCase() === "y" || event.shiftKey ? redo : undo)(view);
-  } else if (matchesKey(event, "Mod-a")) {
-    // The text of the cell, not the whole page.
-    handled();
-    placeCaret(cell, "all");
-  } else if (INLINE_FORMATS.some((f) => matchesKey(event, f.key)) || matchesKey(event, "Mod-k")) {
-    // The formatting shortcuts write remarkup, like the toolbar buttons.
-    handled();
-    const format = INLINE_FORMATS.find((f) => matchesKey(event, f.key));
-    formatFocusedCell(view, format ? format.icon : "fa-link");
-  } else if (mod && /^[biu]$/i.test(event.key)) {
-    // No rich text in cells; their text is remarkup.
-    handled();
-  } else if (event.key === "|" && !insideLink(cell)) {
-    handled();
-  } else if (event.key === "[" && !mod && (cell.textContent ?? "").charAt((caretOffset(cell) ?? 0) - 1) === "[") {
-    // "[[" opens a link: closed right away, so its "|" can be typed.
-    handled();
-    document.execCommand("insertText", false, "[]]");
-    const end = caretOffset(cell) ?? 0;
-    selectText(cell, end - 2, end - 2);
   }
-}
-
-/** The selection in a cell, as offsets in its text. */
-function selectionIn(cell: HTMLElement): [number, number] | null {
-  const selection = window.getSelection();
-  if (!selection?.rangeCount || !cell.contains(selection.getRangeAt(0).startContainer)) {
-    return null;
-  }
-  const range = selection.getRangeAt(0);
-  const offset = (node: Node, at: number) => {
-    const before = document.createRange();
-    before.selectNodeContents(cell);
-    before.setEnd(node, at);
-    return before.toString().length;
-  };
-  return [offset(range.startContainer, range.startOffset), offset(range.endContainer, range.endOffset)];
-}
-
-/** The link button in a cell: changes the link the selection is in, or links the selection, like in the text. */
-function linkInCell(view: EditorView, cell: HTMLElement): void {
-  const [from, to] = selectionIn(cell) ?? [0, 0];
-  const text = cell.textContent ?? "";
-  const replace = (start: number, end: number) => (insert: string) => {
-    cell.focus();
-    selectText(cell, start, end);
-    document.execCommand("insertText", false, insert);
-  };
-  const link = findLinks(text).find((l) => from >= l.from && to <= l.to);
-  if (link) {
-    changeLink(view, link, cell, replace(link.from, link.to));
-  } else {
-    addLink(view, text.slice(from, to), cell, replace(from, to));
-  }
-}
-
-/** The bubble of the link the caret is in, in a cell: like the one in the text (links.ts). */
-let cellBubble: HTMLElement | null = null;
-
-function hideCellBubble(): void {
-  cellBubble?.remove();
-  cellBubble = null;
-}
-
-function showCellBubble(view: EditorView, cell: HTMLElement): void {
-  hideCellBubble();
-  const offset = caretOffset(cell);
-  const link = offset === null ? null : findLinks(cell.textContent ?? "").find((l) => offset > l.from && offset < l.to);
-  if (!link) {
-    return;
-  }
-  // Typed into the cell, so the source changes like when typing.
-  const replace = (text: string) => {
-    cell.focus();
-    selectText(cell, link.from, link.to);
-    document.execCommand("insertText", false, text);
-  };
-  const bubble = linkBubble(
-    link,
-    () => changeLink(view, link, cell, replace),
-    () => replace(unlinked(link)),
-  );
-  bubble.classList.add("cm-tooltip", "rme-cell-bubble");
-  const box = cell.getBoundingClientRect();
-  const base = view.dom.getBoundingClientRect();
-  bubble.style.left = `${box.left - base.left}px`;
-  bubble.style.top = `${box.bottom - base.top + 2}px`;
-  view.dom.append(bubble);
-  cellBubble = bubble;
 }
 
 /**
@@ -554,16 +628,26 @@ export class TableWidget extends WidgetType {
   constructor(
     readonly text: string,
     readonly html: string | undefined,
+    readonly mode: TableMode = "table",
   ) {
     super();
   }
 
   override eq(other: TableWidget): boolean {
-    return other.text === this.text && other.html === this.html;
+    return other.text === this.text && other.html === this.html && other.mode === this.mode;
+  }
+
+  override updateDOM(dom: HTMLElement): boolean {
+    if ((dom as TableDom).rmeMode !== this.mode) {
+      return false;
+    }
+    sync(dom as TableDom, this.text, this.html);
+    return true;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const dom = document.createElement("div") as TableDom;
+    dom.rmeMode = this.mode;
     dom.className = "rme-block rme-block-table rme-table-editor phabricator-remarkup";
     const wrap = document.createElement("div");
     wrap.className = "remarkup-table-wrap";
@@ -573,69 +657,60 @@ export class TableWidget extends WidgetType {
     wrap.append(table);
     dom.append(wrap);
 
-    const cellOf = (event: Event) => (event.target as Element).closest<HTMLElement>("th, td");
+    // By the path of the event when it happened (see inCellEditor()).
+    const cellOf = (event: Event) =>
+      (event.composedPath().find((node) => node instanceof HTMLElement && /^T[DH]$/.test(node.tagName)) as
+        HTMLElement | undefined) ?? null;
     dom.addEventListener("focusin", (event) => {
       const cell = cellOf(event);
-      if (cell) {
-        cell.dataset.editing = "1";
-        delete cell.dataset.written;
-        const { row, col } = positionOf(cell);
-        const source = parseTable(dom.rmeText ?? "").rows[row]?.cells[col] ?? "";
-        if (cell.textContent !== source || cell.children.length) {
-          cell.textContent = source;
-          placeCaret(cell, "end");
-        }
+      // The cell itself, e.g. by the keyboard: its editor.
+      if (cell && !inCellEditor(event)) {
+        editCell(view, dom, cell, "end");
       }
     });
-    dom.addEventListener("focusout", (event) => {
-      const cell = cellOf(event);
-      if (cell) {
-        hideCellBubble();
-        delete cell.dataset.editing;
-        sync(dom, dom.rmeText ?? "", dom.rmeHtml);
-      }
-    });
-    dom.addEventListener("input", (event) => {
-      const cell = cellOf(event);
-      if (cell) {
-        onInput(view, dom, cell);
-        showCellBubble(view, cell);
-      }
-    });
-    // The caret moved: in a link, its bubble shows.
-    for (const type of ["keyup", "mouseup"]) {
-      dom.addEventListener(type, (event) => {
-        const cell = cellOf(event);
-        if (cell) {
-          setTimeout(() => document.activeElement === cell && showCellBubble(view, cell));
-        }
-      });
-    }
     dom.addEventListener("keydown", (event) => {
       const cell = cellOf(event);
-      if (cell) {
+      // The keys of the table that the cell's editor leaves.
+      if (cell && inCellEditor(event) && !event.defaultPrevented && TABLE_KEYS.test(event.key)) {
         onKeyDown(view, dom, cell, event);
       }
     });
-    dom.addEventListener("paste", (event) => {
-      // Plain text on one line.
-      event.preventDefault();
-      const text = (event.clipboardData?.getData("text/plain") ?? "").replace(/[\r\n]+/g, " ");
-      document.execCommand("insertText", false, text);
+    // Files dropped on the table go in the cell they are dropped on, or the nearest.
+    dom.addEventListener("dragover", (event) => {
+      if (event.dataTransfer?.types.includes("Files")) {
+        event.preventDefault();
+      }
     });
-    dom.addEventListener("mousedown", (event) => {
-      // A click beside the table edits the nearest cell of the row at that height.
-      if (event.button !== 0 || cellOf(event) || (event.target as Element).closest(".rme-table-insert")) {
+    dom.addEventListener("drop", (event) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (!files.length) {
         return;
       }
       event.preventDefault();
-      const rows = Array.from(dom.querySelectorAll<HTMLElement>("tr"));
-      const row = rows.find((tr) => event.clientY < tr.getBoundingClientRect().bottom) ?? rows[rows.length - 1];
-      const cells = Array.from(row?.children ?? []) as HTMLElement[];
-      const target = cells.find((td) => event.clientX < td.getBoundingClientRect().right) ?? cells[cells.length - 1];
+      const cell = cellOf(event) ?? nearestCell(dom, event);
+      if (cell) {
+        focusCell(view, view.posAtDOM(dom), positionOf(cell).row, positionOf(cell).col, "end");
+        void uploadToCell(view, cell, files);
+      }
+    });
+    dom.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || (event.target as Element).closest(".rme-table-insert") || inCellEditor(event)) {
+        return;
+      }
+      const clicked = cellOf(event);
+      if (clicked) {
+        // The cell's editor, with the cursor where the click is (Ctrl+click opens links).
+        if (!(event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          editCell(view, dom, clicked, { x: event.clientX, y: event.clientY });
+        }
+        return;
+      }
+      // A click beside the table edits the nearest cell of the row at that height.
+      event.preventDefault();
+      const target = nearestCell(dom, event);
       if (target) {
-        target.focus();
-        placeCaret(target, "end");
+        focusCell(view, view.posAtDOM(dom), positionOf(target).row, positionOf(target).col, "end");
       }
     });
     dom.addEventListener("click", openLinkOnModClick);
@@ -645,22 +720,69 @@ export class TableWidget extends WidgetType {
     return dom;
   }
 
-  override updateDOM(dom: HTMLElement): boolean {
-    sync(dom as TableDom, this.text, this.html);
-    return true;
-  }
-
   override ignoreEvent(): boolean {
     return true;
   }
 }
 
+/** The cell of a table nearest to the mouse: of the row at its height, the column at its place. */
+function nearestCell(dom: HTMLElement, event: MouseEvent): HTMLElement | null {
+  const rows = Array.from(dom.querySelectorAll<HTMLElement>("tr"));
+  const row = rows.find((tr) => event.clientY < tr.getBoundingClientRect().bottom) ?? rows[rows.length - 1];
+  const cells = Array.from(row?.children ?? []) as HTMLElement[];
+  return cells.find((td) => event.clientX < td.getBoundingClientRect().right) ?? cells[cells.length - 1] ?? null;
+}
+
+/**
+ * Uploads files into a cell, at the caret: placeholders typed into the cell
+ * (so they are in its text like typing), then replaced by the references
+ * of the files, separated by spaces.
+ */
+function uploadToCell(view: EditorView, cell: HTMLElement, files: File[]): Promise<void> {
+  return uploadFiles(view, files, (placeholder, after) => {
+    if (after !== null) {
+      view.dispatch({ changes: { from: after, insert: ` ${placeholder}` }, userEvent: "input.upload" });
+    } else if (cell.isConnected) {
+      const [from, to] = cellSelection(cell) ?? [cellText(cell).length, cellText(cell).length];
+      replaceInCell(cell, from, to, placeholder);
+    } else {
+      // The cell is gone (e.g. its row was deleted meanwhile): the file goes at the end.
+      const end = view.state.doc.length;
+      view.dispatch({ changes: { from: end, insert: `\n\n${placeholder}` }, userEvent: "input.upload" });
+    }
+  });
+}
+
+/**
+ * Phorge's upload button puts the references of its files where the
+ * textarea's selection is: in a cell, there the selection in the cell is
+ * (in the source, which shows in the cell being edited).
+ */
+function selectCellInTextarea(view: EditorView, cell: HTMLElement): void {
+  const dom = cell.closest<TableDom>(".rme-table-editor");
+  const textarea = view.state.facet(hostTextarea);
+  if (!dom || !textarea) {
+    return;
+  }
+  const [from, to] = cellSelection(cell) ?? [cellText(cell).length, cellText(cell).length];
+  let location = cellLocation(view, dom, cell);
+  if (!location.range) {
+    // A cell the row does not have yet: written first.
+    onInput(view, dom, cell, cellText(cell));
+    location = cellLocation(view, dom, cell);
+  }
+  const { lineFrom, range } = location;
+  if (range) {
+    const at = (offset: number) => lineFrom + Math.min(range.from + offset, range.to);
+    textarea.setSelectionRange(at(from), at(to));
+  }
+}
+
 /** The focused table cell of the editor, if any. */
 export function focusedCell(view: EditorView): HTMLElement | null {
-  const cell = document.activeElement;
-  return cell instanceof HTMLElement && cell.closest(".rme-table-editor") && view.contentDOM.contains(cell)
-    ? cell
-    : null;
+  // The editor in the cell.
+  const cell = document.activeElement?.closest<HTMLElement>("th, td");
+  return cell?.closest(".rme-table-editor") && view.contentDOM.contains(cell) ? cell : null;
 }
 
 /** Buttons that insert text; in a cell only the formatting ones apply. */
@@ -680,19 +802,6 @@ const INSERTING = new Set([
   "fa-minus",
 ]);
 
-function selectText(cell: HTMLElement, from: number, to: number): void {
-  const node = cell.firstChild;
-  if (node?.nodeType !== Node.TEXT_NODE) {
-    return;
-  }
-  const range = document.createRange();
-  range.setStart(node, from);
-  range.setEnd(node, to);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
 /**
  * Applies a toolbar button to the selection in the focused cell, like it acts
  * on the selection in the text. Returns false if the button does not insert
@@ -700,27 +809,21 @@ function selectText(cell: HTMLElement, from: number, to: number): void {
  */
 export function formatFocusedCell(view: EditorView, icon: string): boolean {
   const cell = focusedCell(view);
-  if (!cell || !INSERTING.has(icon)) {
+  const editor = cell && cellEditors.get(cell);
+  if (!cell || !editor || !INSERTING.has(icon)) {
     return false;
   }
-  if (icon === "fa-link") {
-    linkInCell(view, cell);
-    return true;
+  if (icon === "fa-cloud-upload" || icon === "fa-meh-o") {
+    // Phorge's upload or meme dialog does the rest.
+    selectCellInTextarea(view, cell);
+    return false;
   }
-  const selected = window.getSelection()?.toString() ?? "";
-  const format = INLINE_FORMATS.find((f) => f.icon === icon);
-  let before: string;
-  let inner: string;
-  let after: string;
-  if (format) {
-    [before, inner, after] = [format.marker, selected || format.placeholder, format.marker];
-  } else {
-    // Lists, blocks and uploads have no place in a cell.
-    return true;
+  // Like in the text; lists and blocks have no place in a cell.
+  const command = view.state.facet(cellSupport)?.format(icon);
+  if (command) {
+    editor.focus();
+    command(editor);
   }
-  document.execCommand("insertText", false, before + inner + after);
-  const end = caretOffset(cell) ?? (cell.textContent ?? "").length;
-  selectText(cell, end - after.length - inner.length, end - after.length);
   return true;
 }
 

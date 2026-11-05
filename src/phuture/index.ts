@@ -100,6 +100,10 @@ function addButtons(root: Element | Document): boolean {
   }
   let added = false;
   for (const item of found) {
+    // Clickable items are choices (e.g. "Choose Subtype" of a new task), not objects; so are items in dialogs.
+    if (item.matches(".phui-oi-linked-container") || item.closest(".aphront-dialog-view")) {
+      continue;
+    }
     const href = item.querySelector<HTMLAnchorElement>(LINK)?.href;
     const key = href ? itemKey(href) : null;
     if (key && !items.has(item) && addButton(item, key)) {
@@ -116,7 +120,10 @@ function addButtons(root: Element | Document): boolean {
  * without the usual structure.
  */
 function addButton(item: HTMLElement, key: string): boolean {
-  const frame = item.querySelector(":scope > .phui-oi-frame > .phui-oi-frame-content");
+  // Items with a menu (e.g. commits, with their audit) have their content in a grid beside the menu.
+  const frame = [...item.querySelectorAll(".phui-oi-frame .phui-oi-frame-content")].find(
+    (content) => content.closest(ITEM) === item,
+  );
   if (!frame) {
     return false;
   }

@@ -1,10 +1,14 @@
-// Shows every remarkup block as the server renders it, except the blocks the
-// cursor is in: those show their source for editing. In a list, only the items
-// the cursor is in show their source; the others show rendered on their own.
+// Text blocks (paragraphs, headers, lists, quotes, notes, rules) always show their
+// source, styled like the rendered text (sourceStyle.ts), with their markup
+// hidden except where the cursor is (inlinePreview.ts), so nothing moves when
+// the cursor moves. Other blocks (code, rules, ...) show as the server renders
+// them, except while the cursor is in them; tables are edited as tables
+// (tableEditor.ts).
 
 import {
   EditorSelection,
   EditorState,
+  type Extension,
   Facet,
   type Line,
   Prec,
@@ -25,15 +29,55 @@ import { type Block, type BlockKind, splitBlocks } from "../blocks";
 import type { BlockRenderer, RenderItem } from "../renderer";
 import { storedChoice } from "../../storage";
 import { blockEdges, clearGaps, gapKey, gapMeasurer, gapsField, setGaps } from "./gaps";
-import { enterTable, focusedCellSource, TableWidget } from "./tableEditor";
+import { enterTable, focusedCellSource, refreshCellEditor, TableWidget } from "./tableEditor";
 import { parseHtml, setHtml } from "../html";
 import { type ListItem, parseList } from "../list";
 import { LIST_ITEM } from "../syntax";
+
+/** Blocks that show their source, styled; see above. */
+export const STYLED_BLOCKS = new Set<BlockKind>(["paragraph", "header", "list", "quote", "note", "rule"]);
+
+/**
+ * Whether a block shows its source while the cursor is not in it. A note of
+ * more lines than one shows as Phorge renders it, on one line (remarkup has
+ * no line breaks in notes); while edited, its lines are marked as joined
+ * (sourceStyle.ts).
+ */
+function alwaysSource(state: EditorState, block: Block): boolean {
+  return (
+    STYLED_BLOCKS.has(block.kind) &&
+    !(block.kind === "note" && state.doc.lineAt(block.from).number !== state.doc.lineAt(block.contentTo).number)
+  );
+}
 
 /** The renderer the editor uses for its blocks. */
 const blockRenderer = Facet.define<BlockRenderer, BlockRenderer | null>({
   combine: (values) => values[0] ?? null,
 });
+
+/** What the editor of a table cell needs of the editor, which the table editor can not import (see attach.ts). */
+export interface CellSupport {
+  /** The extensions of a cell's editor (live preview, autocomplete, insert menu, shortcuts), for the editor of the text. */
+  extensions(main: EditorView): Extension;
+  /** A toolbar button's command in a cell, by its icon (e.g. "fa-bold"); null if it is none. */
+  format(icon: string): ((view: EditorView) => boolean) | null;
+  /** Pastes a URL over the selected text as a link with that text; false if it is no URL or nothing is selected. */
+  linkSelection(view: EditorView, text: string): boolean;
+}
+
+export const cellSupport = Facet.define<CellSupport, CellSupport | null>({
+  combine: (values) => values[0] ?? null,
+});
+
+/**
+ * Moves where a click, Home or End puts the cursor in the text, e.g. out of
+ * hidden markers (inlinePreview.ts).
+ */
+export const clickPosition = Facet.define<(view: EditorView, pos: number) => number>();
+
+export function clicked(view: EditorView, pos: number): number {
+  return view.state.facet(clickPosition).reduce((at, move) => move(view, at), pos);
+}
 
 /** The renderer of the editor, for other extensions that show rendered remarkup. */
 export function rendererOf(state: EditorState): BlockRenderer | null {
@@ -43,6 +87,10 @@ export function rendererOf(state: EditorState): BlockRenderer | null {
 /** Dispatched when rendered HTML arrived for some blocks. */
 export const renderedEffect = StateEffect.define<null>();
 
+/**
+ * How tables are edited: as tables, cell by cell, the cell being edited with
+ * the live preview of the text ("table"); or as their text.
+ */
 export type TableMode = "table" | "text";
 
 const tableModeChoice = storedChoice<TableMode>("phizziwig-table-mode", "table", ["table", "text"]);
@@ -77,10 +125,6 @@ export interface PreviewState {
   frozen: boolean;
   /** Gaps between blocks that are not measured yet; see gaps.ts. */
   missingGaps: Set<string>;
-  /** The blank lines with the cursor the decorations were made for; see blankCursorLines(). */
-  cursorLines: string;
-  /** The list items shown as source the decorations were made for; see activeItems(). */
-  activeItems: string;
   /** Images of the blocks being edited, by block start; see ImagePreview. */
   previews: Map<number, string>;
   decorations: DecorationSet;
@@ -93,9 +137,10 @@ function blockText(state: EditorState, block: Block): string {
 /** The block the cursor is in, optionally only of a kind. */
 export function blockAtCursor(state: EditorState, kind?: BlockKind): Block | undefined {
   const head = state.selection.main.head;
+  // None in the editor of a table cell (tableEditor.ts).
   return state
-    .field(previewField)
-    .blocks.find((b) => (!kind || b.kind === kind) && !b.empty && head >= b.from && head <= b.contentTo);
+    .field(previewField, false)
+    ?.blocks.find((b) => (!kind || b.kind === kind) && !b.empty && head >= b.from && head <= b.contentTo);
 }
 
 /** What the renderer needs to render a block: its text and whether it ends the text. */
@@ -105,15 +150,6 @@ function renderItem(state: EditorState, block: Block, lastBlock: Block | undefin
 
 function sameSet<T>(a: Set<T>, b: Set<T>): boolean {
   return a.size === b.size && [...a].every((x) => b.has(x));
-}
-
-/** The blank lines the cursor is on, which show at their full height (see buildDecorations). */
-function blankCursorLines(state: EditorState): string {
-  return state.selection.ranges
-    .map((r) => state.doc.lineAt(r.head))
-    .filter((line) => !line.text.trim())
-    .map((line) => line.number)
-    .join(",");
 }
 
 /** Whether a selection range touches a range of the text. */
@@ -143,31 +179,12 @@ export function listItems(state: EditorState, block: Block): SourceItem[] {
   }));
 }
 
-/** The starts of the items of the lists being edited that show their source. */
-function activeItems(state: EditorState, blocks: Block[], active: Set<number>): string {
-  return [...active]
-    .filter((i) => blocks[i].kind === "list")
-    .flatMap((i) => listItems(state, blocks[i]).filter((unit) => selects(state, unit.from, unit.to)))
-    .map((unit) => unit.from)
-    .join(",");
-}
-
-/**
- * What a rendered element in the text shows: a block, or an item of a list
- * being edited (item: true), by its start. Its source text, and what it
- * renders as.
- */
+/** What a rendered block in the text shows, by its start: its source text, and what it renders as. */
 function renderedSource(
   state: EditorState,
   from: number,
-  item: boolean,
 ): { from: number; to: number; text: string; render: RenderItem } | null {
   const { blocks } = state.field(previewField);
-  if (item) {
-    const block = blocks.find((b) => b.kind === "list" && b.from <= from && from <= b.contentTo);
-    const unit = block && listItems(state, block).find((u) => u.from === from);
-    return unit ? { ...unit, text: state.doc.sliceString(unit.from, unit.to) } : null;
-  }
   const block = blocks.find((b) => b.from === from && !b.empty);
   if (!block) {
     return null;
@@ -195,16 +212,22 @@ const embedCache = new Map<string, string | null>();
 
 /** The embedded images of rendered HTML, or null if it has none. */
 function imagesOf(html: string): string | null {
-  if (!html.includes("data-rme-file") || !html.includes("<img")) {
+  if (!html.includes("<img") || !(html.includes("data-rme-file") || html.includes("phabricator-remarkup-macro"))) {
     return null;
   }
   let images = embedCache.get(html);
   if (images === undefined) {
-    const layouts = Array.from(parseHtml(html).querySelectorAll('[class*="phabricator-remarkup-embed-layout"]'));
+    // Embedded files, and image macros and memes, in their order.
+    const found = Array.from(
+      parseHtml(html).querySelectorAll('[class*="phabricator-remarkup-embed-layout"], img.phabricator-remarkup-macro'),
+    );
     images =
-      layouts
-        .filter((el) => el.querySelector("img[src]"))
+      found
+        .filter((el) => el.tagName === "IMG" || el.querySelector("img[src]"))
         .map((el) => {
+          if (el.tagName === "IMG") {
+            return `<p>${el.outerHTML}</p>`;
+          }
           // An embed starting a paragraph ("<p><div>…") leaves an empty
           // paragraph before it, which moves it down: keep that, so it is in
           // the same place while editing (images below the source hide it).
@@ -221,6 +244,18 @@ function imagesOf(html: string): string | null {
   return images;
 }
 
+/**
+ * A table (edited as a table) that the selection covers whole, without the
+ * cursor in its text: it stays a table, so nothing moves while selecting.
+ */
+function tableSelected(state: EditorState, block: Block): boolean {
+  return (
+    block.kind === "table" &&
+    state.field(tableModeField, false) !== "text" &&
+    state.selection.ranges.every((r) => r.from <= block.from && r.to >= block.contentTo)
+  );
+}
+
 function buildDecorations(
   state: EditorState,
   blocks: Block[],
@@ -230,39 +265,30 @@ function buildDecorations(
   decorations: DecorationSet;
   previews: Map<number, string>;
   missingGaps: Set<string>;
-  cursorLines: string;
-  activeItems: string;
 } {
   const renderer = state.facet(blockRenderer);
   const ranges: Range<Decoration>[] = [];
   const previews = new Map<number, string>();
   const lastBlock = blocks.findLast((b) => !b.empty);
-  const blankLines = blankCursorLines(state);
-  const cursorLines = new Set(blankLines.split(",").map(Number));
   const gaps = state.field(gapsField, false) ?? new Map<string, number>();
   const missingGaps = new Set<string>();
   // What each block renders, its HTML, its first and last element, and the next block with text.
   const items = blocks.map((b) => (b.empty ? null : renderItem(state, b, lastBlock)));
   const htmls = items.map((item) => (item ? renderer?.getOrSimilar(item) : undefined));
   const edges = blocks.map((b, i) => (b.empty ? null : blockEdges(state, b, htmls[i])));
-  const nextBlock: (number | null)[] = [];
-  for (let i = blocks.length - 1, next: number | null = null; i >= 0; i--) {
-    nextBlock[i] = next;
-    if (!blocks[i].empty) {
-      next = i;
-    }
-  }
   let previous: number | null = null;
-  let gapPlaced = false;
+  const tableMode = state.field(tableModeField, false) ?? "table";
 
   blocks.forEach((block, i) => {
     if (!block.empty) {
       // A block right on the next line of the previous one: no blank line
-      // takes the gap, a spacer does.
-      if (
-        previous !== null &&
-        state.doc.lineAt(blocks[previous].contentTo).number + 1 === state.doc.lineAt(block.from).number
-      ) {
+      // takes the gap, a spacer does. (A block may start with blank lines,
+      // e.g. after a note, which ends before them.)
+      let first = state.doc.lineAt(block.from);
+      while (!first.text.trim() && first.to < block.contentTo) {
+        first = state.doc.line(first.number + 1);
+      }
+      if (previous !== null && state.doc.lineAt(blocks[previous].contentTo).number + 1 === first.number) {
         const key = gapKey(edges[previous]![1], edges[i]![0]);
         const height = gaps.get(key);
         if (height === undefined) {
@@ -271,14 +297,15 @@ function buildDecorations(
         ranges.push(Decoration.widget({ widget: new Spacer(height ?? 0), block: true, side: -1 }).range(block.from));
       }
       previous = i;
-      gapPlaced = false;
     }
-    let gapFrom = block.contentTo;
     if (block.empty) {
-      gapFrom = block.from;
-    } else if (active.has(i) && block.kind === "list") {
-      listItemDecorations(state, block, ranges, previews, oldPreviews);
-    } else if (active.has(i)) {
+      // Blank lines are lines like any other, also between blocks: as high as
+      // a line of text, so nothing moves when the cursor comes to them.
+      return;
+    }
+    if (block.kind === "list") {
+      listImages(state, block, ranges, previews, oldPreviews);
+    } else if ((active.has(i) && !tableSelected(state, block)) || alwaysSource(state, block)) {
       // A block with images keeps showing them below its source, so it does
       // not collapse; until the edited text is rendered, the last images stay.
       const html = htmls[i];
@@ -308,10 +335,10 @@ function buildDecorations(
           );
         }
       }
-    } else if (block.kind === "table" && state.field(tableModeField, false) !== "text") {
+    } else if (block.kind === "table" && tableMode !== "text") {
       // Tables are tables, editable cell by cell, also before they are rendered.
       ranges.push(
-        Decoration.replace({ widget: new TableWidget(items[i]!.text, htmls[i]), block: true }).range(
+        Decoration.replace({ widget: new TableWidget(items[i]!.text, htmls[i], tableMode), block: true }).range(
           block.from,
           block.contentTo,
         ),
@@ -320,41 +347,10 @@ function buildDecorations(
       const html = htmls[i];
       if (html) {
         ranges.push(
-          Decoration.replace({ widget: new RenderedBlock(html, block.kind), block: true }).range(
+          Decoration.replace({ widget: new RenderedBlock(html, block.kind, fences(state, block)), block: true }).range(
             block.from,
             block.contentTo,
           ),
-        );
-      }
-    }
-    // The first blank line between two blocks is the gap between them on the
-    // page (see gaps.ts), unless the cursor is on it. Phorge ignores
-    // more blank lines; here they are lines like any other, so pressing Enter
-    // makes room while writing.
-    if (gapFrom < block.to) {
-      for (let line = state.doc.lineAt(gapFrom).number + (block.empty ? 0 : 1); line <= state.doc.lines; line++) {
-        const l = state.doc.line(line);
-        if (l.from >= block.to) {
-          break;
-        }
-        const next = nextBlock[i];
-        if (l.text.trim() !== "" || gapPlaced || previous === null || next === null) {
-          continue;
-        }
-        gapPlaced = true;
-        if (cursorLines.has(line)) {
-          continue;
-        }
-        const key = gapKey(edges[previous]![1], edges[next]![0]);
-        const height = gaps.get(key);
-        if (height === undefined) {
-          missingGaps.add(key);
-        }
-        ranges.push(
-          Decoration.line({
-            class: "rme-gap",
-            attributes: height === undefined ? undefined : { style: `--rme-gap: ${height}px` },
-          }).range(l.from),
         );
       }
     }
@@ -363,17 +359,11 @@ function buildDecorations(
     decorations: Decoration.set(ranges, true),
     previews,
     missingGaps,
-    cursorLines: blankLines,
-    activeItems: activeItems(state, blocks, active),
   };
 }
 
-/**
- * A list being edited: the items the cursor is in show their source, the
- * others show rendered on their own (ListItemWidget), as soon as they are.
- * Images of the items being edited show below them.
- */
-function listItemDecorations(
+/** The images of the items of a list, below each item, like in the rendered list. */
+function listImages(
   state: EditorState,
   block: Block,
   ranges: Range<Decoration>[],
@@ -381,27 +371,16 @@ function listItemDecorations(
   oldPreviews: Map<number, string>,
 ): void {
   const renderer = state.facet(blockRenderer);
-  const units = listItems(state, block);
-  units.forEach((unit, k) => {
+  for (const unit of listItems(state, block)) {
     const html = renderer?.get(unit.render);
-    if (selects(state, unit.from, unit.to)) {
-      const images = (html !== undefined ? imagesOf(html) : undefined) ?? oldPreviews.get(unit.from);
-      if (images) {
-        previews.set(unit.from, images);
-        ranges.push(
-          Decoration.widget({ widget: new ImagePreview(images, "below"), block: true, side: 1 }).range(unit.to),
-        );
-      }
-    } else if (html) {
-      const nestEnd = k < units.length - 1 && units[k + 1].item.path.length < unit.item.path.length;
+    const images = (html !== undefined ? imagesOf(html) : undefined) ?? oldPreviews.get(unit.from);
+    if (images) {
+      previews.set(unit.from, images);
       ranges.push(
-        Decoration.replace({ widget: new ListItemWidget(html, unit.item, nestEnd), block: true }).range(
-          unit.from,
-          unit.to,
-        ),
+        Decoration.widget({ widget: new ImagePreview(images, "below"), block: true, side: 1 }).range(unit.to),
       );
     }
-  });
+  }
 }
 
 const setFocused = StateEffect.define<boolean>();
@@ -414,7 +393,8 @@ const setFocused = StateEffect.define<boolean>();
  * stay as it is.
  */
 export function syncFocus(view: EditorView): void {
-  if (view.hasFocus && !view.state.field(previewField).focused) {
+  const preview = view.state.field(previewField, false);
+  if (view.hasFocus && preview && !preview.focused) {
     view.dispatch({ effects: setFocused.of(true) });
   }
 }
@@ -533,20 +513,20 @@ export const previewField = StateField.define<PreviewState>({
     const blocks = tr.docChanged ? splitBlocks(tr.state.doc.toString()) : value.blocks;
     const active = frozen && !tr.docChanged ? value.active : activeBlocks(tr.state, blocks, focused);
     // The cursor moved within what shows as source: the decorations stay.
-    if (
-      !tr.docChanged &&
-      !rendered &&
-      sameSet(active, value.active) &&
-      blankCursorLines(tr.state) === value.cursorLines &&
-      activeItems(tr.state, blocks, active) === value.activeItems
-    ) {
+    if (!tr.docChanged && !rendered && sameSet(active, value.active)) {
       return { ...value, focused, frozen };
     }
     const previews = new Map<number, string>();
     value.previews.forEach((images, from) => previews.set(tr.changes.mapPos(from, -1), images));
     return { blocks, active, focused, frozen, ...buildDecorations(tr.state, blocks, active, previews) };
   },
-  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
+  provide: (field) => [
+    EditorView.decorations.from(field, (value) => value.decorations),
+    // While the mouse selects, see highlightRendered().
+    EditorView.editorAttributes.from(field, (value): Record<string, string> =>
+      value.frozen ? { class: "rme-mouse-selecting" } : {},
+    ),
+  ],
 });
 
 /** Asks the renderer for the HTML of blocks that need it. */
@@ -583,11 +563,10 @@ const renderRequests = ViewPlugin.fromClass(
         if (!block.empty) {
           const item = renderItem(view.state, block, lastBlock);
           (active.has(i) || block.from === tableInEdit ? editing : shown).push(item);
-          if (block.kind === "list") {
-            // The items of a list show on their own while it is edited: those
-            // of a list being edited at once, the others ahead of time.
+          if (block.kind === "list" && item.text.includes("{F")) {
+            // Their images show below each item.
             for (const unit of listItems(view.state, block)) {
-              (active.has(i) && !selects(view.state, unit.from, unit.to) ? shown : items).push(unit.render);
+              items.push(unit.render);
             }
           }
         }
@@ -609,33 +588,47 @@ const renderRequests = ViewPlugin.fromClass(
   },
 );
 
+/**
+ * The lines of a code block's source with its "```" fences alone, before and
+ * after its code, which the rendered block does not show: it keeps room for
+ * them (style.css), so its code is where the source shows it.
+ */
+function fences(state: EditorState, block: Block): [boolean, boolean] {
+  if (block.kind !== "code") {
+    return [false, false];
+  }
+  const first = state.doc.lineAt(block.from);
+  const last = state.doc.lineAt(block.contentTo);
+  return [/^\s*```[^`]*$/.test(first.text), last.number > first.number && last.text.trim() === "```"];
+}
+
 class RenderedBlock extends WidgetType {
   constructor(
     readonly html: string,
     readonly kind: BlockKind,
+    readonly fences: [boolean, boolean],
   ) {
     super();
   }
 
   override eq(other: RenderedBlock): boolean {
-    return other.html === this.html && other.kind === this.kind;
+    return (
+      other.html === this.html &&
+      other.kind === this.kind &&
+      other.fences[0] === this.fences[0] &&
+      other.fences[1] === this.fences[1]
+    );
   }
 
   toDOM(view: EditorView): HTMLElement {
     const dom = document.createElement("div");
     dom.className = `rme-block rme-block-${this.kind} phabricator-remarkup`;
+    dom.classList.toggle("rme-fence-before", this.fences[0]);
+    dom.classList.toggle("rme-fence-after", this.fences[1]);
     // Server-rendered remarkup, the same HTML the page's preview shows.
     setHtml(dom, this.html);
     dom.title = "Click to edit, Ctrl+click to open a link";
-    dom.addEventListener("mousedown", (event) => {
-      const box = event.button === 0 ? checkboxAt(event) : null;
-      if (box) {
-        event.preventDefault();
-        toggleCheckbox(view, dom, this.html, box);
-      } else {
-        selectWithMouse(view, event);
-      }
-    });
+    dom.addEventListener("mousedown", (event) => selectWithMouse(view, event));
     dom.addEventListener("click", openLinkOnModClick);
     return dom;
   }
@@ -646,71 +639,27 @@ class RenderedBlock extends WidgetType {
 }
 
 /**
- * An item of a list being edited, rendered on its own (the server's HTML of
- * the item alone), in lists like those around it in the whole list, so the
- * page's styles indent and number it the same. Lists have no vertical
- * margins here; nestEnd takes the bottom margin of a nested list (its top
- * margin does not show on the page).
+ * Appends an item (its li) to an element in lists like those around it in its
+ * whole list, so the page's styles indent, number and mark it the same.
  */
-class ListItemWidget extends WidgetType {
-  constructor(
-    readonly html: string,
-    readonly item: ListItem,
-    readonly nestEnd: boolean,
-  ) {
-    super();
-  }
-
-  override eq(other: ListItemWidget): boolean {
-    return (
-      other.html === this.html &&
-      JSON.stringify(other.item.path) === JSON.stringify(this.item.path) &&
-      other.item.hasMarks === this.item.hasMarks &&
-      other.nestEnd === this.nestEnd
-    );
-  }
-
-  toDOM(view: EditorView): HTMLElement {
-    const dom = document.createElement("div");
-    dom.className = "rme-block rme-block-list rme-list-item phabricator-remarkup";
-    dom.classList.toggle("rme-nest-end", this.nestEnd);
-    // Server-rendered remarkup: the item, without lists of its own (there are none).
-    const rendered = parseHtml(this.html).querySelector("li") ?? document.createElement("li");
-    let parent: HTMLElement = dom;
-    this.item.path.forEach((level, i) => {
-      const list = document.createElement(level.tag);
-      list.className = `remarkup-list${this.item.hasMarks ? " remarkup-list-with-checkmarks" : ""}`;
-      const own = i === this.item.path.length - 1;
-      // The items around this one: their classes place the lists in them, their markers do not show.
-      const entry = own ? rendered : document.createElement("li");
-      if (!own) {
-        const mark = level.mark === null ? "" : level.mark ? " remarkup-checked-item" : " remarkup-unchecked-item";
-        entry.className = `remarkup-list-item rme-list-around${mark}`;
-      }
-      if (level.tag === "ol") {
-        (entry as HTMLLIElement).value = level.start + level.index;
-      }
-      list.append(entry);
-      parent.append(list);
-      parent = entry;
-    });
-    dom.title = "Click to edit, Ctrl+click to open a link";
-    dom.addEventListener("mousedown", (event) => {
-      const box = event.button === 0 ? checkboxAt(event) : null;
-      if (box) {
-        event.preventDefault();
-        toggleCheckbox(view, dom, this.html, box);
-      } else {
-        selectWithMouse(view, event);
-      }
-    });
-    dom.addEventListener("click", openLinkOnModClick);
-    return dom;
-  }
-
-  override ignoreEvent(): boolean {
-    return true;
-  }
+export function appendInLists(parent: HTMLElement, item: ListItem, own: HTMLLIElement): void {
+  item.path.forEach((level, i) => {
+    const list = document.createElement(level.tag);
+    list.className = `remarkup-list${item.hasMarks ? " remarkup-list-with-checkmarks" : ""}`;
+    const isOwn = i === item.path.length - 1;
+    // The items around this one: their classes place the lists in them, their markers do not show.
+    const entry = isOwn ? own : document.createElement("li");
+    if (!isOwn) {
+      const mark = level.mark === null ? "" : level.mark ? " remarkup-checked-item" : " remarkup-unchecked-item";
+      entry.className = `remarkup-list-item rme-list-around${mark}`;
+    }
+    if (level.tag === "ol") {
+      entry.value = level.start + level.index;
+    }
+    list.append(entry);
+    parent.append(list);
+    parent = entry;
+  });
 }
 
 /** The gap between two blocks on consecutive lines; see gaps.ts. */
@@ -727,19 +676,29 @@ class Spacer extends WidgetType {
     const dom = document.createElement("div");
     dom.className = "rme-spacer";
     dom.style.height = `${this.height}px`;
-    // A click here is a click on the start of the line below, like in the textarea.
+    // A click here is a click on the nearer line, above or below, where the mouse is.
     dom.addEventListener("mousedown", (event) => {
-      if (event.button === 0) {
-        event.preventDefault();
-        // Focus first: focusing places the browser's caret, which the editor would take over.
-        view.focus();
-        // The line below shows its source at once (CodeMirror tells of the focus a moment later).
-        view.dispatch({
-          selection: { anchor: view.posAtDOM(dom) },
-          effects: setFocused.of(true),
-          scrollIntoView: true,
-        });
+      if (event.button !== 0) {
+        return;
       }
+      event.preventDefault();
+      // Focus first: focusing places the browser's caret, which the editor would take over.
+      view.focus();
+      const { doc } = view.state;
+      const box = dom.getBoundingClientRect();
+      const above = event.clientY < (box.top + box.bottom) / 2;
+      const below = view.posAtDOM(dom);
+      const line = doc.lineAt(above ? Math.max(0, below - 1) : below);
+      let pos = view.posAtCoords({ x: event.clientX, y: above ? box.top - 2 : box.bottom + 2 }, false);
+      if (doc.lineAt(pos).number !== line.number) {
+        pos = above ? line.to : line.from;
+      }
+      // On a list item, in its text.
+      const item = inListBlock(view.state, line.from) ? LIST_ITEM.exec(line.text) : null;
+      if (item) {
+        pos = Math.max(pos, line.to - item[5].length);
+      }
+      view.dispatch({ selection: { anchor: pos }, effects: setFocused.of(true), userEvent: "select.pointer" });
     });
     return dom;
   }
@@ -792,63 +751,6 @@ class ImagePreview extends WidgetType {
   }
 }
 
-/**
- * The checkbox of a checklist item clicked on. Phorge hides the input
- * and draws the box as the item's ::before, in the item's left padding.
- */
-function checkboxAt(event: MouseEvent): HTMLInputElement | null {
-  const item = (event.target as Element).closest(".remarkup-list-with-checkmarks > li");
-  const box = item?.querySelector<HTMLInputElement>(':scope > input[type="checkbox"]');
-  if (!item || !box) {
-    return null;
-  }
-  const rect = item.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
-  const style = getComputedStyle(item);
-  // The box is on the first line, in the padding.
-  return x >= 0 && x < parseFloat(style.paddingLeft) && y >= 0 && y < (parseFloat(style.lineHeight) || 22) ? box : null;
-}
-
-const CHECKBOX_ITEM = /^(\s*(?:[-*#]+|\d+[.)])\s*)\[([ xX]?)\]/;
-
-/**
- * Checks or unchecks the n-th checkbox of a rendered checklist (or list item)
- * in the text. It shows the change right away: its HTML with the box toggled
- * stands in for the server's until it is rendered again.
- */
-function toggleCheckbox(view: EditorView, dom: HTMLElement, html: string, box: HTMLInputElement): void {
-  const isItem = dom.classList.contains("rme-list-item");
-  const source = renderedSource(view.state, view.posAtDOM(dom), isItem);
-  const index = Array.from(dom.querySelectorAll('input[type="checkbox"]')).indexOf(box);
-  if (!source || index < 0) {
-    return;
-  }
-  let pos = source.from;
-  let seen = 0;
-  for (const line of source.text.split("\n")) {
-    const match = CHECKBOX_ITEM.exec(line);
-    if (match && seen++ === index) {
-      const at = pos + match[1].length + 1;
-      const checked = match[2].trim() !== "";
-      const container = document.createElement("div");
-      container.append(parseHtml(html));
-      const rendered = container.querySelectorAll('input[type="checkbox"]')[isItem ? 0 : index];
-      rendered?.toggleAttribute("checked", !checked);
-      rendered?.parentElement?.classList.toggle("remarkup-checked-item", !checked);
-      rendered?.parentElement?.classList.toggle("remarkup-unchecked-item", checked);
-      const changes = { from: at, to: at + match[2].length, insert: checked ? " " : "X" };
-      const next = renderedSource(view.state.update({ changes }).state, source.from, isItem);
-      if (next) {
-        view.state.facet(blockRenderer)?.prime(next.render, container.innerHTML);
-      }
-      view.dispatch({ changes, userEvent: "input.check" });
-      return;
-    }
-    pos += line.length + 1;
-  }
-}
-
 /** Links in the editor open with Ctrl+click (Cmd+click); a plain click edits. */
 export function openLinkOnModClick(event: MouseEvent): void {
   const link = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
@@ -860,41 +762,70 @@ export function openLinkOnModClick(event: MouseEvent): void {
   }
 }
 
-/** The position in the source of the text under the mouse in a rendered block or list item. */
-function renderedPos(view: EditorView, dom: Element, event: MouseEvent): number | null {
-  const source = renderedSource(view.state, view.posAtDOM(dom), dom.classList.contains("rme-list-item"));
-  return source ? source.from + sourceOffset(source.text, event, dom) : null;
+/** A place in rendered text: the position in the source it shows, and where it is in the page. */
+interface RenderedPoint {
+  pos: number;
+  node: Node;
+  offset: number;
+}
+
+/**
+ * The text under the mouse in a rendered block or list item: its position in
+ * the source, or null where the text is not found there (e.g. a link's title).
+ */
+function renderedPoint(view: EditorView, dom: Element, event: MouseEvent): RenderedPoint | null {
+  const source = renderedSource(view.state, view.posAtDOM(dom));
+  const caret = caretAt(event.clientX, event.clientY);
+  if (!source || !caret || !dom.contains(caret.node)) {
+    return null;
+  }
+  const offset = sourceOffset(source.text, caret, dom);
+  return offset === null ? null : { pos: source.from + offset, ...caret };
 }
 
 /** The rendered block or list item an element is in: its range in the source. */
-function renderedUnit(view: EditorView, el: Element | null): { from: number; to: number } | null {
+function renderedUnit(view: EditorView, el: Element | null): { from: number; to: number; dom: Element } | null {
   const dom = el?.closest(".rme-block:not(.rme-image-preview)");
   if (!dom || !view.contentDOM.contains(dom)) {
     return null;
   }
-  return renderedSource(view.state, view.posAtDOM(dom), dom.classList.contains("rme-list-item"));
+  const source = renderedSource(view.state, view.posAtDOM(dom));
+  return source && { from: source.from, to: source.to, dom };
 }
 
 /**
- * Where a selection made with the mouse from `anchor` ends: in the source
- * under the mouse, or over a rendered block or list item, at its far end.
- * Rendered text shows as selected only as a whole, so it is selected as a
- * whole: what shows while dragging is what is selected after.
+ * The ends of the selection being made with the mouse that are in rendered
+ * text, where the page shows them; see highlightRendered().
+ */
+const dragPoints: { anchor: RenderedPoint | null; head: RenderedPoint | null } = { anchor: null, head: null };
+
+/**
+ * Where a selection made with the mouse from `anchor` ends: at the text
+ * under the mouse, in the source or in a rendered block or list item, like
+ * in a text field. Where rendered text is not found in the source, and in
+ * tables, at the far end of the block.
  */
 function dragHead(view: EditorView, event: MouseEvent, anchor: number): number | null {
+  dragPoints.head = null;
   const unit = renderedUnit(view, document.elementFromPoint(event.clientX, event.clientY));
-  if (unit) {
-    return unit.from >= anchor ? unit.to : unit.from;
+  if (!unit) {
+    return view.posAtCoords({ x: event.clientX, y: event.clientY }, false);
   }
-  return view.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+  const point = unit.dom.classList.contains("rme-table-editor") ? null : renderedPoint(view, unit.dom, event);
+  if (point) {
+    dragPoints.head = point;
+    return point.pos;
+  }
+  return unit.from >= anchor ? unit.to : unit.from;
 }
 
 /**
  * Click and drag in a rendered block or list item. A click puts the cursor at
- * the clicked text. Dragging selects all of it and what the mouse reaches
- * (see dragHead()); Shift+click extends the selection to it. Blocks only
- * switch to their source when the mouse button is released, so nothing moves
- * under the mouse while selecting.
+ * the clicked text. Dragging selects from there to the text the mouse
+ * reaches (see dragHead()); Shift+click extends the selection to it. Blocks
+ * only switch to their source when the mouse button is released, so nothing
+ * moves under the mouse while selecting; until then, the selected rendered
+ * text is highlighted (highlightRendered()).
  */
 function selectWithMouse(view: EditorView, event: MouseEvent): void {
   if (event.button !== 0) {
@@ -907,17 +838,15 @@ function selectWithMouse(view: EditorView, event: MouseEvent): void {
   }
   const dom = event.currentTarget as Element;
   const unit = renderedUnit(view, dom);
-  const pos = renderedPos(view, dom, event);
-  if (!unit || pos === null) {
+  if (!unit) {
     return;
   }
-  const extend = (head: number | null, from: number) =>
-    head === null
-      ? null
-      : EditorSelection.range(head >= unit.to ? unit.from : head <= unit.from ? unit.to : from, head);
+  const point = renderedPoint(view, dom, event);
+  dragPoints.anchor = event.shiftKey ? null : point;
+  const anchor = event.shiftKey ? view.state.selection.main.anchor : (point?.pos ?? unit.to);
   const selection = event.shiftKey
-    ? EditorSelection.range(view.state.selection.main.anchor, dragHead(view, event, view.state.selection.main.anchor)!)
-    : EditorSelection.cursor(pos);
+    ? EditorSelection.range(anchor, dragHead(view, event, anchor) ?? anchor)
+    : EditorSelection.cursor(anchor);
   view.dispatch({ selection, effects: freezeBlocks.of(true) });
   view.focus();
   const start = { x: event.clientX, y: event.clientY };
@@ -927,11 +856,8 @@ function selectWithMouse(view: EditorView, event: MouseEvent): void {
     if (!dragging) {
       return;
     }
-    const over = renderedUnit(view, document.elementFromPoint(moved.clientX, moved.clientY));
-    const range =
-      over?.from === unit.from
-        ? EditorSelection.range(unit.from, unit.to)
-        : extend(dragHead(view, moved, unit.from), unit.from);
+    const head = dragHead(view, moved, anchor);
+    const range = head === null ? null : EditorSelection.range(anchor, head);
     if (range && !range.eq(view.state.selection.main)) {
       view.dispatch({ selection: range });
     }
@@ -941,6 +867,47 @@ function selectWithMouse(view: EditorView, event: MouseEvent): void {
     window.removeEventListener("mousemove", move);
     view.dispatch({ effects: freezeBlocks.of(false), scrollIntoView: true });
   });
+}
+
+const HIGHLIGHT = "rme-selection";
+
+/**
+ * Highlights the selected text of the rendered blocks while the mouse
+ * selects: what is selected of each, from or to where the mouse is in it.
+ * The browser's own selection would show all of a block whose source it
+ * reaches into, so it does not show in them meanwhile (style.css).
+ */
+function highlightRendered(view: EditorView, show: boolean): void {
+  if (typeof Highlight === "undefined" || !CSS.highlights) {
+    return;
+  }
+  if (!show) {
+    CSS.highlights.delete(HIGHLIGHT);
+    return;
+  }
+  const { from, to } = view.state.selection.main;
+  const ranges: AbstractRange[] = [];
+  view.contentDOM.querySelectorAll(".rme-block:not(.rme-image-preview)").forEach((dom) => {
+    const source = renderedSource(view.state, view.posAtDOM(dom));
+    if (!source || Math.max(from, source.from) >= Math.min(to, source.to)) {
+      return;
+    }
+    // All of its text, unless an end of the selection is in it.
+    const range = document.createRange();
+    range.selectNodeContents(dom);
+    const at = (pos: number) =>
+      [dragPoints.anchor, dragPoints.head].find((point) => point?.pos === pos && dom.contains(point.node));
+    const start = from > source.from ? at(from) : undefined;
+    if (start) {
+      range.setStart(start.node, start.offset);
+    }
+    const end = to < source.to ? at(to) : undefined;
+    if (end) {
+      range.setEnd(end.node, end.offset);
+    }
+    ranges.push(range);
+  });
+  CSS.highlights.set(HIGHLIGHT, new Highlight(...ranges));
 }
 
 /**
@@ -975,11 +942,15 @@ const mouseSelection = [
     if (event.button !== 0 || event.detail > 1 || event.ctrlKey || event.metaKey || event.altKey) {
       return null;
     }
+    dragPoints.anchor = null;
     let anchor = event.shiftKey
       ? view.state.selection.main.anchor
-      : view.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+      : clicked(view, view.posAtCoords({ x: event.clientX, y: event.clientY }, false));
     return {
-      get: (current) => EditorSelection.single(anchor, dragHead(view, current, anchor) ?? anchor),
+      get: (current) => {
+        const head = dragHead(view, current, anchor);
+        return EditorSelection.single(anchor, head === null ? anchor : clicked(view, head));
+      },
       update: (update) => {
         anchor = update.changes.mapPos(anchor);
         return false;
@@ -996,19 +967,18 @@ const mouseSelection = [
       return false;
     },
   }),
-  // Rendered blocks within the selection look selected.
-  ViewPlugin.define(() => ({
+  // The selected text of rendered blocks shows selected.
+  ViewPlugin.define((view) => ({
     update(update: ViewUpdate) {
       const { frozen } = update.state.field(previewField);
-      if (!frozen && !update.startState.field(previewField).frozen) {
-        return;
+      if (frozen || update.startState.field(previewField).frozen) {
+        highlightRendered(update.view, frozen);
       }
-      const { from, to } = update.state.selection.main;
-      update.view.contentDOM.querySelectorAll(".rme-block").forEach((dom) => {
-        const source = renderedSource(update.state, update.view.posAtDOM(dom), dom.classList.contains("rme-list-item"));
-        dom.classList.toggle("rme-selected", frozen && !!source && from <= source.from && to >= source.to);
-      });
+      if (!frozen) {
+        dragPoints.anchor = dragPoints.head = null;
+      }
     },
+    destroy: () => view.state.field(previewField).frozen && highlightRendered(view, false),
   })),
   // Images change the height of blocks when they arrive.
   ViewPlugin.define((view) => {
@@ -1040,13 +1010,13 @@ function occurrences(text: string, part: string): number[] {
 }
 
 /**
- * Finds the clicked text in the block source; the end of the block if not
- * found. Text that occurs more than once is found at the same occurrence.
+ * Finds a place in rendered text (e.g. the clicked one) in the block source;
+ * null if not found. Text that occurs more than once is found at the same
+ * occurrence.
  */
-function sourceOffset(source: string, event: MouseEvent, container: Element): number {
-  const caret = caretAt(event.clientX, event.clientY);
-  if (!caret || caret.node.nodeType !== Node.TEXT_NODE) {
-    return source.length;
+function sourceOffset(source: string, caret: { node: Node; offset: number }, container: Element): number | null {
+  if (caret.node.nodeType !== Node.TEXT_NODE) {
+    return null;
   }
   const text = caret.node.textContent ?? "";
   const k = caret.offset;
@@ -1071,7 +1041,7 @@ function sourceOffset(source: string, event: MouseEvent, container: Element): nu
       return (inSource[nth] ?? inSource[0]) + (k - start);
     }
   }
-  return source.length;
+  return null;
 }
 
 /** Whether a position is in a list block. */
@@ -1080,14 +1050,17 @@ export function inListBlock(state: EditorState, pos: number): boolean {
 }
 
 /**
- * Up and Down move by one visual row within a wrapped line, and otherwise to
- * exactly the previous or next line. Lines differ in height here (rendered
- * blocks, blank lines between blocks, headers), and CodeMirror's own motion
- * aims half a line height away, which can skip lines or stay on them.
- * A rendered block is entered at its end going up and at its start going
- * down, and then shows its source. On a list item, the cursor lands in its
- * text, not before its marker. With Shift, the selection extends by one line
- * of the source, also into a rendered block, instead of over all of it.
+ * Up and Down move like CodeMirror moves them, by visual rows, to the same
+ * place on the screen (also within and between wrapped lines), with these
+ * corrections:
+ * - its column is kept across moves (the selection does not keep it);
+ * - where it would not move (e.g. stuck at the space between two blocks) or
+ *   would skip a line, it goes to the next line;
+ * - a rendered block (code, a table as text) is entered at the column of the
+ *   source and shows its source; a table edited as a table, in its cells;
+ * - on a list item, the cursor lands in its text, not in its marker: coming
+ *   from before the marker of an item, before the marker; selecting (with
+ *   Shift), from the start of the line, which selects lines whole.
  */
 function moveLine(view: EditorView, forward: boolean, extend = false): boolean {
   const { state } = view;
@@ -1096,51 +1069,73 @@ function moveLine(view: EditorView, forward: boolean, extend = false): boolean {
     return false;
   }
   const line = state.doc.lineAt(range.head);
-  const moved = view.moveVertically(range, forward);
+  // The column where the moves started, while the cursor moves on from there:
+  // in the source, and on the screen; and at a soft wrap, on which row the
+  // cursor is (the selection does not keep either).
+  const goal = lineGoals.get(view);
+  const going = goal?.head === range.head ? goal : null;
+  const start = EditorSelection.cursor(range.head, going ? going.assoc : range.assoc, undefined, going?.x);
+  const moved = view.moveVertically(start, forward);
   const movedLine = state.doc.lineAt(moved.head).number;
-  // Within a wrapped line, CodeMirror's motion is right.
-  if (movedLine === line.number) {
-    return false;
-  }
-  const number = line.number + (forward ? 1 : -1);
-  if (number < 1 || number > state.doc.lines) {
-    return false;
-  }
-  const target = state.doc.line(number);
-  let anchor: number | null = null;
-  let table: number | null = null;
-  state.field(previewField).decorations.between(target.from, target.from, (from, to, deco) => {
-    // Rendered blocks, not points like spacers and image previews.
-    if (deco.spec.block && to > from && from <= target.from && target.from <= to) {
-      anchor = forward ? from : to;
-      if (deco.spec.widget instanceof TableWidget) {
-        table = from;
-      }
+  const column = going ? going.column : range.head - line.from;
+  let head = moved.head;
+  let assoc = moved.assoc;
+  if (movedLine !== line.number || moved.head === range.head) {
+    const number = line.number + (forward ? 1 : -1);
+    if (number < 1 || number > state.doc.lines) {
+      // To the start or end of the text, like CodeMirror.
+      return false;
     }
-  });
-  if (extend) {
-    anchor = null;
-  } else if (table !== null) {
-    // Into the cells of a table.
-    enterTable(view, table, forward);
-    return true;
+    const target = state.doc.line(number);
+    let rendered = false;
+    let table: number | null = null;
+    state.field(previewField).decorations.between(target.from, target.from, (from, to, deco) => {
+      // Rendered blocks, not points like spacers and image previews.
+      if (deco.spec.block && to > from && from <= target.from && target.from <= to) {
+        rendered = true;
+        if (deco.spec.widget instanceof TableWidget) {
+          table = from;
+        }
+      }
+    });
+    if (table !== null && !extend) {
+      // Into the cells of a table.
+      enterTable(view, table, forward);
+      return true;
+    }
+    if (movedLine !== number || rendered) {
+      // Not on the next line, or in a rendered block, which CodeMirror only
+      // enters at its edges: at the column of the source.
+      head = Math.min(target.from + column, target.to);
+      assoc = forward ? -1 : 1;
+    }
   }
-  if (anchor === null) {
-    // Keep the column, like CodeMirror does when it lands on the right line.
-    anchor = movedLine === number ? moved.head : Math.min(target.from + (range.head - line.from), target.to);
+  // On a list item, in its text, not in its marker (see above).
+  const target = state.doc.lineAt(head);
+  const item = inListBlock(state, target.from) ? LIST_ITEM.exec(target.text) : null;
+  const text = item ? target.to - item[5].length : null;
+  const beforeMarker = range.head === line.from && inListBlock(state, line.from) && LIST_ITEM.test(line.text);
+  if (text !== null && head < text) {
+    if (beforeMarker) {
+      head = target.from;
+    } else if (!extend || head > target.from) {
+      head = text;
+    }
   }
-  // On a list item, not before its marker: in its text.
-  const item = !extend && inListBlock(state, target.from) ? LIST_ITEM.exec(target.text) : null;
-  if (item) {
-    anchor = Math.max(anchor, target.to - item[5].length);
-  }
+  const x = moved.goalColumn ?? going?.x;
   view.dispatch({
-    selection: extend ? EditorSelection.range(range.anchor, anchor) : { anchor },
+    selection: extend
+      ? EditorSelection.range(range.anchor, head, x, undefined, assoc)
+      : EditorSelection.cursor(head, assoc, undefined, x),
     scrollIntoView: true,
     userEvent: "select",
   });
+  lineGoals.set(view, { head, column, x, assoc });
   return true;
 }
+
+/** Where moving up or down started (its column in the source and its x), and where the cursor is now; see moveLine(). */
+const lineGoals = new WeakMap<EditorView, { head: number; column: number; x: number | undefined; assoc: number }>();
 
 export function livePreview(renderer: BlockRenderer) {
   return [
@@ -1152,6 +1147,12 @@ export function livePreview(renderer: BlockRenderer) {
     previewField,
     floatPadMeasure,
     renderRequests,
+    // Renderings arriving: also for the cell being edited live, whose table does not change.
+    EditorView.updateListener.of((update) => {
+      if (update.transactions.some((tr) => tr.effects.some((effect) => effect.is(renderedEffect)))) {
+        refreshCellEditor();
+      }
+    }),
     gapMeasurer((state) => state.field(previewField).missingGaps),
     mouseSelection,
     Prec.high(
@@ -1160,6 +1161,76 @@ export function livePreview(renderer: BlockRenderer) {
         { key: "ArrowUp", run: (view) => moveLine(view, false), shift: (view) => moveLine(view, false, true) },
       ]),
     ),
-    EditorView.focusChangeEffect.of((_state, focusing) => setFocused.of(focusing)),
+    // With the focus in a search or dialog opened from the editor, it stays as it is (focusKeeper).
+    EditorView.focusChangeEffect.of((_state, focusing) => (focusing || !keepsFocus() ? setFocused.of(focusing) : null)),
+    focusKeeper,
   ];
 }
+
+/**
+ * Searches and dialogs opened from the editor: the pickers (link, reference,
+ * image macro, …) and Phorge's dialogs (upload, meme). While they have the
+ * focus, the editor counts as focused, so what is being edited keeps showing
+ * its source, e.g. a table edited as text.
+ */
+const KEEPS_FOCUS = ".rme-picker, .jx-client-dialog";
+
+function keepsFocus(): boolean {
+  return !!document.activeElement?.closest(KEEPS_FOCUS);
+}
+
+/** Whether the editor has the focus now, or a search or dialog opened from it has. */
+export function editing(view: EditorView): boolean {
+  return view.hasFocus || (!!view.state.field(previewField, false)?.focused && keepsFocus());
+}
+
+/** Notices when the focus a search or dialog kept for the editor goes elsewhere. */
+const focusKeeper = ViewPlugin.fromClass(
+  class {
+    private watching = false;
+
+    constructor(private readonly view: EditorView) {}
+
+    update(update: ViewUpdate) {
+      if (update.focusChanged && !update.view.hasFocus && update.state.field(previewField).focused) {
+        this.watch();
+      }
+    }
+
+    private readonly check = () =>
+      // After the event, when the focus has moved (or its element is gone).
+      setTimeout(() => {
+        if (!this.watching || this.view.hasFocus || keepsFocus()) {
+          this.stop(this.view.hasFocus);
+          return;
+        }
+        this.stop(true);
+        if (this.view.state.field(previewField).focused) {
+          this.view.dispatch({ effects: setFocused.of(false) });
+        }
+      });
+
+    private watch() {
+      if (!this.watching) {
+        this.watching = true;
+        for (const type of ["focusin", "focusout", "mousedown", "keydown"]) {
+          document.addEventListener(type, this.check, true);
+        }
+      }
+    }
+
+    /** Stops watching; unless done, only when the focus is back in the editor. */
+    private stop(done: boolean) {
+      if (this.watching && done) {
+        this.watching = false;
+        for (const type of ["focusin", "focusout", "mousedown", "keydown"]) {
+          document.removeEventListener(type, this.check, true);
+        }
+      }
+    }
+
+    destroy() {
+      this.stop(true);
+    }
+  },
+);

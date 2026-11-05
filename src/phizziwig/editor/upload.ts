@@ -73,15 +73,23 @@ export async function uploadInPlace(
   }
 }
 
-async function upload(view: EditorView, files: File[], pos: number) {
+/**
+ * Uploads files one after the other. Each first gets a placeholder, which
+ * `insert` puts in the text (with where the reference of the file before it
+ * ended up, if it is in the text), then its reference replaces it.
+ */
+export async function uploadFiles(
+  view: EditorView,
+  files: File[],
+  insert: (placeholder: string, after: number | null) => void,
+): Promise<void> {
   const textarea = view.state.facet(hostTextarea);
+  let after: number | null = null;
   for (const file of files) {
     // The placeholder keeps the place while the upload runs.
     const placeholder = uploadPlaceholder(file.name);
     if (view.dom.isConnected) {
-      const before = view.state.doc.sliceString(Math.max(0, pos - 1), pos);
-      const text = (before === "}" ? "\n\n" : "") + placeholder;
-      view.dispatch({ changes: { from: pos, insert: text }, userEvent: "input.upload" });
+      insert(placeholder, after);
     } else {
       // Turned off during an earlier upload: add the file at the end.
       textarea!.value += `\n\n${placeholder}`;
@@ -99,10 +107,19 @@ async function upload(view: EditorView, files: File[], pos: number) {
       window.alert(`Uploading ${file.name} failed. Try the upload button in the toolbar.`);
     }
     const at = textarea ? replacePlaceholder(view, textarea, placeholder, replacement) : -1;
-    if (at >= 0) {
-      pos = at + replacement.length;
-    }
+    after = at >= 0 ? at + replacement.length : null;
   }
+}
+
+/** Uploads files into the text at a position, like Phorge's textarea. */
+function upload(view: EditorView, files: File[], pos: number): Promise<void> {
+  return uploadFiles(view, files, (placeholder, after) => {
+    pos = after ?? pos;
+    const before = view.state.doc.sliceString(Math.max(0, pos - 1), pos);
+    // After another file, on a line of its own.
+    const text = (before === "}" ? "\n\n" : "") + placeholder;
+    view.dispatch({ changes: { from: pos, insert: text }, userEvent: "input.upload" });
+  });
 }
 
 /** Whether pasted data has text besides its files, in its HTML. */

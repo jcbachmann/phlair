@@ -232,3 +232,57 @@ test("cards on workboards are snoozed too, next to their own action", async ({ p
   await snooze(page, id, /^Tomorrow/);
   await expect(item(page, id)).toBeHidden();
 });
+
+/** Adds HTML to the list of the page, as Phorge renders it later (e.g. a dialog), and waits for Phuture to see it. */
+async function addToPage(page: Page, html: string): Promise<void> {
+  await page.evaluate((html) => {
+    const box = document.createElement("div");
+    box.innerHTML = html;
+    document.querySelector(".phui-oi-list-view")!.after(box);
+  }, html);
+}
+
+test("commits, as in audit lists, can be snoozed: their items have a menu", async ({ page }) => {
+  const [id] = await createTasks(page, "Beside a commit");
+  await openList(page, [id]);
+  // A commit as DiffusionCommitGraphView renders it (with PHP, in dev/phorge), with its menu.
+  const hash = `rDEMO${Date.now().toString(16)}`;
+  await addToPage(
+    page,
+    `<ul class="phui-oi-list-view phui-oi-list-flush "><li class="phui-oi phui-oi-no-bar phui-oi-enabled phui-oi-standard" data-sigil=""><div class="phui-oi-frame"><div class="fuel-grid-tablet fuel-grid-component"><div class="fuel-grid"><div class="fuel-grid-body"><div class="fuel-grid-row fuel-grid-cell-count-2"><div class="fuel-grid-cell"><div class="phui-oi-frame-content"><div class="phui-oi-content-box"><div class="phui-oi-table"><div class="phui-oi-table-row"><div class="phui-oi-col1"><div class="phui-oi-name"><span class="phui-oi-objname" data-sigil="ungrabbable">rDEMOabc123</span> <a href="/${hash}" class="phui-oi-link" title="Fix the detector">Fix the detector</a></div><div class="phui-oi-content"></div></div></div></div></div></div></div><div class="phui-oi-menu fuel-grid-cell"><div class="fuel-menu-component"><div class="fuel-menu"><div class="fuel-menu-item fuel-menu-item-background-color-orange has-link"><a href="/${hash}" class="fuel-menu-item-link"><span class="fuel-menu-item-icon"><span class="visual-only phui-icon-view phui-font-fa fa-exclamation-circle orange" aria-hidden="true"></span></span>Needs Audit</a></div></div></div></div></div></div></div></div></div></li></ul>`,
+  );
+  const commit = page.locator("li.phui-oi").filter({ has: page.locator(`a.phui-oi-link[href="/${hash}"]`) });
+  await commit.hover();
+  await commit.locator(".phuture-action a").click();
+  await page
+    .locator(".phuture-menu")
+    .getByRole("link", { name: /^Tomorrow/ })
+    .click();
+  await expect(commit).toBeHidden();
+  await expect(item(page, id)).toBeVisible();
+  await expect(count(page)).toHaveText("1");
+});
+
+test("choices like Choose Subtype of a new task have no snooze button", async ({ page }) => {
+  const [id] = await createTasks(page, "Beside the choices");
+  await openList(page, [id]);
+  // Clickable items as ManiphestTaskSubtaskController renders them (with PHP, in dev/phorge); on a page, and in a dialog.
+  const choice = (href: string, extra = "") =>
+    `<ul class="phui-oi-list-view phui-oi-list-flush phui-oi-list-big "><li class="phui-oi phui-oi-with-attrs phui-oi-no-bar phui-oi-enabled ${extra} phui-oi-standard" data-sigil="linked-container"><div class="phui-oi-frame"><div class="phui-oi-frame-content"><div class="phui-oi-content-box"><div class="phui-oi-table"><div class="phui-oi-table-row"><div class="phui-oi-col1"><div class="phui-oi-name"><a href="${href}" class="phui-oi-link" title="Bug Report">Bug Report</a></div><div class="phui-oi-content"><ul class="phui-oi-attributes"><li class="phui-oi-attribute">Bug</li></ul></div></div></div></div></div></div></div></li></ul>`;
+  // With a task as Phorge renders it, whose button shows that Phuture has seen what was added.
+  const task = await item(page, id).evaluate((li) => {
+    const copy = li.cloneNode(true) as HTMLElement;
+    copy.className = "phui-oi phui-oi-standard";
+    copy.querySelector(".phui-oi-actions")!.remove();
+    return `<ul class="phui-oi-list-view">${copy.outerHTML}</ul>`;
+  });
+  await addToPage(
+    page,
+    choice("/maniphest/task/edit/form/2/?parent=1", "phui-oi-linked-container") +
+      `<div class="aphront-dialog-view">${choice("/maniphest/task/edit/form/3/")}</div>` +
+      task,
+  );
+  await expect(item(page, id).last().locator(".phuture-action")).toHaveCount(1);
+  await expect(page.locator(`a.phui-oi-link[href^="/maniphest/task/edit/form/"]`)).toHaveCount(2);
+  await expect(page.locator(".phuture-action")).toHaveCount(2);
+});

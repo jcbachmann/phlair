@@ -1,34 +1,36 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { addPhlair, createTask, editor, openNewWikiPage, openWithEditor, textarea } from "./helpers";
+import { addPhlair, createTask, editor, openNewWikiPage, openWithEditor, settled, textarea } from "./helpers";
 
-// Whitespace differs, e.g. between the rows of tables.
-const normalize = (text: string) => text.replace(/\s+/g, "");
+// Whitespace differs, e.g. between the rows of tables; list markers are drawn by the browser.
+const normalize = (text: string) => text.replace(/[\s\u200b]+/g, "");
 
-test("renders the whole text like Phorge's preview", async ({ page }) => {
-  // The seeded wiki page uses every remarkup construct.
+test("shows the whole text like Phorge's preview, its markup hidden", async ({ page }) => {
+  // The seeded wiki page uses every remarkup construct. Tall, so all of its lines are drawn.
+  await page.setViewportSize({ width: 1280, height: 4000 });
   await openWithEditor(page, "/phriction/edit/2/");
+  await page.addStyleTag({ content: ".rme-editor { height: auto !important; max-height: none !important; }" });
   const preview = page.locator(".phui-remarkup-preview .phui-preview-body");
   await expect(preview).toContainText("A reply quote.");
-  // Without focus every block is rendered and nothing is shown as source.
-  await expect(page.locator(".rme-editor .cm-line").filter({ hasText: /\S/ })).toHaveCount(0);
+  await settled(page);
 
-  const rendered = normalize((await page.locator(".rme-block").allTextContents()).join(" "));
-  expect(rendered).toBe(normalize((await preview.textContent())!));
-  await expect(page.locator(".rme-block .remarkup-note")).toHaveCount(2);
-  await expect(page.locator(".rme-block a.phui-tag-view", { hasText: "T1" }).first()).toBeVisible();
-  await expect(page.locator(".rme-block img")).toBeVisible();
+  // Without the focus, all markup is hidden: the text is the preview's.
+  const shown = normalize((await editor(page).textContent())!);
+  expect(shown).toBe(normalize((await preview.textContent())!));
+  await expect(page.locator(".cm-line.remarkup-note.rme-first")).toHaveCount(2);
+  await expect(page.locator(".rme-editor a.phui-tag-view", { hasText: "T1" }).first()).toBeVisible();
+  await expect(page.locator(".rme-image-preview img")).toBeVisible();
 });
 
-test("shows the source of the clicked block and saves what is typed", async ({ page }) => {
+test("edits the clicked text and saves what is typed", async ({ page }) => {
   const slug = await openNewWikiPage(page, "Editing");
   await editor(page).click();
   await page.keyboard.type("= Plan =\n\nNOTE: Check T1 first.\n\nSome text.");
 
-  // Leaving the note renders it; clicking it shows its source again.
-  const note = page.locator(".rme-block .remarkup-note");
+  // The note looks like a note, also while it is edited.
+  const note = page.locator(".cm-line.rme-src-note");
   await expect(note).toContainText("Check T1 first.");
   await note.click();
-  await expect(page.locator(".cm-line.rme-src-note")).toHaveText("NOTE: Check T1 first.");
+  await expect(note).toHaveText("NOTE: Check T1 first.");
   await page.keyboard.press("End");
   await page.keyboard.type(" Then T2.");
 
@@ -54,36 +56,44 @@ test("entering a block does not move the text below it", async ({ page }) => {
     ].join("\n\n"),
   );
   const blur = () => page.evaluate(() => (document.activeElement as HTMLElement).blur());
-  const end = page.locator(".rme-block", { hasText: "End." });
+  const end = page.locator(".cm-line", { hasText: "End." });
   await blur();
+  await settled(page);
   const top = async () => (await end.boundingBox())!.y;
   const before = await top();
-  for (const kind of ["header", "note", "quote", "code", "list"]) {
-    await page.locator(`.rme-block-${kind}`).click({ position: { x: 3, y: 3 } });
-    await expect(page.locator(`.rme-block-${kind}`)).toHaveCount(0);
-    expect(Math.abs((await top()) - before), `moved by entering the ${kind}`).toBeLessThan(0.5);
+  for (const kind of ["src-h", "src-note", "src-quote", "block-code", "src-list"]) {
+    await page
+      .locator(`.rme-${kind}`)
+      .first()
+      .click({ position: { x: 3, y: 3 } });
+    if (kind === "block-code") {
+      // The code block, rendered by the server, shows its source.
+      await expect(page.locator(".rme-block-code")).toHaveCount(0);
+    }
+    expect(Math.abs((await top()) - before), `moved by entering ${kind}`).toBeLessThan(0.5);
     await blur();
-    await expect(page.locator(`.rme-block-${kind}`)).toHaveCount(1);
+    expect(Math.abs((await top()) - before), `moved by leaving ${kind}`).toBeLessThan(0.5);
   }
 });
 
 test("arrow keys move into rendered blocks instead of skipping them", async ({ page }) => {
   await openNewWikiPage(page, "Arrows");
   await editor(page).click();
-  await page.keyboard.type("First\n\nIMPORTANT: Second\n\nThird");
-  const source = page.locator(".cm-line.remarkup-important");
+  await page.keyboard.insertText("First\n\n```\nSecond\n```\n\nThird");
+  // The code block shows its source while the cursor is in it.
+  const source = page.locator(".cm-line.rme-src-code", { hasText: "Second" });
 
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("ArrowDown");
   await expect(source).toHaveCount(0);
   await page.keyboard.press("ArrowDown");
-  await expect(source).toHaveText("IMPORTANT: Second");
+  await expect(source).toHaveText("Second");
 
   await page.keyboard.press("Control+End");
   await page.keyboard.press("ArrowUp");
   await expect(source).toHaveCount(0);
   await page.keyboard.press("ArrowUp");
-  await expect(source).toHaveText("IMPORTANT: Second");
+  await expect(source).toHaveText("Second");
 });
 
 test("edits tables with Tab, Enter and the table toolbar", async ({ page }) => {
@@ -214,7 +224,7 @@ test("works in the comment form of a task", async ({ page }) => {
   await addPhlair(page);
   await editor(page).click();
   await page.keyboard.type("WARNING: Blocks T2.\n\nNext");
-  await expect(page.locator(".rme-block .remarkup-warning")).toContainText("Blocks T2.");
+  await expect(page.locator(".cm-line.remarkup-warning")).toContainText("Blocks T2.");
   await expect(textarea(page)).toHaveValue("WARNING: Blocks T2.\n\nNext");
 });
 
@@ -294,10 +304,9 @@ test("clicks below image thumbnails land on the clicked line", async ({ page }) 
   const sections = [1, 2, 3, 4].map((i) => `== Screenshot ${i}\n\n{F1}\n\nWhat screenshot ${i} shows.`);
   const quote = "> first line\n> second line\n> third line\n> fourth line";
   await page.keyboard.insertText([...sections, "= How it works", "1. One\n2. Two", "= Quote", quote].join("\n\n"));
-  await expect(page.locator(".rme-block img").first()).toBeVisible();
+  await expect(page.locator(".rme-image-preview img").first()).toBeVisible();
   // Edit the list first, then the quote, like moving through the page.
-  await page.locator(".rme-block", { hasText: "One" }).click();
-  await page.locator(".rme-block-quote").click();
+  await page.locator(".cm-line", { hasText: "One" }).click();
   for (const word of ["fourth", "second", "third", "first"]) {
     await page.locator(".cm-line.rme-src-quote", { hasText: word }).locator(`text=${word}`).click();
     const line = await textarea(page).evaluate(
@@ -372,7 +381,10 @@ test("formatting buttons add remarkup without knowing the syntax", async ({ page
 
   await button(/^Checklist/).click();
   await expectText("  - [ ] Title remove me");
+  // Only the checkbox goes: it is independent of the list.
   await button(/^Checklist/).click();
+  await expectText("  - Title remove me");
+  await page.keyboard.press("Control+Shift+8");
   await expectText("Title remove me");
 
   for (const text of ["NOTE: ", "IMPORTANT: ", "WARNING: ", ""]) {
@@ -414,7 +426,7 @@ test("places tooltips like Phorge's, also when the toolbar sticks to the top", a
   }
 });
 
-test("lists, highlighted and monospaced text look the same while editing", async ({ page }) => {
+test("lists, highlighted and monospaced text look like in Phorge's preview, also while editing", async ({ page }) => {
   await openNewWikiPage(page, "Same look");
   await editor(page).click();
   await page.keyboard.insertText(
@@ -429,55 +441,56 @@ test("lists, highlighted and monospaced text look the same while editing", async
   );
   const blur = () => page.evaluate(() => (document.activeElement as HTMLElement).blur());
   await blur();
-  const endTop = () => page.locator(".rme-block", { hasText: "End." }).evaluate((el) => el.getBoundingClientRect().top);
-  // The left edge of the first letter of each item.
-  const firstLetters = (selector: string) =>
-    page.locator(selector).evaluateAll((elements) =>
-      elements.map((el) => {
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const marker = el.querySelector(".rme-list-marker");
-          if (marker?.contains(node)) {
-            continue;
+  await settled(page);
+  await page.addStyleTag({ content: ".phui-remarkup-preview { display: block !important; }" });
+  const preview = page.locator(".phui-remarkup-preview .phui-preview-body .phabricator-remarkup");
+  await expect(preview).toContainText("End.");
+  const endTop = () => page.locator(".cm-line", { hasText: "End." }).evaluate((el) => el.getBoundingClientRect().top);
+  // The left edge of the first letter of each item, from the left edge of the text.
+  const firstLetters = (selector: string, container: string) =>
+    page.locator(selector).evaluateAll(
+      (elements, container) =>
+        elements.map((el) => {
+          const left = document.querySelector(container)!.getBoundingClientRect().left;
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const i = (node.textContent ?? "").search(/[^\s\u200b]/);
+            if (i >= 0) {
+              const range = document.createRange();
+              range.setStart(node, i);
+              range.setEnd(node, i + 1);
+              return Math.round(range.getBoundingClientRect().left - left);
+            }
           }
-          const i = (node.textContent ?? "").search(/\S/);
-          if (i >= 0) {
-            const range = document.createRange();
-            range.setStart(node, i);
-            range.setEnd(node, i + 1);
-            return Math.round(range.getBoundingClientRect().left);
-          }
-        }
-        return null;
-      }),
+          return null;
+        }),
+      container,
     );
+  const inPreview = await firstLetters(
+    ".phui-remarkup-preview .phui-preview-body li",
+    ".phui-remarkup-preview .phui-preview-body .phabricator-remarkup",
+  );
+  const items = () => firstLetters(".cm-line.rme-src-list", ".rme-editor .cm-line");
+  expect(await items()).toEqual(inPreview);
   const before = await endTop();
-  for (let i = 0; i < 4; i++) {
-    const list = page.locator(".rme-block-list").nth(i);
-    const rendered = await firstLetters(`.rme-block-list >> nth=${i} >> li`);
-    await list.click({ position: { x: 2, y: 2 } });
-    await expect(page.locator(".cm-line.rme-src-list").first()).toBeVisible();
-    // Wrapped lines of an item start where the item text starts, so the
-    // second row of the long item does not count as an item of its own. The
-    // first items show their source: the clicked one, and the others until
-    // they are rendered on their own.
-    const source = await firstLetters(".cm-line.rme-src-list");
-    expect(source, `list ${i}`).toEqual(rendered.filter((x) => x !== null).slice(0, source.length));
-    expect(await endTop(), `list ${i} moved the text below`).toBeCloseTo(before, 0);
-    await blur();
-    await expect(page.locator(".cm-line.rme-src-list")).toHaveCount(0);
+  for (const text of ["One", "Outer", "Open", "First"]) {
+    await page.locator(".cm-line.rme-src-list", { hasText: text }).first().click();
+    // Wrapped lines of an item start where the item text starts.
+    expect(await items(), `editing ${text}`).toEqual(inPreview);
+    expect(await endTop(), `editing ${text} moved the text below`).toBeCloseTo(before, 0);
   }
 
   const style = (selector: string) =>
     page.locator(selector).evaluate((el) => {
       const s = getComputedStyle(el);
-      return [s.backgroundColor, s.padding, s.fontFamily, s.fontSize];
+      // Font names with or without quotes, as each stylesheet writes them.
+      return [s.backgroundColor, s.padding, s.fontFamily.replace(/"/g, ""), s.fontSize];
     });
-  const highlight = await style(".rme-block .remarkup-highlight");
-  const monospaced = await style(".rme-block .remarkup-monospaced >> nth=0");
-  await page.locator(".rme-block", { hasText: "Text with" }).click();
-  // At the start of the line, so the cursor is on none of them.
-  await page.keyboard.press("Home");
+  const highlight = await style(".phui-remarkup-preview .remarkup-highlight");
+  const monospaced = await style(".phui-remarkup-preview .remarkup-monospaced >> nth=0");
+  await page.locator(".cm-line", { hasText: "Text with" }).click();
+  // At the start of the text, so the cursor is on none of them.
+  await page.keyboard.press("Control+Home");
   expect(await style(".cm-line .remarkup-highlight")).toEqual(highlight);
   expect(await style(".cm-line .remarkup-monospaced >> nth=0")).toEqual(monospaced);
   // Each monospaced text is one element (its backticks hidden), with nothing styled inside, like URLs.
@@ -525,7 +538,7 @@ test.describe("tables", () => {
     expect(await source(page)).toBe(`Before.\n\n${TABLE.replace("| Fe |", "| Ferrum is iron |")}\n\nAfter.`);
     // The cell being edited shows its remarkup, the others their rendered content.
     await cell(page, "Ka").first().click();
-    await expect(cell(page, "**Ka**")).toBeFocused();
+    await expect(cell(page, "**Ka**").locator(".cm-content")).toBeFocused();
     await expect(cell(page, "Ferrum is iron")).toBeVisible();
     await page.keyboard.press("Control+z");
     expect(await source(page)).toBe(`Before.\n\n${TABLE}\n\nAfter.`);
@@ -550,13 +563,13 @@ test.describe("tables", () => {
   });
 
   test("arrow keys move into, through and out of a table", async ({ page }) => {
-    await page.locator(".rme-block", { hasText: "Before." }).click();
+    await page.locator(".cm-line", { hasText: "Before." }).click();
     await page.keyboard.press("End");
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
-    await expect(cell(page, "Element")).toBeFocused();
+    await expect(cell(page, "Element").locator(".cm-content")).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(cell(page, "Fe")).toBeFocused();
+    await expect(cell(page, "Fe").locator(".cm-content")).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
     // Out of the table: the text cursor is on the line after it.
@@ -610,10 +623,13 @@ test.describe("tables", () => {
     await page.keyboard.type("O");
     expect(await source(page)).toBe(`Before.\n\n${TABLE.replace("| Cu |", "| Cu2O |")}\n\nAfter.`);
     await page.locator(".rme-table-bar").getByRole("button", { name: "Edit the table as a table" }).click();
-    await expect(cell(page, "Cu2O")).toBeFocused();
+    await expect(cell(page, "Cu2O").locator(".cm-content")).toBeFocused();
     // The choice is remembered: other tables are then edited as text too.
     await page.locator(".rme-table-bar").getByRole("button", { name: "Edit the table as text" }).click();
+    // Tall, so all of its lines are drawn.
+    await page.setViewportSize({ width: 1280, height: 4000 });
     await openWithEditor(page, "/phriction/edit/2/");
+    await page.addStyleTag({ content: ".rme-editor { height: auto !important; max-height: none !important; }" });
     await expect(page.locator(".rme-block-table table.remarkup-table")).toBeVisible();
     await expect(page.locator(".rme-table-editor")).toHaveCount(0);
   });
@@ -636,23 +652,24 @@ test.describe("images", () => {
     await editor(page).click();
     await page.keyboard.insertText("Before.\n\n{F1}\n\nAfter.");
     await page.evaluate(() => (document.activeElement as HTMLElement).blur());
-    await expect(page.locator(".rme-block img")).toBeVisible();
+    await expect(page.locator(".rme-image-preview img")).toBeVisible();
   });
 
-  test("keep showing while their text is edited", async ({ page }) => {
+  test("show their reference only while it is edited, and nothing moves", async ({ page }) => {
     const after = () =>
-      page.locator(".rme-block", { hasText: "After." }).evaluate((el) => el.getBoundingClientRect().top);
+      page.locator(".cm-line", { hasText: "After." }).evaluate((el) => el.getBoundingClientRect().top);
     const before = await after();
-    await page.locator(".rme-block img").click();
-    await expect(page.locator(".cm-line", { hasText: "{F1}" })).toBeVisible();
+    const line = page.locator(".cm-line").nth(2);
+    await expect(line).toHaveText("");
+    await line.click();
+    await expect(line).toHaveText("{F1}");
     await expect(page.locator(".rme-image-preview img")).toBeVisible();
-    // Only the line of the source is added.
-    expect(Math.abs((await after()) - before)).toBeLessThan(25);
+    expect(await after()).toBeCloseTo(before, 0);
   });
 
   test("have a context menu to change size, layout and alt text", async ({ page }) => {
     const choose = async (label: string) => {
-      await page.locator(".rme-block img").first().click({ button: "right" });
+      await page.locator(".rme-image-preview img").first().click({ button: "right" });
       await page.locator(".rme-image-menu a", { hasText: label }).click();
     };
     const source = () => textarea(page).inputValue();

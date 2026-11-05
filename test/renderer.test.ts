@@ -96,4 +96,22 @@ describe("BlockRenderer", () => {
     await settle();
     expect(rendered).toBe(0);
   });
+
+  it("tells when blocks start and stop waiting for the server", async () => {
+    const { render } = server();
+    const busy: boolean[] = [];
+    const renderer = new BlockRenderer(
+      render,
+      () => {},
+      (b) => busy.push(b),
+    );
+    renderer.request([item("Waits")]);
+    expect(renderer.busy).toBe(true);
+    await settle();
+    expect(renderer.busy).toBe(false);
+    // Cached: nothing to wait for.
+    renderer.request([item("Waits")]);
+    await settle();
+    expect(busy).toEqual([true, false]);
+  });
 });

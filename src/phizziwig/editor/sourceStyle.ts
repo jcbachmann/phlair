@@ -32,6 +32,16 @@ const INLINE: [RegExp, Decoration][] = [
 
 const LIST_MARKER = Decoration.mark({ class: "rme-list-marker", inclusive: true });
 
+/**
+ * A line that Phorge shows on the same line as the one before (joined with a
+ * space): the lines of a note, and the lines continuing a list item. Remarkup
+ * has no line breaks in those; a blank line ends them.
+ */
+const JOINED = Decoration.line({
+  class: "rme-joined",
+  attributes: { title: "Phorge shows this line on the line before it. A blank line ends the note or list item." },
+});
+
 const MONOSPACED = new Set(["code", "literal", "interpreter", "html-table"]);
 
 function headerLevel(text: string): number {
@@ -68,6 +78,9 @@ function decorateBlock(view: EditorView, block: Block, ranges: Range<Decoration>
 
   for (let n = first.number; n <= last.number; n++) {
     const line = doc.line(n);
+    if (block.kind === "note" && n > first.number) {
+      ranges.push(JOINED.range(line.from));
+    }
     if (lineClass) {
       const edge = (n === first.number ? " rme-first" : "") + (n === last.number ? " rme-last" : "");
       ranges.push(Decoration.line({ class: lineClass + edge }).range(line.from));
@@ -97,12 +110,19 @@ function decorateList(view: EditorView, block: Block, ranges: Range<Decoration>[
   // The level of each line: that of its item, as Phorge nests the list.
   const items = parseList(lines.map((line) => line.text));
   const classes = lines.map(() => ["rme-src-list", "rme-list-depth-0"]);
+  const joined = new Set<number>();
   items.forEach((item, k) => {
     const depth = Math.min(item.path.length - 1, 4);
     for (let i = item.first; i <= item.last; i++) {
+      if (i > item.first) {
+        joined.add(i);
+      }
       classes[i] = ["rme-src-list", `rme-list-depth-${depth}`];
       if (item.mark !== null) {
         classes[i].push("rme-list-check");
+      }
+      if (item.mark) {
+        classes[i].push("rme-list-checked");
       }
     }
     const next = items[k + 1];
@@ -118,6 +138,9 @@ function decorateList(view: EditorView, block: Block, ranges: Range<Decoration>[
   lines.forEach((line, i) => {
     if (line.text.trim()) {
       ranges.push(Decoration.line({ class: classes[i].join(" ") }).range(line.from));
+      if (joined.has(i)) {
+        ranges.push(JOINED.range(line.from));
+      }
     }
     decorateLine(block, line.from, line.text, i === 0, ranges);
   });
@@ -129,7 +152,14 @@ function mark(ranges: Range<Decoration>[], from: number, to: number, cls: string
   }
 }
 
-function decorateLine(block: Block, from: number, text: string, isFirst: boolean, ranges: Range<Decoration>[]): void {
+/** The styling of a line of a block's source; also of a table cell's editor (inlinePreview.ts). */
+export function decorateLine(
+  block: Block,
+  from: number,
+  text: string,
+  isFirst: boolean,
+  ranges: Range<Decoration>[],
+): void {
   let match: RegExpExecArray | null;
   switch (block.kind) {
     case "code":

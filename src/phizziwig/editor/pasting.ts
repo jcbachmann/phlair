@@ -17,7 +17,7 @@ import { hasText, uploadInPlace, uploadPlaceholder } from "./upload";
 let plainUntil = 0;
 
 /** A single URL pasted over selected text on one line, as a link with that text. */
-function linkSelection(view: EditorView, text: string): boolean {
+export function linkSelection(view: EditorView, text: string): boolean {
   const { state } = view;
   const range = state.selection.main;
   const selected = state.sliceDoc(range.from, range.to);

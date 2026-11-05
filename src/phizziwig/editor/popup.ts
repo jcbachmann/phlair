@@ -8,6 +8,8 @@ export interface PopupItem {
   label: string;
   /** Font Awesome classes, e.g. "fa-user bluegrey". */
   icon?: string;
+  /** The icon's color, which the menu's own style would override. */
+  iconColor?: string;
   /** Color of a user's availability dot, e.g. "red". */
   dot?: string;
   /** Shown dimmed, like closed tasks. */
@@ -15,6 +17,10 @@ export interface PopupItem {
   /** Shown after the label, dimmed: a shortcut or a hint. */
   detail?: string;
   href?: string;
+  /** A picture shown with the label, e.g. of an image macro. */
+  image?: string;
+  /** Its group: a heading above the first item of each group. */
+  group?: string;
 }
 
 function icon(classes: string): HTMLElement {
@@ -66,8 +72,10 @@ export class Popup {
   }
 
   setItems(items: PopupItem[], focus: number | null, pick: (index: number) => void): void {
+    // A long list (of icons, of pictures) is shorter and scrolls; pictures load when scrolled to.
+    this.node.classList.toggle("rme-popup-long", items.length > 12 || items.some((item) => item.image));
     this.list.replaceChildren(
-      ...items.map((item, i) => {
+      ...items.flatMap((item, i) => {
         const node = document.createElement("a");
         node.className = "jx-result" + (i === focus ? " focused" : "");
         node.id = this.optionId(i);
@@ -75,8 +83,20 @@ export class Popup {
         node.setAttribute("aria-selected", String(i === focus));
         node.href = item.href || "#";
         const display = document.createElement("span");
-        if (item.icon) {
-          display.append(icon(item.icon));
+        if (item.image) {
+          const image = document.createElement("img");
+          image.className = "rme-popup-image";
+          image.src = item.image;
+          image.alt = "";
+          image.loading = "lazy";
+          display.classList.add("rme-popup-with-image");
+          display.append(image);
+        } else if (item.icon) {
+          const glyph = icon(item.icon);
+          if (item.iconColor) {
+            glyph.style.color = item.iconColor;
+          }
+          display.append(glyph);
         }
         if (item.dot) {
           const dot = document.createElement("span");
@@ -100,7 +120,14 @@ export class Popup {
           event.preventDefault();
           pick(i);
         });
-        return node;
+        if (!item.group || item.group === items[i - 1]?.group) {
+          return [node];
+        }
+        const heading = document.createElement("div");
+        heading.className = "rme-popup-group";
+        heading.setAttribute("role", "presentation");
+        heading.textContent = item.group;
+        return [heading, node];
       }),
     );
   }
