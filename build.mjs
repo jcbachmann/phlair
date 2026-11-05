@@ -68,9 +68,8 @@ ${updateUrl ? `// @updateURL    ${updateUrl}\n// @downloadURL  ${updateUrl}\n` :
 const manifest = {
   manifest_version: 3,
   name: "Phlair",
+  // Without version_name (the label): Firefox warns about it when installing.
   version,
-  // Shown by Chrome instead of the version; Firefox ignores it.
-  version_name: label,
   description: pkg.description,
   icons: Object.fromEntries(ICON_SIZES.map((size) => [size, `icons/icon-${size}.png`])),
   // Firefox grants host permissions at install; matches alone need the user's consent.

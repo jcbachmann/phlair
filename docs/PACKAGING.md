@@ -34,8 +34,7 @@ Every build is numbered by its commit, without a release (`scripts/version.mjs`)
 `package.json` with the number of commits up to the built one as a fourth part, e.g. `0.1.0.42`. It rises with every
 commit on `main`, and browsers and userscript managers compare it as numbers, so each build updates the one before.
 The label adds the commit and its date, `0.1.0.42 (1a2b3c4, 2026-11-05)`, with `-dirty` when the working tree has
-uncommitted changes. The file names carry the version; the label is in the manifest's `version_name` (shown by
-Chrome), at the top of the Phorge library's `phlair.js`, in the tooltip of Phizziwig's wand button and in feedback
+uncommitted changes. The file names carry the version; the label is at the top of the Phorge library's `phlair.js`, in the tooltip of Phizziwig's wand button and in feedback
 tasks. A development build adds its build time. A release build has no time in it: the same commit gives the same
 files, which AMO's source review expects, and an unchanged script keeps its URL in Phorge. The build needs the whole
 git history (a shallow clone fails); without git (e.g. sources from `git archive`) the version is `package.json`'s
