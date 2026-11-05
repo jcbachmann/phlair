@@ -17,6 +17,7 @@ services:
       MYSQL_HOST: db
       MYSQL_PASSWORD: phabricator
       BASE_URI: http://phorge.localhost:8098/
+      FILE_URI: http://files.localhost:8098/
     volumes:
       # Lets scripts/generate-block-fixtures.mjs run the real block splitter.
       - ../../test/php:/opt/remarkup-editor-test:ro

@@ -4,6 +4,9 @@ import { execFileSync } from "node:child_process";
 
 export const BASE_URL = "http://phorge.localhost:8098";
 
+/** Where the instance serves its files (security.alternate-file-domain), as production does. */
+export const FILES_URL = "http://files.localhost:8098";
+
 export const AUTH_FILE = authFile("admin");
 
 /** The login of a user: "admin" for most tests, "alice" for the editor installed in Phorge (seed.php). */

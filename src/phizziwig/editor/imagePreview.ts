@@ -1,5 +1,6 @@
-// The images of blocks being edited, shown with their source as they are
-// in the rendered text: below or above it, or floating beside it.
+// The images of blocks being edited (and the cards of embedded files that
+// are not images), shown with their source as they are in the rendered
+// text: below or above it, or floating beside it.
 
 import { type EditorState, StateEffect, StateField } from "@codemirror/state";
 import { ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
@@ -9,20 +10,25 @@ import { knownHeight, rememberHeight } from "./heights";
 
 const embedCache = new Map<string, string | null>();
 
-/** The embedded images of rendered HTML, or null if it has none. */
+const EMBED = '[class*="phabricator-remarkup-embed-layout"]';
+
+/**
+ * The embedded files of rendered HTML (images, and the cards of other
+ * files), and its image macros and memes; null if it has none.
+ */
 export function imagesOf(html: string): string | null {
-  if (!html.includes("<img") || !(html.includes("data-rme-file") || html.includes("phabricator-remarkup-macro"))) {
+  if (!html.includes("data-rme-file") && !(html.includes("<img") && html.includes("phabricator-remarkup-macro"))) {
     return null;
   }
   let images = embedCache.get(html);
   if (images === undefined) {
-    // Embedded files, and image macros and memes, in their order.
-    const found = Array.from(
-      parseHtml(html).querySelectorAll('[class*="phabricator-remarkup-embed-layout"], img.phabricator-remarkup-macro'),
+    // In their order; not the parts of a file's card (its icon, name, link).
+    const found = Array.from(parseHtml(html).querySelectorAll(`${EMBED}, img.phabricator-remarkup-macro`)).filter(
+      (el) => !el.parentElement?.closest(EMBED),
     );
     images =
       found
-        .filter((el) => el.tagName === "IMG" || el.querySelector("img[src]"))
+        .filter((el) => el.tagName === "IMG" || el.querySelector("img[src]") || el.matches("[data-rme-file]"))
         .map((el) => {
           if (el.tagName === "IMG") {
             return `<p>${el.outerHTML}</p>`;

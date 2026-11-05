@@ -10,7 +10,7 @@
 //   hide theirs, list items show their bullet, number or checkbox (which can
 //   be clicked);
 // - file embeds ("{F12}"), memes and image macros hide while their images
-//   show (livePreview.ts).
+//   (or a file's card) show (livePreview.ts).
 // Without the focus, nothing shows its source.
 // A marker before text (a quote's "> ", a list item's "- [ ] ") shows when
 // the cursor is in it or before it, not at the start of the text after it.
@@ -316,7 +316,7 @@ function tokenPieces(
       case "embed":
       case "meme":
       case "macro": {
-        // Images hide their reference while they show; other embeds ("{T12}") are cards.
+        // Files, memes and macros hide their reference while their image (a file's card) shows; other embeds ("{T12}") are cards.
         const image =
           token.kind === "meme"
             ? 'alt="Macro '

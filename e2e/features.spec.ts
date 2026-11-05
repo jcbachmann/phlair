@@ -1,8 +1,8 @@
 // Regression tests of fixed bugs and tests of the editing aids: shortcuts,
 // insert menu, pickers, pasting, checklists, themes and narrow windows.
 
-import { readFileSync } from "node:fs";
-import { expect, type Page, test } from "@playwright/test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import {
   addPhlair,
   conduit,
@@ -16,6 +16,7 @@ import {
   settled,
   textarea,
 } from "./helpers";
+import { FILES_URL } from "./env";
 
 const blur = (page: Page) => page.evaluate(() => (document.activeElement as HTMLElement).blur());
 const source = (page: Page) => textarea(page).inputValue();
@@ -891,13 +892,37 @@ test.describe("Dark Reader", () => {
         styles.filter((s) => s.textContent!.includes(".rme-editor")).forEach((s) => s.classList.add("darkreader")),
       );
     await page.evaluate(DARK_READER);
-    await page.evaluate(() => {
+    await page.evaluate((files) => {
+      type Request = { url: string; responseType: "text" | "data-url" };
       const reader = (
-        window as unknown as { DarkReader: { setFetchMethod(f: typeof fetch): void; enable(theme: object): void } }
+        window as unknown as {
+          DarkReader: {
+            setFetchMethod(f: typeof fetch): void;
+            enable(theme: object): void;
+            Plugins?: { fetch(request: Request): Promise<string> };
+          };
+        }
       ).DarkReader;
       reader.setFetchMethod(window.fetch);
+      // The extension fetches the stylesheets of the file domain itself (this
+      // copy skips them over http with a port); the page may only fetch from
+      // its own domain, which has them too.
+      reader.Plugins = {
+        async fetch({ url, responseType }) {
+          const response = await window.fetch(url.replace(files, location.origin));
+          if (responseType === "text") {
+            return response.text();
+          }
+          const blob = await response.blob();
+          return new Promise((resolve) => {
+            const file = new FileReader();
+            file.onload = () => resolve(file.result as string);
+            file.readAsDataURL(blob);
+          });
+        },
+      };
       reader.enable({ brightness: 100, contrast: 90, sepia: 10 });
-    });
+    }, FILES_URL);
     // The editor takes the dark background of the page.
     await expect
       .poll(() => page.locator(".rme-editor").evaluate((el) => getComputedStyle(el).backgroundColor))
@@ -1903,7 +1928,7 @@ test.describe("eighth test round", () => {
       node.dispatchEvent(new DragEvent("dragover", init));
       node.dispatchEvent(new DragEvent("drop", init));
     });
-    await expect.poll(() => source(page)).toMatch(/^\| a \| b \|\n\| c \| d\{F\d+\} \|$/);
+    await expect.poll(() => source(page)).toMatch(/^\| a \| b \|\n\| c \| d \{F\d+\} \|$/);
     const metadata = await page.locator('input[name="content_metadata"]').inputValue();
     expect(JSON.parse(metadata).attachedFilePHIDs).toHaveLength(1);
 
@@ -1918,7 +1943,7 @@ test.describe("eighth test round", () => {
           new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }),
         );
       });
-      await expect.poll(() => source(page)).toMatch(/^\| a \| b \|\n\| c\{F\d+\} \| d\{F\d+\} \|$/);
+      await expect.poll(() => source(page)).toMatch(/^\| a \| b \|\n\| c \{F\d+\} \| d \{F\d+\} \|$/);
     }
   });
 
@@ -2692,7 +2717,7 @@ test.describe("nineteenth test round", () => {
       route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({
-          result: Object.fromEntries(names.map((name) => [name, { uri: `/rme-test-macro/${name}.png` }])),
+          result: Object.fromEntries(names.map((name) => [name, { uri: `${FILES_URL}/rme-test-macro/${name}.png` }])),
           error_code: null,
           error_info: null,
         }),
@@ -3051,6 +3076,96 @@ test.describe("uploads", () => {
     });
     return release;
   }
+
+  /** Drags files over an element of the editor and drops them there; whether the drag was taken. */
+  async function dragFiles(
+    target: Locator,
+    files: { name: string; type: string; base64: string }[],
+    at: "start" | "end" = "start",
+  ): Promise<boolean> {
+    return target.evaluate(
+      (node, [files, at]) => {
+        const data = new DataTransfer();
+        for (const { name, type, base64 } of files) {
+          data.items.add(new File([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], name, { type }));
+        }
+        const box = node.getBoundingClientRect();
+        const init = {
+          bubbles: true,
+          cancelable: true,
+          clientX: at === "start" ? box.left + 3 : box.right - 3,
+          clientY: at === "start" ? box.top + 3 : box.bottom - 3,
+          dataTransfer: data,
+        };
+        // Browsers drop only where the drag over it was taken.
+        const over = new DragEvent("dragover", init);
+        node.dispatchEvent(over);
+        if (over.defaultPrevented) {
+          node.dispatchEvent(new DragEvent("drop", init));
+        }
+        return over.defaultPrevented;
+      },
+      [files, at] as const,
+    );
+  }
+  const png = (name: string) => ({ name, type: "image/png", base64: PNG_BYTES.toString("base64") });
+
+  test("files dragged on the text or on what shows rendered are dropped there", async ({ page }) => {
+    await openNewWikiPage(page, "Drop targets");
+    await editor(page).click();
+    await page.keyboard.type("First\n\n{F1}\n\nLast");
+    await page.keyboard.press("Control+Home");
+    const image = page.locator(".rme-image-preview img").first();
+    await expect(image).toBeVisible();
+    // On the image, which CodeMirror leaves to the browser (it would open the file).
+    expect(await dragFiles(image, [png("on-image.png")])).toBe(true);
+    await expect.poll(() => source(page)).toMatch(/^First\n\n\{F\d+\}\n\n\{F1\}\n\nLast$/);
+    // On the text.
+    expect(await dragFiles(page.locator(".cm-line", { hasText: "Last" }), [png("on-text.png")], "end")).toBe(true);
+    await expect.poll(() => source(page)).toMatch(/\n\nLast \{F\d+\}$/);
+  });
+
+  test("a file dropped next to words is set apart from them, so Phorge embeds it", async ({ page }) => {
+    await openNewWikiPage(page, "Drop apart");
+    await editor(page).click();
+    await page.keyboard.type("Before after");
+    // At the end of "after": "after{F1}" would be "after{", a reference and "}".
+    await dragFiles(page.locator(".cm-line", { hasText: "Before" }), [png("apart.png")], "end");
+    await expect.poll(() => source(page)).toMatch(/^Before after \{F\d+\}$/);
+    // The reference hides behind its image.
+    await page.keyboard.press("Control+Home");
+    await expect(page.locator(".rme-image-preview img")).toBeVisible();
+  });
+
+  test("a file dragged by the browser into a word goes after the word", async ({ page, browserName }, testInfo) => {
+    test.skip(browserName !== "chromium", "Only Chromium's protocol drags files like a user");
+    await openNewWikiPage(page, "Real drag");
+    await editor(page).click();
+    await page.keyboard.type("Some text here");
+    const box = (await page.locator(".cm-line", { hasText: "Some text" }).boundingBox())!;
+    const file = testInfo.outputPath("dragged.txt");
+    writeFileSync(file, "hello");
+    const cdp = await page.context().newCDPSession(page);
+    // Into "Som|e".
+    const at = { x: box.x + 30, y: box.y + box.height / 2, data: { items: [], files: [file], dragOperationsMask: 1 } };
+    for (const type of ["dragEnter", "dragOver", "drop"] as const) {
+      await cdp.send("Input.dispatchDragEvent", { type, ...at });
+    }
+    await expect.poll(() => source(page)).toMatch(/^Some \{F\d+\} text here$/);
+  });
+
+  test("an embedded file that is not an image shows its card, its reference hidden", async ({ page }) => {
+    await openNewWikiPage(page, "Text file");
+    await editor(page).click();
+    await page.keyboard.type("Notes:\n\n");
+    const name = `notes-${Date.now()}.txt`;
+    await dragFiles(editor(page), [{ name, type: "text/plain", base64: btoa("hello") }], "end");
+    await expect.poll(() => source(page)).toMatch(/^Notes:\n\n\{F\d+\}$/);
+    await page.keyboard.press("Control+Home");
+    const card = page.locator(".rme-image-preview .phabricator-remarkup-embed-layout-link");
+    await expect(card).toContainText(name);
+    await expect(page.locator(".rme-editor .cm-line", { hasText: /\{F\d+\}/ })).toHaveCount(0);
+  });
 
   test("a file over 4 MB is uploaded in chunks, with its progress shown", async ({ page }) => {
     await openNewWikiPage(page, "Chunks");

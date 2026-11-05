@@ -4,7 +4,7 @@
 
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { conduit } from "../phorge";
+import { conduit, stylesheetText } from "../phorge";
 import { insertBlock } from "./formatting";
 import { previewField } from "./livePreview";
 import { openPicker, search, type Target } from "./picker";
@@ -155,30 +155,49 @@ function colorValue(color: string): string {
 }
 
 /** The names of the page's Font Awesome icons ("camera"), from its stylesheets; loaded once. */
-let iconNames: string[] | null = null;
+let iconNames: Promise<string[]> | null = null;
 
-function loadIconNames(): string[] {
-  if (iconNames?.length) {
-    return iconNames;
+/** The icons a stylesheet's rules (".fa-camera:before") name. */
+function iconsIn(css: string, names: Set<string>): void {
+  for (const match of css.matchAll(/\.fa-([a-z0-9-]+)::?before/g)) {
+    names.add(match[1]);
   }
+}
+
+async function loadIconNames(): Promise<string[]> {
   const names = new Set<string>();
+  const fetched: Promise<void>[] = [];
   for (const sheet of Array.from(document.styleSheets)) {
-    let rules: CSSRuleList;
     try {
-      rules = sheet.cssRules;
-    } catch {
-      // A stylesheet of another site.
-      continue;
-    }
-    for (const rule of Array.from(rules)) {
-      if (rule instanceof CSSStyleRule && rule.selectorText.includes(":before")) {
-        for (const match of rule.selectorText.matchAll(/\.fa-([a-z0-9-]+)::?before/g)) {
-          names.add(match[1]);
+      for (const rule of Array.from(sheet.cssRules)) {
+        if (rule instanceof CSSStyleRule && rule.selectorText.includes(":before")) {
+          iconsIn(rule.selectorText, names);
         }
+      }
+    } catch {
+      // From the file domain, another site: the same stylesheet from this Phorge.
+      if (sheet.href) {
+        fetched.push(
+          stylesheetText(sheet.href).then(
+            (css) => iconsIn(css, names),
+            () => {},
+          ),
+        );
       }
     }
   }
-  iconNames = [...names].sort();
+  await Promise.all(fetched);
+  return [...names].sort();
+}
+
+function iconNamesOnce(): Promise<string[]> {
+  iconNames ??= loadIconNames().then((names) => {
+    // Found none (e.g. while offline): try again next time.
+    if (!names.length) {
+      iconNames = null;
+    }
+    return names;
+  });
   return iconNames;
 }
 
@@ -186,7 +205,7 @@ function loadIconNames(): string[] {
  * Icons found by name: a color word ("camera red") colors it, "spin" makes it
  * spin. The name typed is offered also when the page's icons are unknown.
  */
-export function findIcons(query: string): Target[] {
+export async function findIcons(query: string): Promise<Target[]> {
   const words = query
     .toLowerCase()
     .split(/[\s,]+/)
@@ -194,7 +213,7 @@ export function findIcons(query: string): Target[] {
   const color = words.find((word) => ICON_COLORS.includes(word));
   const spin = words.includes("spin");
   const terms = words.filter((word) => word !== color && word !== "spin");
-  const names = loadIconNames();
+  const names = await iconNamesOnce();
   const found = names
     .filter((name) => terms.every((term) => name.includes(term)))
     .sort((a, b) => Number(!a.startsWith(terms[0] ?? "")) - Number(!b.startsWith(terms[0] ?? "")));
@@ -218,7 +237,7 @@ export function insertIcon(view: EditorView): boolean {
     headText: "Icon:",
     placeholder: "Search icons; add a color (red, blue, green, …) or spin",
     range: view.state.selection.main,
-    search: async (query) => findIcons(query),
+    search: findIcons,
     pick: (target, range) => {
       view.dispatch({
         changes: { from: range.from, to: range.to, insert: target.reference },

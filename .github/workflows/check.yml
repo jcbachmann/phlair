@@ -62,7 +62,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps firefox chromium
       # Browsers and curl know that *.localhost is this machine, Node does not.
-      - run: echo "127.0.0.1 phorge.localhost" | sudo tee -a /etc/hosts
+      - run: echo "127.0.0.1 phorge.localhost files.localhost" | sudo tee -a /etc/hosts
       # The library's script, which the container loads, before it starts.
       - run: npm run build:dev
       - name: Start Phorge

@@ -16,6 +16,9 @@ bin/config set security.outbound-blacklist '[]'
 # which need a storage engine for large files (the database's takes 1 MB).
 mkdir -p /var/phorge-files && chown www-data:www-data /var/phorge-files
 bin/config set storage.local-disk.path /var/phorge-files
+# Files from a domain of their own, as in production (the browser knows
+# that *.localhost is this machine).
+bin/config set security.alternate-file-domain "$FILE_URI"
 
 until mysqladmin ping -h "$MYSQL_HOST" -uroot -p"$MYSQL_PASSWORD" --silent; do sleep 1; done
 bin/storage upgrade --force

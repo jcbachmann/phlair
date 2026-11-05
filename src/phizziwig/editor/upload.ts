@@ -2,7 +2,7 @@
 // below the text shows the uploads running and the ones that failed; the
 // form is sent only when they are done.
 
-import { EditorView, type Panel, showPanel } from "@codemirror/view";
+import { EditorView, type Panel, showPanel, ViewPlugin } from "@codemirror/view";
 import { parseHtml } from "../html";
 import { addAttachedFile, notifyChange, submitForm, type UploadedFile, uploadFile } from "../phorge";
 import { hostTextarea } from "./host";
@@ -315,15 +315,52 @@ export async function uploadFiles(
   }
 }
 
+/** A character of a word, as Phorge's rules see it ("\w" with Unicode). */
+const WORD = /[\p{L}\p{N}_]/u;
+
+/**
+ * A file's placeholder (later its reference) to insert between two
+ * characters, with a space where it would touch a word: Phorge embeds
+ * "{F12}" only between non-word characters ("x{F12}" is "x{", a reference
+ * to F12 and "}").
+ */
+export function separated(before: string, placeholder: string, after: string): string {
+  return (WORD.test(before) ? " " : "") + placeholder + (WORD.test(after) ? " " : "");
+}
+
 /** Uploads files into the text at a position, like Phorge's textarea. */
 function upload(view: EditorView, files: File[], pos: number): Promise<void> {
   return uploadFiles(view, files, (placeholder, after) => {
     pos = after ?? pos;
-    const before = view.state.doc.sliceString(Math.max(0, pos - 1), pos);
-    // After another file, on a line of its own.
-    const text = (before === "}" ? "\n\n" : "") + placeholder;
+    const doc = view.state.doc;
+    const before = doc.sliceString(Math.max(0, pos - 1), pos);
+    const next = doc.sliceString(pos, pos + 3);
+    // Next to another file (e.g. dropped on its image), in a paragraph of its own.
+    const text =
+      before === "}"
+        ? `\n\n${placeholder}`
+        : /^\{F\d/.test(next)
+          ? `${placeholder}\n\n`
+          : separated(before, placeholder, next.charAt(0));
     view.dispatch({ changes: { from: pos, insert: text }, userEvent: "input.upload" });
   });
+}
+
+/** Uploads files dropped at a point of the editor, at the nearest place in the text. */
+function dropFiles(view: EditorView, event: DragEvent, files: File[]): void {
+  event.preventDefault();
+  if (view.state.readOnly) {
+    return;
+  }
+  const point = { x: event.clientX, y: event.clientY };
+  let pos = view.posAtCoords(point) ?? view.posAtCoords(point, false);
+  // Not into a word: after it.
+  const doc = view.state.doc;
+  const inWord = (at: number) => WORD.test(doc.sliceString(at - 1, at)) && WORD.test(doc.sliceString(at, at + 1));
+  while (inWord(pos)) {
+    pos++;
+  }
+  void upload(view, files, pos);
 }
 
 /** Whether pasted data has text besides its files, in its HTML. */
@@ -348,9 +385,38 @@ export const fileUpload = EditorView.domEventHandlers({
     if (!files.length || !view.state.facet(hostTextarea)) {
       return false;
     }
-    event.preventDefault();
-    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.head;
-    void upload(view, files, pos);
+    dropFiles(view, event, files);
     return true;
   },
+});
+
+/**
+ * Files dragged anywhere on the editor are dropped into it: also on what it
+ * shows rendered (images, blocks), which CodeMirror leaves to the browser,
+ * and that would open the file in place of the page. What handled the drop
+ * already (the text, a table) is left alone.
+ */
+export const fileDropTarget = ViewPlugin.define((view) => {
+  // As Phorge's drop targets do: take the drag, as a copy ("or Chrome refuses
+  // to drop files from the download shelf").
+  const dragover = (event: DragEvent) => {
+    if (!event.defaultPrevented && view.state.facet(hostTextarea) && event.dataTransfer?.types.includes("Files")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  };
+  const drop = (event: DragEvent) => {
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (!event.defaultPrevented && view.state.facet(hostTextarea) && files.length) {
+      dropFiles(view, event, files);
+    }
+  };
+  view.dom.addEventListener("dragover", dragover);
+  view.dom.addEventListener("drop", drop);
+  return {
+    destroy() {
+      view.dom.removeEventListener("dragover", dragover);
+      view.dom.removeEventListener("drop", drop);
+    },
+  };
 });

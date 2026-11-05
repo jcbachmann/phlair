@@ -38,7 +38,7 @@ import {
   type Table,
 } from "../table";
 import { hostTextarea } from "./host";
-import { hasText, submitWhenUploaded, uploadFiles } from "./upload";
+import { hasText, separated, submitWhenUploaded, uploadFiles } from "./upload";
 import { keepsFocus } from "./focus";
 import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { openLinkOnModClick } from "./openLink";
@@ -857,8 +857,9 @@ function uploadToCell(view: EditorView, cell: HTMLElement, files: File[]): Promi
     if (after !== null) {
       view.dispatch({ changes: { from: after, insert: ` ${placeholder}` }, userEvent: "input.upload" });
     } else if (cell.isConnected) {
-      const [from, to] = cellSelection(cell) ?? [cellText(cell).length, cellText(cell).length];
-      replaceInCell(cell, from, to, placeholder);
+      const text = cellText(cell);
+      const [from, to] = cellSelection(cell) ?? [text.length, text.length];
+      replaceInCell(cell, from, to, separated(text.charAt(from - 1), placeholder, text.charAt(to)));
     } else {
       // The cell is gone (e.g. its row was deleted meanwhile): the file goes at the end.
       const end = view.state.doc.length;

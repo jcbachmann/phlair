@@ -196,6 +196,43 @@ try {
     "the typed text in the textarea",
   );
   check("edits the source of a clicked block and updates the textarea", true);
+
+  // A file dropped on a blank line: the content script reads it from the
+  // page's event, uploads it as the page and shows the uploaded image.
+  const references = () =>
+    evaluate(
+      context,
+      "document.querySelector('textarea.remarkup-assist-textarea').value.match(/\\{F\\d+\\}/g)?.length ?? 0",
+    );
+  const before = await references();
+  await evaluate(
+    context,
+    `(() => {
+      const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([png], "dropped-${Date.now()}.png", { type: "image/png" }));
+      const blank = Array.from(document.querySelectorAll(".rme-editor .cm-line")).find((line) => !line.textContent.trim());
+      const box = blank.getBoundingClientRect();
+      const init = { dataTransfer: data, bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + box.height / 2 };
+      // Browsers drop only where the drag over it was taken.
+      const over = new DragEvent("dragover", init);
+      blank.dispatchEvent(over);
+      if (over.defaultPrevented) {
+        blank.dispatchEvent(new DragEvent("drop", init));
+      }
+    })()`,
+  );
+  for (let i = 0; i < 50 && (await references()) === before; i++) {
+    await sleep(200);
+  }
+  check("uploads a dropped file", (await references()) === before + 1);
+  // An image other than the page's own F1.
+  await waitFor(
+    context,
+    "Array.from(document.querySelectorAll('.rme-editor a[data-rme-file] img')).some((img) => img.parentElement.getAttribute('data-rme-file') !== 'F1')",
+    "the dropped image shown",
+  );
+  check("shows the uploaded image", true);
 } catch (error) {
   check(String(error.message ?? error), false);
 } finally {

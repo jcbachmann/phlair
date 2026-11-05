@@ -41,7 +41,7 @@ import { cellSupport, formatFocusedCell } from "./editor/tableEditor";
 import { compactToolbar } from "./compactToolbar";
 import { feedbackUrl } from "./feedback";
 import { showTablePicker } from "./editor/tablePicker";
-import { fileUpload, submitWhenUploaded, uploadPanel } from "./editor/upload";
+import { fileDropTarget, fileUpload, submitWhenUploaded, uploadPanel } from "./editor/upload";
 import { keyLabel } from "./keys";
 import { CONTROL, notifyChange, rendererFor, TOOLBAR } from "./phorge";
 import { BlockRenderer } from "./renderer";
@@ -368,6 +368,7 @@ class LiveEditor {
           phabricatorAutocomplete,
           pickerRanges,
           fileUpload,
+          fileDropTarget,
           uploadPanel,
           links,
           pasting,

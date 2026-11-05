@@ -75,7 +75,9 @@ function imagesToUpload(
     const fallback = /^https?:/i.test(src) ? (alt ? `[[ ${src} | ${alt} ]]` : src) : alt;
     if (existing?.phid) {
       const phid = existing.phid;
-      uploads.push([view, placeholder, () => fileByPhid(phid), name, fallback, existing.options]);
+      // A PHID this Phorge does not have: an image of another Phorge, uploaded.
+      const found = () => fileByPhid(phid).catch(() => fetchImage(src, name));
+      uploads.push([view, placeholder, found, name, fallback, existing.options]);
     } else {
       uploads.push([view, placeholder, file ? async () => file : () => fetchImage(src, name), name, fallback]);
     }

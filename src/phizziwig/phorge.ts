@@ -102,19 +102,23 @@ export interface EmbeddedFile {
  * The file of this Phorge that an image of pasted HTML shows, e.g. of a
  * task's description copied: by its monogram (on the editor's rendered
  * blocks), or by the PHID in the address its link leads to (the original;
- * the image itself may be a thumbnail, another file) or in its own. Null for
- * images of other sites.
+ * the image itself may be a thumbnail, another file) or in its own. Files
+ * may be served from another domain (security.alternate-file-domain), so
+ * a PHID counts from any site; one this Phorge does not have is not its file
+ * (see fileByPhid). Null for other images.
  */
 export function embeddedFile(img: Element): EmbeddedFile | null {
-  const here = (url: string | null | undefined) => {
+  const path = (url: string | null | undefined, sameSite: boolean) => {
     try {
       const parsed = url ? new URL(url, location.href) : null;
-      return parsed?.origin === location.origin ? parsed.pathname : null;
+      return parsed && (!sameSite || parsed.origin === location.origin) ? parsed.pathname : null;
     } catch {
       return null;
     }
   };
-  const phidIn = (url: string | null | undefined) => /\/(PHID-FILE-[a-z0-9]+)\//.exec(here(url) ?? "")?.[1] ?? null;
+  const here = (url: string | null | undefined) => path(url, true);
+  const phidIn = (url: string | null | undefined) =>
+    /^\/file\/.*\/(PHID-FILE-[a-z0-9]+)\//.exec(path(url, false) ?? "")?.[1] ?? null;
   const link = img.closest("a[href]");
   const href = link?.getAttribute("href");
   const monogram = link?.getAttribute("data-rme-file") ?? /^\/(F\d+)$/.exec(here(href) ?? "")?.[1];
@@ -286,6 +290,26 @@ export interface TypeaheadResult {
   /** The text to insert, e.g. "@alice" or "[[ wiki/page/ ]]". */
   autocomplete: string;
   closed: boolean;
+}
+
+/**
+ * A stylesheet of the page by its path, from this Phorge: the page can not
+ * read the rules of one served from the file domain (another site), but
+ * Phorge serves its resources under the same path here too.
+ */
+export async function stylesheetText(href: string): Promise<string> {
+  const { pathname } = new URL(href, location.href);
+  if (!pathname.startsWith("/res/")) {
+    throw new Error(`Not a resource of Phorge: ${href}`);
+  }
+  const response = await pageFetch(new URL(pathname, location.origin).toString(), {
+    credentials: "same-origin",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Phorge: ${response.status} for ${pathname}`);
+  }
+  return response.text();
 }
 
 /**
