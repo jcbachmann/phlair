@@ -5,8 +5,9 @@
 
 import { type EditorState, StateField } from "@codemirror/state";
 import { type EditorView, showTooltip, type Tooltip } from "@codemirror/view";
-import { openPicker, type Target } from "./picker";
-import { previewField } from "./livePreview";
+import { openPicker, type Range, type Target } from "./picker";
+import { focusField } from "./focus";
+import { textTokens } from "./inlineTokens";
 
 export interface Link {
   from: number;
@@ -54,7 +55,6 @@ function formatLink(form: Link["form"], target: string, text: string | null): st
   return text ? `[[ ${target} | ${text} ]]` : form === "bare" ? target : `[[ ${target} ]]`;
 }
 
-/** The link the cursor is in, in document positions. */
 /** The link at the cursor (inside it), in document positions. */
 function linkAt(state: EditorState, pos: number = state.selection.main.head): Link | null {
   const line = state.doc.lineAt(pos);
@@ -88,20 +88,13 @@ function relinked(link: Link, target: Target): string {
     : formatLink(link.form, target.target, link.text);
 }
 
-/** Asks for a new target of a link, then calls back with the changed link text. */
-export function changeLink(
-  view: EditorView,
-  link: Link,
-  at: number | HTMLElement,
-  apply: (text: string) => void,
-): void {
-  openPicker(view, {
-    headIcon: "fa-link",
-    headText: "Change Link:",
-    placeholder: "Search pages, tasks, people… or paste a URL",
-    initial: link.target,
-    at,
-    pick: (target) => apply(relinked(link, target)),
+/** Replaces a range of the text with a link or reference, the cursor after it. */
+function insertLink(view: EditorView, range: Range, insert: string): void {
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert },
+    selection: { anchor: range.from + insert.length },
+    userEvent: "input.link",
+    scrollIntoView: true,
   });
 }
 
@@ -113,32 +106,29 @@ export function editLink(view: EditorView): boolean {
   const { state } = view;
   const existing = selectedLink(state);
   if (existing) {
-    changeLink(view, existing, existing.from, (insert) =>
-      view.dispatch({ changes: { from: existing.from, to: existing.to, insert }, userEvent: "input.link" }),
-    );
+    openPicker(view, {
+      headIcon: "fa-link",
+      headText: "Change Link:",
+      placeholder: "Search pages, tasks, people… or paste a URL",
+      initial: existing.target,
+      range: existing,
+      pick: (target, range) =>
+        view.dispatch({
+          changes: { from: range.from, to: range.to, insert: relinked(existing, target) },
+          userEvent: "input.link",
+        }),
+    });
     return true;
   }
-  const range = state.selection.main;
-  addLink(view, state.sliceDoc(range.from, range.to), range.from, (insert) =>
-    view.dispatch({
-      changes: { from: range.from, to: range.to, insert },
-      selection: { anchor: range.from + insert.length },
-      userEvent: "input.link",
-      scrollIntoView: true,
-    }),
-  );
-  return true;
-}
-
-/** Asks for a link target, then calls back with a link with the given text (or a reference without text). */
-export function addLink(view: EditorView, text: string, at: number | HTMLElement, apply: (link: string) => void): void {
+  const text = state.sliceDoc(state.selection.main.from, state.selection.main.to);
   openPicker(view, {
     headIcon: "fa-link",
     headText: "Link to:",
     placeholder: "Search pages, tasks, people… or paste a URL",
-    at,
-    pick: (target) => apply(linkText(target, text)),
+    range: state.selection.main,
+    pick: (target, range) => insertLink(view, range, linkText(target, text)),
   });
+  return true;
 }
 
 /** Inserts a reference to a task or other object, found by its title; in a link, changes the link. */
@@ -147,39 +137,33 @@ export function insertReference(view: EditorView): boolean {
     return editLink(view);
   }
   const reference = selectedReference(view.state);
-  const range = reference ?? view.state.selection.main;
+  const selected = reference ?? view.state.selection.main;
+  const text = view.state.sliceDoc(selected.from, selected.to);
   openPicker(view, {
     headIcon: "fa-anchor",
     headText: "Reference:",
     placeholder: "Search tasks, pages, people, projects… by name",
     // A reference is changed: its search shows what it refers to.
     initial: reference?.text,
-    at: range.from,
-    pick: (target) => {
-      const insert = reference ? target.reference : linkText(target, view.state.sliceDoc(range.from, range.to));
-      view.dispatch({
-        changes: { from: range.from, to: range.to, insert },
-        selection: { anchor: range.from + insert.length },
-        userEvent: "input.link",
-        scrollIntoView: true,
-      });
-    },
+    range: selected,
+    pick: (target, range) => insertLink(view, range, reference ? target.reference : linkText(target, text)),
   });
   return true;
 }
 
-// Like the references Phorge links: "T12", "D3#7", "@alice".
-const REFERENCE = /(?<![\w/#@&{])(?:[A-Z]\d+(?:#\d+)?|@[\w.-]*\w)\b/g;
-
-/** The reference around the cursor or the selection (within one), e.g. "T12". */
+/**
+ * The reference around the cursor or the selection (within one), e.g. "T12",
+ * "D3#7" or "@alice", as Phorge finds them in the line (inline.ts). Not
+ * commit hashes, which the search for objects does not find.
+ */
 function selectedReference(state: EditorState): { from: number; to: number; text: string } | null {
   const range = state.selection.main;
   const line = state.doc.lineAt(range.head);
-  for (const match of line.text.matchAll(REFERENCE)) {
-    const from = line.from + match.index;
-    const to = from + match[0].length;
-    if (range.from >= from && range.to <= to) {
-      return { from, to, text: match[0] };
+  for (const token of textTokens(line.text, line.from)) {
+    const text = state.sliceDoc(token.from, token.to);
+    const reference = token.kind === "mention" || (token.kind === "object" && /^[A-Z]\d/.test(text));
+    if (reference && range.from >= token.from && range.to <= token.to) {
+      return { from: token.from, to: token.to, text };
     }
   }
   return null;
@@ -190,7 +174,7 @@ function removeLink(view: EditorView, link: Link): void {
 }
 
 /** What is left of a link without it: its text. */
-export function unlinked(link: Link): string {
+function unlinked(link: Link): string {
   return link.text ?? link.target;
 }
 
@@ -226,7 +210,7 @@ function bubbleButton(label: string, icon: string, run: () => void): HTMLElement
 }
 
 /** The bubble of a link: open it, change it, or (unless it is a bare URL) remove it. */
-export function linkBubble(link: Link, change: () => void, remove: () => void): HTMLElement {
+function linkBubble(link: Link, change: () => void, remove: () => void): HTMLElement {
   const dom = document.createElement("div");
   dom.className = "rme-link-bubble";
   const url = href(link.target);
@@ -241,7 +225,7 @@ export function linkBubble(link: Link, change: () => void, remove: () => void): 
 }
 
 /** Whether the editor has the focus; a table cell's editor (tableEditor.ts) has it while it exists. */
-const focused = (state: EditorState) => state.field(previewField, false)?.focused ?? true;
+const focused = (state: EditorState) => state.field(focusField, false) ?? true;
 
 function bubble(state: EditorState): Tooltip | null {
   const range = state.selection.main;

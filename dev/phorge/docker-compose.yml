@@ -24,6 +24,8 @@ services:
       - ../../dist:/opt/remarkup-editor-dist:ro
       # The Phorge library of the editor (load-libraries), writable for "arc liberate".
       - ../../phorge:/srv/phlair
+      # Uploaded files (storage.local-disk.path in entrypoint.sh).
+      - files:/var/phorge-files
     extra_hosts:
       # The host, for the E2E test's image site that the server downloads from.
       - host.docker.internal:host-gateway
@@ -31,3 +33,4 @@ services:
       - "127.0.0.1:8098:80"
 volumes:
   db:
+  files:

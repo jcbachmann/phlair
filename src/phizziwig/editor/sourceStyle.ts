@@ -1,6 +1,6 @@
-// Styles the source of the blocks being edited so their structure stays
-// visible: headers are large, notes and quotes look like notes and quotes,
-// markup characters are dimmed.
+// Styles the source of the text blocks like their rendering: headers are
+// large, notes and quotes look like notes and quotes, markup characters are
+// dimmed (and hidden by inlinePreview.ts except where the cursor is).
 
 import type { Line, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
@@ -8,27 +8,43 @@ import type { Block } from "../blocks";
 import { parseList } from "../list";
 import { LIST_ITEM } from "../syntax";
 import { wideRanges } from "../table";
+import type { InlineKind, InlineToken } from "../inline";
+import { blockTokens } from "./inlineTokens";
 import { previewField } from "./livePreview";
 
 // Monospaced and highlighted text use Phorge's own element and classes,
 // so its CSS styles them like in the rendered text (the editor content has
 // the "phabricator-remarkup" class those rules need).
 const MONO = Decoration.mark({ tagName: "tt", class: "remarkup-monospaced" });
-// Monospaced text first: other markup inside it is not styled.
-const INLINE: [RegExp, Decoration][] = [
-  [/`[^`\n]+`/g, MONO],
-  [/##(?=\S)[^\n#]+?##/g, MONO],
-  [/\*\*(?=\S)[^\n]+?\*\*/g, Decoration.mark({ class: "rme-bold" })],
-  [/(?<![:\w])\/\/(?=\S)[^\n]+?\/\//g, Decoration.mark({ class: "rme-italic" })],
-  [/~~[^\n]+?~~/g, Decoration.mark({ class: "rme-del" })],
-  [/!![^\n]+?!!/g, Decoration.mark({ class: "remarkup-highlight" })],
-  [/(?<!\w)__[^\n]+?__(?!\w)/g, Decoration.mark({ class: "rme-underline" })],
-  [/\[\[[^\n]+?\]\]/g, Decoration.mark({ class: "rme-link" })],
-  [/\bhttps?:\/\/[^\s\]<>`]+/g, Decoration.mark({ class: "rme-link" })],
-  [/\{[A-Z]\d+[^}\n]*\}/g, Decoration.mark({ class: "rme-embed" })],
-  [/(?<![\w/#@&{])[A-Z]\d+(?:#\d+)?\b/g, Decoration.mark({ class: "rme-ref" })],
-  [/(?<![\w@])@[\w.-]*\w/g, Decoration.mark({ class: "rme-ref" })],
-];
+/** How the inline markup of the source looks, by its kind (inline.ts). */
+const STYLES: Partial<Record<InlineKind, Decoration>> = {
+  monospace: MONO,
+  bold: Decoration.mark({ class: "rme-bold" }),
+  italic: Decoration.mark({ class: "rme-italic" }),
+  del: Decoration.mark({ class: "rme-del" }),
+  highlight: Decoration.mark({ class: "remarkup-highlight" }),
+  underline: Decoration.mark({ class: "rme-underline" }),
+  link: Decoration.mark({ class: "rme-link" }),
+  url: Decoration.mark({ class: "rme-link" }),
+  embed: Decoration.mark({ class: "rme-embed" }),
+  object: Decoration.mark({ class: "rme-ref" }),
+  mention: Decoration.mark({ class: "rme-ref" }),
+  project: Decoration.mark({ class: "rme-ref" }),
+  handle: Decoration.mark({ class: "rme-ref" }),
+};
+
+/** Styles the inline markup of a text (see inlineTokens.ts), also of a table cell's editor (inlinePreview.ts). */
+export function styleTokens(tokens: InlineToken[], ranges: Range<Decoration>[]): void {
+  for (const token of tokens) {
+    const style = STYLES[token.kind];
+    if (style && token.to > token.from) {
+      ranges.push(style.range(token.from, token.to));
+    }
+    if (token.children) {
+      styleTokens(token.children, ranges);
+    }
+  }
+}
 
 const LIST_MARKER = Decoration.mark({ class: "rme-list-marker", inclusive: true });
 
@@ -92,6 +108,7 @@ function decorateBlock(view: EditorView, block: Block, ranges: Range<Decoration>
     }
     decorateLine(block, line.from, line.text, n === first.number, ranges);
   }
+  styleTokens(blockTokens(doc, block), ranges);
 }
 
 /**
@@ -144,6 +161,7 @@ function decorateList(view: EditorView, block: Block, ranges: Range<Decoration>[
     }
     decorateLine(block, line.from, line.text, i === 0, ranges);
   });
+  styleTokens(blockTokens(doc, block), ranges);
 }
 
 function mark(ranges: Range<Decoration>[], from: number, to: number, cls: string): void {
@@ -152,7 +170,7 @@ function mark(ranges: Range<Decoration>[], from: number, to: number, cls: string
   }
 }
 
-/** The styling of a line of a block's source; also of a table cell's editor (inlinePreview.ts). */
+/** The styling of the block markup of a line of a block's source; also of a table cell's editor (inlinePreview.ts). */
 export function decorateLine(
   block: Block,
   from: number,
@@ -208,22 +226,6 @@ export function decorateLine(
         mark(ranges, from, from + match[0].length, "rme-list-marker");
       }
       break;
-  }
-  // Monospaced text is literal: nothing inside it is styled, like in Phorge.
-  const literal: [number, number][] = [];
-  for (const [pattern, decoration] of INLINE) {
-    pattern.lastIndex = 0;
-    while ((match = pattern.exec(text))) {
-      const start = match.index;
-      const end = start + match[0].length;
-      if (literal.some(([a, b]) => start < b && end > a)) {
-        continue;
-      }
-      if (decoration === MONO) {
-        literal.push([start, end]);
-      }
-      ranges.push(decoration.range(from + start, from + end));
-    }
   }
 }
 

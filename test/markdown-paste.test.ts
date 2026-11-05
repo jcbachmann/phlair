@@ -60,3 +60,55 @@ describe("markdownToRemarkup", () => {
     expect(markdownToRemarkup("Just a sentence with *stars*.")).toBeNull();
   });
 });
+
+describe("markdownToRemarkup, as Markdown parses the text", () => {
+  it("converts what a line-by-line reading misses", () => {
+    expect(
+      markdownToRemarkup(
+        lines(
+          "Setup",
+          "=====",
+          "",
+          "Use `` a`b `` and *a **b** c* with a [reference][docs] and <https://example.com/x>.",
+          "",
+          "~~~js",
+          "const a = *b*;",
+          "~~~",
+          "",
+          "+ one \\*literal\\*",
+          '+ [titled](https://example.com/t "Title")',
+          "",
+          "[docs]: https://example.com/docs",
+        ),
+      ),
+    ).toBe(
+      lines(
+        "Setup",
+        "=====",
+        "",
+        "Use ##a`b## and //a **b** c// with a [[ https://example.com/docs | reference ]] and https://example.com/x.",
+        "",
+        "```lang=js",
+        "const a = *b*;",
+        "```",
+        "",
+        "- one *literal*",
+        "- [[ https://example.com/t | titled ]]",
+      ),
+    );
+  });
+
+  it("converts the markup inside headings and links, and leaves code alone", () => {
+    expect(markdownToRemarkup(lines("### A *b* ###", "", "[**bold** _it_][r]", "", "    *code*", "", "[r]: /x"))).toBe(
+      lines("=== A //b//", "", "[[ /x | **bold** //it// ]]", "", "    *code*"),
+    );
+  });
+});
+
+describe("markdownToRemarkup, edge cases", () => {
+  it("writes double-backtick code as remarkup's ##, and keeps an escape that would start a line with markup", () => {
+    expect(markdownToRemarkup(lines("# T", "", "Run ``make`` now.", "", "\\# not a heading, \\*not\\* *em*"))).toBe(
+      lines("= T", "", "Run ##make## now.", "", "\\# not a heading, *not* //em//"),
+    );
+  });
+});

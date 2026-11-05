@@ -1,6 +1,8 @@
 // Phorge's dropdown menus (PHUIXDropdownMenu with an action list), with
 // their markup so Phorge's CSS styles them. One is open at a time; it
-// closes on a click elsewhere, Escape and scrolling.
+// closes on a click elsewhere, Escape and scrolling. The focus goes into the
+// menu, where the arrow keys move it (like the WAI-ARIA menu pattern), and
+// back to where it was when the menu closes.
 
 import css from "./dropdown.css";
 import { addStyle } from "./style";
@@ -23,16 +25,55 @@ let styled = false;
 
 let open: HTMLElement | null = null;
 let openOwner: Element | null = null;
+/** Where the focus was when the menu opened. */
+let returnFocus: HTMLElement | null = null;
 
 /** Closes the open menu, or only the one an element opened; false if none was open. */
 export function closeDropdown(owner?: Element): boolean {
   if (!open || (owner && owner !== openOwner)) {
     return false;
   }
+  const hadFocus = open.contains(document.activeElement);
   open.remove();
+  openOwner?.setAttribute("aria-expanded", "false");
   open = null;
   openOwner = null;
+  if (hadFocus) {
+    returnFocus?.focus({ preventScroll: true });
+  }
+  returnFocus = null;
   return true;
+}
+
+/** The items the arrow keys go through. */
+function focusable(menu: HTMLElement): HTMLElement[] {
+  return Array.from(menu.querySelectorAll<HTMLElement>("a[href]:not([aria-disabled='true'])"));
+}
+
+/** The arrow keys, Home and End move the focus through the items; Space runs one, Tab leaves. */
+function onMenuKeyDown(event: KeyboardEvent): void {
+  const menu = event.currentTarget as HTMLElement;
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
+    return;
+  }
+  const items = focusable(menu);
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  const next = {
+    ArrowDown: at + 1,
+    ArrowUp: at - 1,
+    Home: 0,
+    End: items.length - 1,
+  }[event.key];
+  if (next !== undefined) {
+    event.preventDefault();
+    items[(next + items.length) % items.length]?.focus({ preventScroll: true });
+  } else if (event.key === " " && at >= 0) {
+    event.preventDefault();
+    items[at].click();
+  } else if (event.key === "Tab") {
+    // Back where the focus was, and on from there.
+    closeDropdown();
+  }
 }
 
 /**
@@ -50,11 +91,14 @@ export function showDropdown(
 ): HTMLElement {
   const list = document.createElement("ul");
   list.className = "phabricator-action-list-view";
+  list.setAttribute("role", "menu");
   for (const item of entries) {
     const li = document.createElement("li");
     li.className = "phabricator-action-view";
+    li.setAttribute("role", "none");
     if (item === DIVIDER) {
       li.classList.add("phabricator-action-view-type-divider");
+      li.setAttribute("role", "separator");
     } else if (item.heading) {
       li.classList.add("phabricator-action-view-label", "phabricator-action-view-type-label");
       const label = document.createElement("span");
@@ -71,6 +115,14 @@ export function showDropdown(
       link.className = "phabricator-action-view-item";
       link.href = "#";
       link.textContent = item.label;
+      // A choice among others (e.g. sizes): checked or not.
+      link.setAttribute("role", item.selected === undefined ? "menuitem" : "menuitemradio");
+      if (item.selected !== undefined) {
+        link.setAttribute("aria-checked", String(item.selected));
+      }
+      if (item.disabled) {
+        link.setAttribute("aria-disabled", "true");
+      }
       if (item.detail) {
         const detail = document.createElement("span");
         detail.className = "rme-dropdown-detail";
@@ -88,7 +140,10 @@ export function showDropdown(
     }
     list.append(li);
   }
-  return showDropdownContent(x, y, list, className, alignRight, owner);
+  const menu = showDropdownContent(x, y, list, className, alignRight, owner);
+  // On the chosen item, if one is.
+  menu.querySelector<HTMLElement>("[aria-checked='true']:not([aria-disabled='true'])")?.focus({ preventScroll: true });
+  return menu;
 }
 
 /**
@@ -106,6 +161,7 @@ export function showDropdownContent(
   owner?: Element,
 ): HTMLElement {
   closeDropdown();
+  returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   if (!styled) {
     addStyle(css);
     styled = true;
@@ -133,6 +189,9 @@ export function showDropdownContent(
   }
   open = menu;
   openOwner = owner ?? null;
+  openOwner?.setAttribute("aria-expanded", "true");
+  menu.addEventListener("keydown", onMenuKeyDown);
+  focusable(menu)[0]?.focus({ preventScroll: true });
   return menu;
 }
 

@@ -153,6 +153,23 @@ test.describe("fixed bugs", () => {
     await expect.poll(() => source(page)).toBe("| abcy | def |\n| 1 | 2 |");
   });
 
+  test("a click in rendered text puts the cursor at the clicked text; a drag from there selects", async ({ page }) => {
+    await startWith(page, "Intro.\n\n```\nalpha beta gamma\n```\n\nThe end.");
+    const beta = await textBox(page, "beta");
+    await page.mouse.click(beta.left + 1, beta.y);
+    await page.keyboard.type("X");
+    await expect.poll(() => source(page)).toBe("Intro.\n\n```\nalpha Xbeta gamma\n```\n\nThe end.");
+    await blur(page);
+    await settled(page);
+    const gamma = await textBox(page, "gamma");
+    const end = await textBox(page, "end.");
+    await page.mouse.move(gamma.left + 1, gamma.y);
+    await page.mouse.down();
+    await page.mouse.move(end.left + 1, end.y, { steps: 5 });
+    await page.mouse.up();
+    expect(await selected(page)).toBe("gamma\n```\n\nThe ");
+  });
+
   test("the mouse selects rendered text exactly, as the selection shows while selecting", async ({ page }) => {
     await startWith(page, "First paragraph here.\n\n```\nsome code here\n```\n\nThird.");
     const from = await textBox(page, "paragraph here.");
@@ -988,10 +1005,22 @@ test.describe("in Phorge's pages", () => {
 });
 
 test.describe("review fixes", () => {
-  test("the insert menu: Enter on a lone / is a new line, link and table items keep their focus", async ({ page }) => {
+  test("the insert menu: Enter right after / inserts the focused item, link and table items keep their focus", async ({
+    page,
+  }) => {
     await openNewWikiPage(page, "Slash");
     await editor(page).click();
     await page.keyboard.type("/");
+    const first = await page.locator(".rme-autocomplete .jx-result.focused").textContent();
+    expect(first).toMatch(/^Heading/);
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".rme-autocomplete")).toHaveCount(0);
+    await expect.poll(() => source(page)).toMatch(/^=+ /);
+    // Escape closes the menu and keeps the "/".
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("/");
+    await page.keyboard.press("Escape");
     await page.keyboard.press("Enter");
     await page.keyboard.type("next");
     await expect.poll(() => source(page)).toBe("/\nnext");
@@ -1837,8 +1866,9 @@ test.describe("eighth test round", () => {
       const content = (await page.locator(".rme-editor .cm-content").boundingBox())!;
       for (const item of ["beta", "gamma", "two", "sub b", "checked box", "bare box"]) {
         const box = await textBox(page, item);
-        // The marker before the text, and the start of the text (its place and color), on the item's line.
-        const clip = { x: content.x, y: box.y - 9, width: box.left + 12 - content.x, height: 18 };
+        // The marker before the text, and the start of the text (its place and color), on the item's line;
+        // not the editor's edge, which glows with the focus.
+        const clip = { x: content.x + 4, y: box.y - 9, width: box.left + 8 - content.x, height: 18 };
         const rendered = await page.screenshot({ clip });
         await page.mouse.click(box.left + 2, box.y);
         await page.keyboard.press("End");
@@ -2313,8 +2343,6 @@ test.describe("fifteenth test round", () => {
 });
 
 test.describe("sixteenth test round", () => {
-  const caret = (page: Page) => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
-
   test("a note of more lines shows on one line like in Phorge, until it is edited", async ({ page }) => {
     await startWith(page, "WARNING: This text\ngoes into\nthe same line\n\nAfter.\n\nNOTE: One line.");
     const rendered = page.locator(".rme-block-note .remarkup-warning");
@@ -2337,12 +2365,13 @@ test.describe("sixteenth test round", () => {
   });
 
   test("an anchor shows with its name, not as a project, until the cursor is on it", async ({ page }) => {
-    await startWith(page, "See {anchor #demo_project} here.");
+    await startWith(page, "See {anchor #demo-part} here. Not {anchor #demo_project}.");
     const anchor = page.locator(".cm-line .rme-anchor");
-    await expect(anchor).toHaveText("demo_project");
-    await expect(page.locator(".cm-line .phui-tag-view")).toHaveCount(0);
+    await expect(anchor).toHaveText("demo-part");
+    // Like in Phorge, a name with "_" is no anchor's: its "#demo_project" is a project.
+    await expect(page.locator(".cm-line .phui-tag-view")).toHaveText("Demo Project");
     await anchor.click();
-    await expect(page.locator(".cm-line")).toHaveText("See {anchor #demo_project} here.");
+    await expect(page.locator(".cm-line")).toContainText("See {anchor #demo-part} here.");
   });
 });
 
@@ -2728,5 +2757,605 @@ test.describe("twenty-first test round", () => {
     await expect(groups).toHaveText(["Lists", "Blocks", "Links", "Text"]);
     await page.keyboard.press("ArrowDown");
     await expect(page.locator(".rme-autocomplete .jx-result.focused")).toHaveText(/Numbered list/);
+  });
+});
+
+test.describe("fixes of the review", () => {
+  test("a new inline comment can be typed in right away: the editor takes the focus Phorge gives the textarea", async ({
+    page,
+  }) => {
+    await createRevision(page, "Inline focus");
+    await addPhlair(page);
+    await page.locator("td.new.n").first().click();
+    const inline = page.locator(".differential-inline-comment-edit");
+    await expect(inline.locator(".rme-editor .cm-content")).toBeFocused();
+    await page.keyboard.type("Right away.");
+    await expect(inline.locator("textarea.remarkup-assist-textarea")).toHaveValue("Right away.");
+    // Later calls too, e.g. when Phorge pins or enlarges the form.
+    await blur(page);
+    await expect(inline.locator(".rme-editor .cm-content")).not.toBeFocused();
+    await inline.locator("textarea.remarkup-assist-textarea").evaluate((t: HTMLTextAreaElement) => t.focus());
+    await expect(inline.locator(".rme-editor .cm-content")).toBeFocused();
+  });
+
+  test("the editor is read-only while Phorge submits the form", async ({ page }) => {
+    await startWith(page, "Text.");
+    await textarea(page).evaluate((t: HTMLTextAreaElement) => (t.disabled = true));
+    await expect(editor(page)).toHaveAttribute("contenteditable", "false");
+    await textarea(page).evaluate((t: HTMLTextAreaElement) => (t.disabled = false));
+    await expect(editor(page)).toHaveAttribute("contenteditable", "true");
+  });
+
+  test("a search picks for the text it was opened on, also when the text before it changed meanwhile", async ({
+    page,
+  }) => {
+    await startWith(page, "See the docs here.");
+    await page.locator(".cm-line", { hasText: "docs" }).click();
+    await page.keyboard.press("End");
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press("ArrowLeft");
+    }
+    await page.keyboard.press("Control+Shift+ArrowLeft");
+    await page.keyboard.press("Control+k");
+    // E.g. an upload before it finishing, or Phorge changing the textarea.
+    await textarea(page).evaluate((t: HTMLTextAreaElement) => (t.value = `Uploaded {F1}. ${t.value}`));
+    await expect(editor(page)).toContainText("Uploaded");
+    await page.locator(".rme-picker input").fill("https://example.com/docs");
+    await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Link to");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("Uploaded {F1}. See the [[ https://example.com/docs | docs ]] here.");
+  });
+
+  test("a search with its own results takes the first of them on a quick Enter, and tells when it finds nothing", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Quick icon");
+    await editor(page).click();
+    await page.keyboard.type("/icon");
+    await page.keyboard.press("Enter");
+    await page.locator(".rme-picker input").fill("zzzz yyyy");
+    await expect(page.locator(".rme-picker .rme-popup-note")).toHaveText("Nothing found.");
+    // Faster than the search.
+    await page.locator(".rme-picker input").fill("camera");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("{icon camera}");
+  });
+
+  test("in a table cell: Alt+Shift+arrows move the column, the reference button and Option+Space work", async ({
+    page,
+  }) => {
+    await startWith(page, "| a | b |\n| --- | --- |\n| one | two |");
+    await page.locator(".rme-table-editor td", { hasText: "one" }).click();
+    await page.keyboard.press("Alt+Shift+ArrowRight");
+    await expect.poll(() => source(page)).toBe("| b   | a   |\n| --- | --- |\n| two | one |");
+    // The reference button of the toolbar acts on the cell.
+    await page.keyboard.press("Control+a");
+    await page
+      .locator(".rme-format")
+      .and(page.getByRole("button", { name: /Reference/ }))
+      .click();
+    await page.locator(".rme-picker input").fill("T1");
+    await expect(page.locator(".rme-picker .jx-result").first()).toContainText("Calibrate the detector");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toMatch(/\| two \| \[\[ \S*T1 \| one \]\] \|$/);
+    // A no-break space (Option+Space on a Mac) does not reset the cell when the table renders.
+    await page.keyboard.press("Home");
+    // The table renders anew once typing pauses.
+    const rendered = page.waitForResponse((response) => /x(%20|\+)y/.test(response.request().postData() ?? ""));
+    await page.keyboard.insertText("x\u00a0y ");
+    await rendered;
+    await settled(page);
+    await page.keyboard.type("z");
+    await expect.poll(() => source(page)).toMatch(/\| two \| x y z\[\[/);
+  });
+
+  test("a link left open in a table cell is kept closed", async ({ page }) => {
+    await startWith(page, "| a | b |\n| one | two ]] |");
+    await page.locator(".rme-table-editor td", { hasText: "one" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" [[");
+    await page.keyboard.press("Delete");
+    await page.keyboard.press("Delete");
+    // Its "]]" stays: without it, the link would take in the next cell.
+    await expect.poll(() => source(page)).toBe("| a | b |\n| one [[]] | two ]] |");
+  });
+
+  test("files pasted through the editor stay attached when Phorge's upload button rewrites the form's metadata", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Attached");
+    await editor(page).click();
+    await editor(page).evaluate((node) => {
+      const data = new DataTransfer();
+      data.items.add(new File(["hello"], "note.txt", { type: "text/plain" }));
+      const box = node.getBoundingClientRect();
+      node.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          clientX: box.left + 20,
+          clientY: box.top + 5,
+          dataTransfer: data,
+        }),
+      );
+    });
+    await expect(textarea(page)).toHaveValue(/^\{F\d+\}$/);
+    const metadata = page.locator('input[name="content_metadata"]');
+    const ours = JSON.parse(await metadata.inputValue()).attachedFilePHIDs[0];
+    // Phorge's upload writes its own list.
+    await metadata.evaluate((input: HTMLInputElement) => (input.value = '{"attachedFilePHIDs":["PHID-FILE-theirs"]}'));
+    await page.evaluate(() => {
+      const form = document.querySelector<HTMLTextAreaElement>("textarea.remarkup-assist-textarea")!.form!;
+      form.addEventListener("submit", (event) => event.preventDefault(), { once: true });
+      form.requestSubmit();
+    });
+    expect(JSON.parse(await metadata.inputValue()).attachedFilePHIDs.sort()).toEqual(["PHID-FILE-theirs", ours].sort());
+  });
+
+  test("an upload does not take the place of a placeholder left in the text", async ({ page }) => {
+    await startWith(page, "Old {Uploading note.txt 1…} text.");
+    await editor(page).evaluate((node) => {
+      const data = new DataTransfer();
+      data.items.add(new File(["hello"], "note.txt", { type: "text/plain" }));
+      const box = node.getBoundingClientRect();
+      node.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          clientX: box.right - 5,
+          clientY: box.bottom - 5,
+          dataTransfer: data,
+        }),
+      );
+    });
+    await expect.poll(() => source(page)).toMatch(/^Old \{Uploading note\.txt 1…\} text\.\s*\{F\d+\}$/);
+  });
+
+  test("screen readers learn about the insert menu and its focused item", async ({ page }) => {
+    await openNewWikiPage(page, "Aria");
+    await editor(page).click();
+    await page.keyboard.type("/");
+    const list = page.locator(".rme-autocomplete .phuix-autocomplete-list");
+    await expect(editor(page)).toHaveAttribute("aria-controls", (await list.getAttribute("id"))!);
+    await page.keyboard.press("ArrowDown");
+    const focused = await page.locator(".rme-autocomplete .jx-result.focused").getAttribute("id");
+    await expect(editor(page)).toHaveAttribute("aria-activedescendant", focused!);
+    await page.keyboard.press("Escape");
+    await expect(editor(page)).not.toHaveAttribute("aria-controls", /./);
+  });
+
+  test("shortcuts work on a German keyboard: Ctrl+Shift+7 types a /, Ctrl+Shift+3 a §", async ({ page }) => {
+    await openNewWikiPage(page, "German keys");
+    await editor(page).click();
+    await page.keyboard.type("Title");
+    // Playwright types with a US layout; these are the events of a German one.
+    const press = (key: string, digit: number) =>
+      editor(page).evaluate(
+        (content, [key, digit]) => {
+          const event = new KeyboardEvent("keydown", {
+            key: key as string,
+            code: `Digit${digit}`,
+            ctrlKey: true,
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          });
+          Object.defineProperty(event, "keyCode", { value: 48 + (digit as number) });
+          content.dispatchEvent(event);
+        },
+        [key, digit],
+      );
+    await press("§", 3);
+    await expect.poll(() => source(page)).toBe("=== Title");
+    await page.keyboard.press("End");
+    await page.keyboard.type("\n\nitem");
+    await press("/", 7);
+    await expect.poll(() => source(page)).toBe("=== Title\n\n  # item");
+    await expect(page.locator(".rme-shortcuts")).toHaveCount(0);
+  });
+});
+
+test.describe("uploads", () => {
+  const panel = (page: Page) => page.locator(".rme-upload-status");
+
+  /** Drops a file of a size on the editor, below its text. */
+  async function drop(page: Page, name: string, size = 5): Promise<void> {
+    await editor(page).evaluate(
+      (node, [name, size]) => {
+        const data = new DataTransfer();
+        data.items.add(new File([new Uint8Array(size as number).fill(65)], name as string));
+        const box = node.getBoundingClientRect();
+        node.dispatchEvent(
+          new DragEvent("drop", {
+            bubbles: true,
+            cancelable: true,
+            clientX: box.right - 5,
+            clientY: box.bottom - 5,
+            dataTransfer: data,
+          }),
+        );
+      },
+      [name, size] as const,
+    );
+  }
+
+  /** Holds the requests of a pattern until the returned function is called. */
+  async function hold(page: Page, url: RegExp, from = 1): Promise<() => void> {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let seen = 0;
+    await page.route(url, async (route) => {
+      if (++seen >= from) {
+        await held;
+      }
+      await route.continue();
+    });
+    return release;
+  }
+
+  test("a file over 4 MB is uploaded in chunks, with its progress shown", async ({ page }) => {
+    await openNewWikiPage(page, "Chunks");
+    await editor(page).click();
+    const chunks: string[] = [];
+    page.on("request", (request) => {
+      if (/uploadchunk=1/.test(request.url())) {
+        chunks.push(request.url());
+      }
+    });
+    const release = await hold(page, /\/file\/dropupload\/.*uploadchunk=1/, 2);
+    // Three chunks of 4 MB; the second waits.
+    await drop(page, "big.bin", 9 * 1024 * 1024);
+    await expect(panel(page)).toHaveText("Uploading big.bin (33%)…");
+    release();
+    await expect.poll(() => source(page)).toMatch(/^\{F\d+\}$/);
+    expect(chunks).toHaveLength(3);
+    await expect(panel(page)).toBeHidden();
+    const id = Number(/\d+/.exec(await source(page))![0]);
+    const found = (await conduit(page, "file.search", { constraints: { ids: [id] } })) as {
+      data: { fields: { size: number } }[];
+    };
+    expect(found.data[0].fields.size).toBe(9 * 1024 * 1024);
+  });
+
+  test("a comment submitted with Ctrl+Enter while a file uploads is sent when the upload is done", async ({ page }) => {
+    await createTask(page, "Upload, then submit");
+    await addPhlair(page);
+    await editor(page).click();
+    await page.keyboard.type("See the note.");
+    const release = await hold(page, /\/file\/dropupload\//);
+    await drop(page, "note.txt");
+    await page.keyboard.press("Control+Enter");
+    await expect(panel(page)).toContainText("Uploading note.txt… The form is sent when done.");
+    await expect(textarea(page)).toHaveValue(/\{Uploading note\.txt \d+…\}/);
+    release();
+    // Phorge posts the comment and empties the form.
+    await expect(textarea(page)).toHaveValue("");
+    await page.reload();
+    await expect(page.locator(".phui-timeline-view .phabricator-remarkup", { hasText: "See the note." })).toContainText(
+      "note.txt",
+    );
+  });
+
+  test("a page saved with its button while a file uploads is saved when the upload is done; or not, if cancelled", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Upload, then save");
+    await editor(page).click();
+    await page.keyboard.type("Notes.");
+    let release = await hold(page, /\/file\/dropupload\//);
+    await drop(page, "note.txt");
+    const save = page.getByRole("button", { name: "Create Document" });
+    // Cancelled: the page stays.
+    await save.click();
+    await panel(page).getByRole("link", { name: "Don't send" }).click();
+    await expect(panel(page)).not.toContainText("The form is sent");
+    release();
+    await expect.poll(() => source(page)).toMatch(/^Notes\.\s*\{F\d+\}$/);
+    await expect(page).toHaveURL(/\/phriction\/edit\//);
+    // Saved once the upload is done.
+    await page.unroute(/\/file\/dropupload\//);
+    release = await hold(page, /\/file\/dropupload\//);
+    await drop(page, "more.txt");
+    await save.click();
+    await expect(panel(page)).toContainText("The form is sent when done.");
+    await expect(page).toHaveURL(/\/phriction\/edit\//);
+    release();
+    await expect(page).not.toHaveURL(/\/phriction\/edit\//);
+    await expect(page.locator(".phabricator-remarkup")).toContainText("more.txt");
+  });
+
+  test("a failed upload is told in the panel, not in an alert, and the form waiting for it is not sent", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Failed upload");
+    await editor(page).click();
+    page.on("dialog", (dialog) => {
+      throw new Error(`Unexpected dialog: ${dialog.message()}`);
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(/\/file\/dropupload\//, async (route) => {
+      await held;
+      await route.fulfill({ status: 500, body: "Broken" });
+    });
+    await drop(page, "note.txt");
+    await page.keyboard.press("Control+Enter");
+    await expect(panel(page)).toContainText("The form is sent when done.");
+    release();
+    await expect(panel(page)).toHaveText(
+      /^Uploading note\.txt failed \(Phorge: 500 for \/file\/dropupload\/\)\. Dismiss$/,
+    );
+    await expect.poll(() => source(page)).toBe("");
+    await panel(page).getByRole("link", { name: "Dismiss" }).click();
+    await expect(panel(page)).toBeHidden();
+    await expect(page).toHaveURL(/\/phriction\/edit\//);
+  });
+});
+
+test.describe("search", () => {
+  test("Ctrl+F finds in all of the text, also far below and in rendered blocks", async ({ page }) => {
+    const filler = Array.from({ length: 300 }, (_, i) => `Line ${i} of the filler text.`).join("\n\n");
+    await startWith(page, `${filler}\n\nThe needle is here.\n\n| Name | Value\n| haystack | 1`);
+    await page.locator(".cm-line").first().click();
+    await page.keyboard.press("Control+Home");
+    // Not drawn yet: the browser's find would not see it.
+    await expect(page.locator(".cm-line", { hasText: "The needle is here." })).toHaveCount(0);
+    await page.keyboard.press("Control+f");
+    const field = page.locator(".rme-panels .cm-search input[name=search]");
+    await expect(field).toBeFocused();
+    // Typed: the panel takes the query on keyup.
+    await page.keyboard.type("needle");
+    await page.keyboard.press("Enter");
+    const found = page.locator(".cm-searchMatch-selected");
+    await expect(found).toHaveText("needle");
+    await expect(found).toBeInViewport();
+    // In a table, which shows its source for it.
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("haystack");
+    await page.keyboard.press("Enter");
+    await expect(found).toHaveText("haystack");
+    await expect(found).toBeInViewport();
+    await page.screenshot({ path: "test-results/search-panel.png" });
+    await page.keyboard.press("Escape");
+    await expect(field).toHaveCount(0);
+    await expect(editor(page)).toBeFocused();
+    // From a table cell too.
+    await blur(page);
+    await page.locator(".rme-table-editor td", { hasText: "haystack" }).click();
+    await page.keyboard.press("Control+f");
+    await expect(field).toBeFocused();
+  });
+});
+
+test.describe("menus by keyboard", () => {
+  test("the image menu opens with Shift+F10 on an image's reference, on its size, and the arrow keys choose", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Image menu by keys");
+    await editor(page).click();
+    await page.keyboard.insertText("Before.\n\n{F1}");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Shift+F10");
+    const menu = page.locator(".rme-image-menu");
+    await expect(menu.getByRole("menuitemradio", { name: "Thumbnail" })).toBeFocused();
+    await expect(menu.getByRole("menuitemradio", { name: "Thumbnail" })).toHaveAttribute("aria-checked", "true");
+    // The text being edited stays as it is while the menu has the focus.
+    await expect(page.locator(".cm-line", { hasText: "{F1}" })).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByRole("menuitemradio", { name: "Full size" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(menu).toHaveCount(0);
+    await expect.poll(() => source(page)).toBe("Before.\n\n{F1, size=full}");
+    await expect(editor(page)).toBeFocused();
+    // Escape closes it, the focus back in the text; End and Home go to the last and first item.
+    await page.keyboard.press("Shift+F10");
+    // On the size chosen now.
+    await expect(menu.getByRole("menuitemradio", { name: "Full size" })).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(menu.getByRole("menuitem", { name: "Remove image" })).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(menu.getByRole("menuitemradio", { name: "Thumbnail" })).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(menu.getByRole("menuitem", { name: "Remove image" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(editor(page)).toBeFocused();
+  });
+
+  test("the table button's size grid goes by the arrow keys", async ({ page }) => {
+    await openNewWikiPage(page, "Table by keys");
+    await editor(page).click();
+    await page.locator(".remarkup-assist-button:has(.fa-table)").click();
+    const picker = page.locator(".rme-table-picker");
+    await expect(picker).toContainText("3 × 2");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowDown");
+    await expect(picker).toContainText("4 × 3");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toMatch(/^\| Column 1 \| Column 2 \| Column 3 \| Column 4 \|\n(.*\n){4}\n$/);
+  });
+});
+
+test.describe("discoverability", () => {
+  test("the empty editor says how to insert and where the shortcuts are", async ({ page }) => {
+    await openNewWikiPage(page, "Placeholder");
+    await expect(page.locator(".cm-placeholder")).toHaveText(/^.+[.…] Type \/ to insert, F1 for shortcuts\.$/);
+  });
+
+  test("a ⋯ button on the image under the mouse opens its menu", async ({ page }) => {
+    await startWith(page, "Before.\n\n{F1}\n\nAfter.");
+    const image = page.locator(".rme-editor a[data-rme-file] img").first();
+    const more = page.locator(".rme-image-more");
+    await expect(more).toBeHidden();
+    await image.hover();
+    await expect(more).toBeVisible();
+    // In the image's top right corner.
+    const box = (await image.boundingBox())!;
+    const button = (await more.boundingBox())!;
+    expect(button.x).toBeGreaterThan(box.x + box.width / 2);
+    expect(button.x + button.width).toBeLessThanOrEqual(box.x + box.width);
+    expect(button.y).toBeGreaterThanOrEqual(box.y);
+    expect(button.y + button.height).toBeLessThan(box.y + box.height / 2);
+    await more.click();
+    await page.locator(".rme-image-menu").getByRole("menuitemradio", { name: "Full size" }).click();
+    await expect.poll(() => source(page)).toBe("Before.\n\n{F1, size=full}\n\nAfter.");
+    // Gone when the mouse leaves the image.
+    await page.locator(".cm-line", { hasText: "Before." }).hover();
+    await expect(more).toBeHidden();
+  });
+});
+
+test.describe("menus and scrolling", () => {
+  test("a menu stays at its text when the box around the editor scrolls, hidden while the text is out of view", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Scrolling menu");
+    // Like the editor in a dialog, which scrolls inside.
+    await page.addStyleTag({ content: ".rme-editor .cm-scroller { max-height: 200px; overflow: auto !important; }" });
+    await editor(page).click();
+    await page.keyboard.insertText(Array.from({ length: 60 }, (_, i) => `Line ${i}`).join("\n\n"));
+    await page.keyboard.press("Control+Home");
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.press("ArrowDown");
+    }
+    await page.keyboard.press("End");
+    await page.keyboard.type(" /");
+    const menu = page.locator(".rme-autocomplete");
+    await expect(menu).toBeVisible();
+    const before = (await menu.boundingBox())!.y;
+    const scroller = page.locator(".rme-editor .cm-scroller");
+    // The text moves up, and the menu with it.
+    await scroller.evaluate((box) => (box.scrollTop += 40));
+    await expect.poll(async () => Math.round((await menu.boundingBox())!.y - before)).toBe(-40);
+    await scroller.evaluate((box) => (box.scrollTop += 400));
+    await expect(menu).toBeHidden();
+    await scroller.evaluate((box) => (box.scrollTop = 0));
+    await expect(menu).toBeVisible();
+  });
+});
+
+test.describe("long texts", () => {
+  test("rendered blocks not drawn yet are estimated at about their height, so scrolling does not jump", async ({
+    page,
+  }) => {
+    const code = Array.from({ length: 8 }, (_, i) => `line ${i}`).join("\n");
+    const table = ["| A | B", "| - | -", ...Array.from({ length: 6 }, (_, i) => `| ${i} | x`)].join("\n");
+    const sections = Array.from({ length: 25 }, (_, i) => `Section ${i}.\n\n\`\`\`\n${code}\n\`\`\`\n\n${table}`);
+    await startWith(page, sections.join("\n\n"));
+    const height = () =>
+      page.locator(".rme-editor .cm-content").evaluate((content) => (content as HTMLElement).offsetHeight);
+    // At the top, the middle of the text not drawn yet.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const estimated = await height();
+    // Draw it all, from top to bottom.
+    await page.mouse.move(400, 400);
+    for (let y = 0; y < 30; y++) {
+      await page.mouse.wheel(0, 400);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    }
+    const drawn = await height();
+    expect(Math.abs(drawn - estimated) / drawn).toBeLessThan(0.15);
+  });
+});
+
+test.describe("inline markup as Phorge finds it", () => {
+  test("formatting across lines, emoji, and references only where Phorge has them", async ({ page }) => {
+    await startWith(
+      page,
+      "Some **bold\nacross lines** and :smile: but A1 and x@alice stay text.\n\n> A //quoted// T1\n\n- an __item__\n  with ~~more~~\n\n| **cell** | T1 |\n| - | - |\n| x | y |",
+    );
+    // Without the focus, the markers are hidden and the text is styled, also across lines.
+    const bold = page.locator(".cm-line .rme-bold");
+    await expect(bold).toHaveText(["bold", "across lines"]);
+    await expect(page.locator(".cm-line", { hasText: "across lines" })).toContainText("😄");
+    await expect(page.locator(".cm-line", { hasText: "across lines" })).not.toContainText(":smile:");
+    await expect(page.locator(".cm-line", { hasText: "stay text" })).toContainText("A1 and x@alice stay text.");
+    await expect(page.locator(".cm-line .rme-italic")).toHaveText("quoted");
+    await expect(page.locator(".cm-line", { hasText: "quoted" }).locator(".phui-tag-view, a")).toContainText("T1");
+    await expect(page.locator(".cm-line .rme-underline")).toHaveText("item");
+    await expect(page.locator(".cm-line .rme-del")).toHaveText("more");
+    await expect(page.locator(".rme-table-editor strong")).toHaveText("cell");
+  });
+});
+
+test.describe("insert menu in cells", () => {
+  test("Enter right after / in a table cell inserts the focused item, no new row", async ({ page }) => {
+    await startWith(page, "| a | b |\n| 1 | 2 |");
+    await page.locator(".rme-table-editor td", { hasText: "1" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" /");
+    // The first item of a cell's menu: a link, whose search opens.
+    await expect(page.locator(".rme-autocomplete .jx-result.focused")).toHaveText(/^Link/);
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".rme-picker input")).toBeFocused();
+    await expect(page.locator(".rme-table-editor tr")).toHaveCount(2);
+    await expect.poll(() => source(page)).toBe("| a | b |\n| 1  | 2 |");
+  });
+});
+
+test.describe("long menus", () => {
+  /** The index of the focused item of a menu, and whether it is in view in its list. */
+  const focused = (page: Page) =>
+    page.locator(".rme-autocomplete").evaluate((menu) => {
+      const items = Array.from(menu.querySelectorAll(".jx-result"));
+      const item = menu.querySelector(".jx-result.focused")!;
+      const list = menu.querySelector(".phuix-autocomplete-list")!.getBoundingClientRect();
+      const box = item.getBoundingClientRect();
+      return {
+        index: items.indexOf(item),
+        count: items.length,
+        inView: box.top >= list.top && box.bottom <= list.bottom + 1,
+      };
+    });
+
+  test("Page Down and Up skip a page of the insert menu, to its last and first item at most", async ({ page }) => {
+    await openNewWikiPage(page, "Paging");
+    await editor(page).click();
+    await page.keyboard.type("/");
+    await page.keyboard.press("PageDown");
+    const paged = await focused(page);
+    expect(paged.index).toBeGreaterThan(3);
+    expect(paged.inView).toBe(true);
+    for (let i = 0; i < 20; i++) {
+      await page.keyboard.press("PageDown");
+    }
+    await expect.poll(async () => (await focused(page)).index).toBe(paged.count - 1);
+    for (let i = 0; i < 20; i++) {
+      await page.keyboard.press("PageUp");
+    }
+    await expect.poll(async () => (await focused(page)).index).toBe(0);
+    // The menu is still open, the text unchanged.
+    await expect.poll(() => source(page)).toBe("/");
+  });
+
+  test("Page Down and Up skip a page of a search's results, e.g. of the icons", async ({ page }) => {
+    await openNewWikiPage(page, "Paging icons");
+    await editor(page).click();
+    await page.keyboard.type("/icon");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".rme-picker input")).toBeFocused();
+    await expect(page.locator(".rme-autocomplete .jx-result").nth(20)).toBeAttached();
+    await page.keyboard.press("PageDown");
+    const paged = await focused(page);
+    expect(paged.index).toBeGreaterThan(3);
+    expect(paged.inView).toBe(true);
+    await page.keyboard.press("PageDown");
+    await expect.poll(async () => (await focused(page)).index).toBeGreaterThan(paged.index);
+    await page.keyboard.press("PageUp");
+    await page.keyboard.press("PageUp");
+    await expect.poll(async () => (await focused(page)).index).toBe(0);
+  });
+
+  test("Page Down and Up move through the autocomplete's results too", async ({ page }) => {
+    await openNewWikiPage(page, "Paging emoji");
+    await editor(page).click();
+    await page.keyboard.type("Hi :s");
+    await expect(page.locator(".rme-autocomplete .jx-result").nth(4)).toBeAttached();
+    await page.keyboard.press("PageDown");
+    await expect.poll(async () => (await focused(page)).index).toBeGreaterThan(1);
+    await page.keyboard.press("PageUp");
+    await expect.poll(async () => (await focused(page)).index).toBe(0);
+    await expect.poll(() => source(page)).toBe("Hi :s");
   });
 });

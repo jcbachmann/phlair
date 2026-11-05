@@ -1,36 +1,20 @@
 // Text blocks (paragraphs, headers, lists, quotes, notes, rules) always show their
 // source, styled like the rendered text (sourceStyle.ts), with their markup
 // hidden except where the cursor is (inlinePreview.ts), so nothing moves when
-// the cursor moves. Other blocks (code, rules, ...) show as the server renders
+// the cursor moves. Other blocks (code, literal, ...) show as the server renders
 // them, except while the cursor is in them; tables are edited as tables
 // (tableEditor.ts).
 
-import {
-  EditorSelection,
-  EditorState,
-  type Extension,
-  Facet,
-  type Line,
-  Prec,
-  type Range,
-  StateEffect,
-  StateField,
-} from "@codemirror/state";
-import {
-  Decoration,
-  type DecorationSet,
-  EditorView,
-  keymap,
-  ViewPlugin,
-  type ViewUpdate,
-  WidgetType,
-} from "@codemirror/view";
+import { EditorState, Facet, type Line, type Range, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { type Block, type BlockKind, splitBlocks } from "../blocks";
 import type { BlockRenderer, RenderItem } from "../renderer";
-import { storedChoice } from "../../storage";
 import { blockEdges, clearGaps, gapKey, gapMeasurer, gapsField, setGaps } from "./gaps";
-import { enterTable, focusedCellSource, refreshCellEditor, TableWidget } from "./tableEditor";
-import { parseHtml, setHtml } from "../html";
+import { focusField, focusTracking, setFocused } from "./focus";
+import { floatPadMeasure, floatPadsField, ImagePreview, imagesOf, setFloatPads } from "./imagePreview";
+import { focusedCellSource, refreshCellEditor, setTableMode, TableWidget, tableModeField } from "./tableEditor";
+import { setHtml } from "../html";
+import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { type ListItem, parseList } from "../list";
 import { LIST_ITEM } from "../syntax";
 
@@ -55,20 +39,6 @@ const blockRenderer = Facet.define<BlockRenderer, BlockRenderer | null>({
   combine: (values) => values[0] ?? null,
 });
 
-/** What the editor of a table cell needs of the editor, which the table editor can not import (see attach.ts). */
-export interface CellSupport {
-  /** The extensions of a cell's editor (live preview, autocomplete, insert menu, shortcuts), for the editor of the text. */
-  extensions(main: EditorView): Extension;
-  /** A toolbar button's command in a cell, by its icon (e.g. "fa-bold"); null if it is none. */
-  format(icon: string): ((view: EditorView) => boolean) | null;
-  /** Pastes a URL over the selected text as a link with that text; false if it is no URL or nothing is selected. */
-  linkSelection(view: EditorView, text: string): boolean;
-}
-
-export const cellSupport = Facet.define<CellSupport, CellSupport | null>({
-  combine: (values) => values[0] ?? null,
-});
-
 /**
  * Moves where a click, Home or End puts the cursor in the text, e.g. out of
  * hidden markers (inlinePreview.ts).
@@ -87,40 +57,10 @@ export function rendererOf(state: EditorState): BlockRenderer | null {
 /** Dispatched when rendered HTML arrived for some blocks. */
 export const renderedEffect = StateEffect.define<null>();
 
-/**
- * How tables are edited: as tables, cell by cell, the cell being edited with
- * the live preview of the text ("table"); or as their text.
- */
-export type TableMode = "table" | "text";
-
-const tableModeChoice = storedChoice<TableMode>("phizziwig-table-mode", "table", ["table", "text"]);
-
-const setTableMode = StateEffect.define<TableMode>();
-
-/** Switches between editing tables as tables and as text, and remembers the choice. */
-export function switchTableMode(mode: TableMode): StateEffect<TableMode> {
-  tableModeChoice.set(mode);
-  return setTableMode.of(mode);
-}
-
-/** How tables are edited: as tables (TableWidget) or as their text. Remembered per browser. */
-export const tableModeField = StateField.define<TableMode>({
-  create: () => tableModeChoice.get(),
-  update(mode, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setTableMode)) {
-        return effect.value;
-      }
-    }
-    return mode;
-  },
-});
-
 export interface PreviewState {
   blocks: Block[];
   /** Indexes of the blocks shown as source. */
   active: Set<number>;
-  focused: boolean;
   /** While the mouse selects text, the blocks keep showing as they were; see mouseSelection. */
   frozen: boolean;
   /** Gaps between blocks that are not measured yet; see gaps.ts. */
@@ -152,11 +92,6 @@ function sameSet<T>(a: Set<T>, b: Set<T>): boolean {
   return a.size === b.size && [...a].every((x) => b.has(x));
 }
 
-/** Whether a selection range touches a range of the text. */
-function selects(state: EditorState, from: number, to: number): boolean {
-  return state.selection.ranges.some((range) => range.from <= to && range.to >= from);
-}
-
 /** An item of a list block: its source range and what it renders as on its own. */
 interface SourceItem {
   from: number;
@@ -180,7 +115,7 @@ export function listItems(state: EditorState, block: Block): SourceItem[] {
 }
 
 /** What a rendered block in the text shows, by its start: its source text, and what it renders as. */
-function renderedSource(
+export function renderedSource(
   state: EditorState,
   from: number,
 ): { from: number; to: number; text: string; render: RenderItem } | null {
@@ -206,42 +141,6 @@ function activeBlocks(state: EditorState, blocks: Block[], focused: boolean): Se
     });
   }
   return active;
-}
-
-const embedCache = new Map<string, string | null>();
-
-/** The embedded images of rendered HTML, or null if it has none. */
-function imagesOf(html: string): string | null {
-  if (!html.includes("<img") || !(html.includes("data-rme-file") || html.includes("phabricator-remarkup-macro"))) {
-    return null;
-  }
-  let images = embedCache.get(html);
-  if (images === undefined) {
-    // Embedded files, and image macros and memes, in their order.
-    const found = Array.from(
-      parseHtml(html).querySelectorAll('[class*="phabricator-remarkup-embed-layout"], img.phabricator-remarkup-macro'),
-    );
-    images =
-      found
-        .filter((el) => el.tagName === "IMG" || el.querySelector("img[src]"))
-        .map((el) => {
-          if (el.tagName === "IMG") {
-            return `<p>${el.outerHTML}</p>`;
-          }
-          // An embed starting a paragraph ("<p><div>…") leaves an empty
-          // paragraph before it, which moves it down: keep that, so it is in
-          // the same place while editing (images below the source hide it).
-          const before = el.previousElementSibling;
-          const empty = before?.tagName === "P" && !before.textContent?.trim();
-          return (empty ? "<p></p>" : "") + el.outerHTML;
-        })
-        .join("") || null;
-    embedCache.set(html, images);
-    if (embedCache.size > 200) {
-      embedCache.delete(embedCache.keys().next().value!);
-    }
-  }
-  return images;
 }
 
 /**
@@ -338,7 +237,7 @@ function buildDecorations(
     } else if (block.kind === "table" && tableMode !== "text") {
       // Tables are tables, editable cell by cell, also before they are rendered.
       ranges.push(
-        Decoration.replace({ widget: new TableWidget(items[i]!.text, htmls[i], tableMode), block: true }).range(
+        Decoration.replace({ widget: new TableWidget(items[i]!.text, htmls[i]), block: true }).range(
           block.from,
           block.contentTo,
         ),
@@ -347,10 +246,15 @@ function buildDecorations(
       const html = htmls[i];
       if (html) {
         ranges.push(
-          Decoration.replace({ widget: new RenderedBlock(html, block.kind, fences(state, block)), block: true }).range(
-            block.from,
-            block.contentTo,
-          ),
+          Decoration.replace({
+            widget: new RenderedBlock(
+              html,
+              block.kind,
+              fences(state, block),
+              state.doc.lineAt(block.contentTo).number - state.doc.lineAt(block.from).number + 1,
+            ),
+            block: true,
+          }).range(block.from, block.contentTo),
         );
       }
     }
@@ -383,116 +287,22 @@ function listImages(
   }
 }
 
-const setFocused = StateEffect.define<boolean>();
-
-/**
- * Notes the focus of the editor now, instead of after CodeMirror's delay
- * (focusChangeEffect): e.g. before measuring the text, which may still show
- * a block rendered that shows its source with the focus. Only the focus
- * coming: without it, the focus may be in a table cell, whose table must
- * stay as it is.
- */
-export function syncFocus(view: EditorView): void {
-  const preview = view.state.field(previewField, false);
-  if (view.hasFocus && preview && !preview.focused) {
-    view.dispatch({ effects: setFocused.of(true) });
-  }
-}
-
-/**
- * How far the floating images of a block being edited reach below its last
- * line, by block start: that line gets as much padding, so the image stays
- * within the block like in the rendered text.
- */
-const setFloatPads = StateEffect.define<Map<number, number>>();
-
-const floatPadsField = StateField.define<Map<number, number>>({
-  create: () => new Map(),
-  update(pads, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setFloatPads)) {
-        return effect.value;
-      }
-    }
-    if (!tr.docChanged || !pads.size) {
-      return pads;
-    }
-    const mapped = new Map<number, number>();
-    pads.forEach((pad, from) => mapped.set(tr.changes.mapPos(from, 1), pad));
-    return mapped;
-  },
-});
-
-/** Measures floatPadsField after the layout changed (e.g. an image arrived). */
-const floatPadMeasure = ViewPlugin.define((view) => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const measure = () =>
-    view.requestMeasure({
-      key: floatPadMeasure,
-      read: () => {
-        const pads = new Map<number, number>();
-        const { blocks } = view.state.field(previewField);
-        view.contentDOM.querySelectorAll<HTMLElement>(".rme-preview-float").forEach((preview) => {
-          const from = view.posAtDOM(preview);
-          const block = blocks.find((b) => b.from === from);
-          const line = block && (view.domAtPos(block.contentTo).node as Node);
-          const lineDom = line instanceof Element ? line.closest(".cm-line") : line?.parentElement?.closest(".cm-line");
-          // Like the rendered block, which contains the images with their margins.
-          const images = Array.from(preview.children).map(
-            (child) => child.getBoundingClientRect().bottom + parseFloat(getComputedStyle(child).marginBottom),
-          );
-          if (!block || !lineDom || !images.length) {
-            return;
-          }
-          const lineBottom =
-            lineDom.getBoundingClientRect().bottom - parseFloat(getComputedStyle(lineDom).paddingBottom);
-          const pad = Math.max(...images) - lineBottom;
-          if (pad > 0.5) {
-            pads.set(from, pad);
-          }
-        });
-        return pads;
-      },
-      write: (pads) => {
-        const old = view.state.field(floatPadsField);
-        // Changed by more than rounding: else the padding would never settle.
-        if (pads.size !== old.size || [...pads].some(([from, pad]) => Math.abs((old.get(from) ?? 0) - pad) > 0.5)) {
-          // Not while CodeMirror measures.
-          clearTimeout(timer);
-          timer = setTimeout(() => view.dispatch({ effects: setFloatPads.of(pads) }));
-        }
-      },
-    });
-  return {
-    update(update: ViewUpdate) {
-      if (
-        update.docChanged ||
-        update.geometryChanged ||
-        update.startState.field(previewField) !== update.state.field(previewField)
-      ) {
-        measure();
-      }
-    },
-    destroy: () => clearTimeout(timer),
-  };
-});
-
 /** Starts and ends a selection with the mouse; see PreviewState.frozen. */
-const freezeBlocks = StateEffect.define<boolean>();
+export const freezeBlocks = StateEffect.define<boolean>();
 
 export const previewField = StateField.define<PreviewState>({
   create(state) {
     const blocks = splitBlocks(state.doc.toString());
     const active = activeBlocks(state, blocks, false);
-    return { blocks, active, focused: false, frozen: false, ...buildDecorations(state, blocks, active, new Map()) };
+    return { blocks, active, frozen: false, ...buildDecorations(state, blocks, active, new Map()) };
   },
   update(value, tr) {
-    let { focused, frozen } = value;
+    let { frozen } = value;
+    const focused = tr.state.field(focusField);
+    const focusChanged = focused !== tr.startState.field(focusField);
     let rendered = false;
     for (const effect of tr.effects) {
-      if (effect.is(setFocused)) {
-        focused = effect.value;
-      } else if (effect.is(freezeBlocks)) {
+      if (effect.is(freezeBlocks)) {
         frozen = effect.value;
       } else if (
         effect.is(renderedEffect) ||
@@ -504,21 +314,21 @@ export const previewField = StateField.define<PreviewState>({
         rendered = true;
       }
     }
-    if (!tr.docChanged && !tr.selection && focused === value.focused && frozen === value.frozen && !rendered) {
+    if (!tr.docChanged && !tr.selection && !focusChanged && frozen === value.frozen && !rendered) {
       return value;
     }
     if (frozen && !tr.docChanged && !rendered) {
-      return { ...value, focused, frozen };
+      return { ...value, frozen };
     }
     const blocks = tr.docChanged ? splitBlocks(tr.state.doc.toString()) : value.blocks;
     const active = frozen && !tr.docChanged ? value.active : activeBlocks(tr.state, blocks, focused);
     // The cursor moved within what shows as source: the decorations stay.
     if (!tr.docChanged && !rendered && sameSet(active, value.active)) {
-      return { ...value, focused, frozen };
+      return { ...value, frozen };
     }
     const previews = new Map<number, string>();
     value.previews.forEach((images, from) => previews.set(tr.changes.mapPos(from, -1), images));
-    return { blocks, active, focused, frozen, ...buildDecorations(tr.state, blocks, active, previews) };
+    return { blocks, active, frozen, ...buildDecorations(tr.state, blocks, active, previews) };
   },
   provide: (field) => [
     EditorView.decorations.from(field, (value) => value.decorations),
@@ -607,8 +417,14 @@ class RenderedBlock extends WidgetType {
     readonly html: string,
     readonly kind: BlockKind,
     readonly fences: [boolean, boolean],
+    /** Lines of its source, for the estimate of its height. */
+    readonly lines: number,
   ) {
     super();
+  }
+
+  override get estimatedHeight(): number {
+    return knownHeight(this.html, this.lines * LINE_HEIGHT + 16);
   }
 
   override eq(other: RenderedBlock): boolean {
@@ -620,16 +436,15 @@ class RenderedBlock extends WidgetType {
     );
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  toDOM(): HTMLElement {
     const dom = document.createElement("div");
-    dom.className = `rme-block rme-block-${this.kind} phabricator-remarkup`;
+    // Clicks and selecting with the mouse: see mouseSelection.ts.
+    dom.className = `rme-block rme-rendered rme-block-${this.kind} phabricator-remarkup`;
     dom.classList.toggle("rme-fence-before", this.fences[0]);
     dom.classList.toggle("rme-fence-after", this.fences[1]);
     // Server-rendered remarkup, the same HTML the page's preview shows.
     setHtml(dom, this.html);
-    dom.title = "Click to edit, Ctrl+click to open a link";
-    dom.addEventListener("mousedown", (event) => selectWithMouse(view, event));
-    dom.addEventListener("click", openLinkOnModClick);
+    rememberHeight(this.html, dom);
     return dom;
   }
 
@@ -717,435 +532,22 @@ class Spacer extends WidgetType {
   }
 }
 
-/** The images of a block being edited, shown below its source. */
-class ImagePreview extends WidgetType {
-  constructor(
-    readonly html: string,
-    /**
-     * Where the images are: below the source, above it (a block starting with
-     * an image), or floating beside it (no height of their own, the source
-     * lines flow around them).
-     */
-    readonly placement: "below" | "above" | "float",
-  ) {
-    super();
-  }
-
-  override eq(other: ImagePreview): boolean {
-    return other.html === this.html && other.placement === this.placement;
-  }
-
-  toDOM(): HTMLElement {
-    const dom = document.createElement("div");
-    dom.className = `rme-block rme-image-preview rme-preview-${this.placement} phabricator-remarkup`;
-    // Server-rendered images of the block.
-    setHtml(dom, this.html);
-    // Keep the cursor in the source; the images have a context menu.
-    dom.addEventListener("mousedown", (event) => event.preventDefault());
-    dom.addEventListener("click", (event) => event.preventDefault());
-    return dom;
-  }
-
-  override ignoreEvent(): boolean {
-    return true;
-  }
-}
-
-/** Links in the editor open with Ctrl+click (Cmd+click); a plain click edits. */
-export function openLinkOnModClick(event: MouseEvent): void {
-  const link = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
-  if (link) {
-    event.preventDefault();
-    if (event.ctrlKey || event.metaKey) {
-      window.open(link.href, "_blank", "noopener");
-    }
-  }
-}
-
-/** A place in rendered text: the position in the source it shows, and where it is in the page. */
-interface RenderedPoint {
-  pos: number;
-  node: Node;
-  offset: number;
-}
-
-/**
- * The text under the mouse in a rendered block or list item: its position in
- * the source, or null where the text is not found there (e.g. a link's title).
- */
-function renderedPoint(view: EditorView, dom: Element, event: MouseEvent): RenderedPoint | null {
-  const source = renderedSource(view.state, view.posAtDOM(dom));
-  const caret = caretAt(event.clientX, event.clientY);
-  if (!source || !caret || !dom.contains(caret.node)) {
-    return null;
-  }
-  const offset = sourceOffset(source.text, caret, dom);
-  return offset === null ? null : { pos: source.from + offset, ...caret };
-}
-
-/** The rendered block or list item an element is in: its range in the source. */
-function renderedUnit(view: EditorView, el: Element | null): { from: number; to: number; dom: Element } | null {
-  const dom = el?.closest(".rme-block:not(.rme-image-preview)");
-  if (!dom || !view.contentDOM.contains(dom)) {
-    return null;
-  }
-  const source = renderedSource(view.state, view.posAtDOM(dom));
-  return source && { from: source.from, to: source.to, dom };
-}
-
-/**
- * The ends of the selection being made with the mouse that are in rendered
- * text, where the page shows them; see highlightRendered().
- */
-const dragPoints: { anchor: RenderedPoint | null; head: RenderedPoint | null } = { anchor: null, head: null };
-
-/**
- * Where a selection made with the mouse from `anchor` ends: at the text
- * under the mouse, in the source or in a rendered block or list item, like
- * in a text field. Where rendered text is not found in the source, and in
- * tables, at the far end of the block.
- */
-function dragHead(view: EditorView, event: MouseEvent, anchor: number): number | null {
-  dragPoints.head = null;
-  const unit = renderedUnit(view, document.elementFromPoint(event.clientX, event.clientY));
-  if (!unit) {
-    return view.posAtCoords({ x: event.clientX, y: event.clientY }, false);
-  }
-  const point = unit.dom.classList.contains("rme-table-editor") ? null : renderedPoint(view, unit.dom, event);
-  if (point) {
-    dragPoints.head = point;
-    return point.pos;
-  }
-  return unit.from >= anchor ? unit.to : unit.from;
-}
-
-/**
- * Click and drag in a rendered block or list item. A click puts the cursor at
- * the clicked text. Dragging selects from there to the text the mouse
- * reaches (see dragHead()); Shift+click extends the selection to it. Blocks
- * only switch to their source when the mouse button is released, so nothing
- * moves under the mouse while selecting; until then, the selected rendered
- * text is highlighted (highlightRendered()).
- */
-function selectWithMouse(view: EditorView, event: MouseEvent): void {
-  if (event.button !== 0) {
-    return;
-  }
-  event.preventDefault();
-  if ((event.ctrlKey || event.metaKey) && (event.target as Element).closest("a[href]")) {
-    // Opens the link on click, see openLinkOnModClick().
-    return;
-  }
-  const dom = event.currentTarget as Element;
-  const unit = renderedUnit(view, dom);
-  if (!unit) {
-    return;
-  }
-  const point = renderedPoint(view, dom, event);
-  dragPoints.anchor = event.shiftKey ? null : point;
-  const anchor = event.shiftKey ? view.state.selection.main.anchor : (point?.pos ?? unit.to);
-  const selection = event.shiftKey
-    ? EditorSelection.range(anchor, dragHead(view, event, anchor) ?? anchor)
-    : EditorSelection.cursor(anchor);
-  view.dispatch({ selection, effects: freezeBlocks.of(true) });
-  view.focus();
-  const start = { x: event.clientX, y: event.clientY };
-  let dragging = false;
-  const move = (moved: MouseEvent) => {
-    dragging ||= Math.hypot(moved.clientX - start.x, moved.clientY - start.y) > 4;
-    if (!dragging) {
-      return;
-    }
-    const head = dragHead(view, moved, anchor);
-    const range = head === null ? null : EditorSelection.range(anchor, head);
-    if (range && !range.eq(view.state.selection.main)) {
-      view.dispatch({ selection: range });
-    }
-  };
-  window.addEventListener("mousemove", move);
-  untilMouseUp(() => {
-    window.removeEventListener("mousemove", move);
-    view.dispatch({ effects: freezeBlocks.of(false), scrollIntoView: true });
-  });
-}
-
-const HIGHLIGHT = "rme-selection";
-
-/**
- * Highlights the selected text of the rendered blocks while the mouse
- * selects: what is selected of each, from or to where the mouse is in it.
- * The browser's own selection would show all of a block whose source it
- * reaches into, so it does not show in them meanwhile (style.css).
- */
-function highlightRendered(view: EditorView, show: boolean): void {
-  if (typeof Highlight === "undefined" || !CSS.highlights) {
-    return;
-  }
-  if (!show) {
-    CSS.highlights.delete(HIGHLIGHT);
-    return;
-  }
-  const { from, to } = view.state.selection.main;
-  const ranges: AbstractRange[] = [];
-  view.contentDOM.querySelectorAll(".rme-block:not(.rme-image-preview)").forEach((dom) => {
-    const source = renderedSource(view.state, view.posAtDOM(dom));
-    if (!source || Math.max(from, source.from) >= Math.min(to, source.to)) {
-      return;
-    }
-    // All of its text, unless an end of the selection is in it.
-    const range = document.createRange();
-    range.selectNodeContents(dom);
-    const at = (pos: number) =>
-      [dragPoints.anchor, dragPoints.head].find((point) => point?.pos === pos && dom.contains(point.node));
-    const start = from > source.from ? at(from) : undefined;
-    if (start) {
-      range.setStart(start.node, start.offset);
-    }
-    const end = to < source.to ? at(to) : undefined;
-    if (end) {
-      range.setEnd(end.node, end.offset);
-    }
-    ranges.push(range);
-  });
-  CSS.highlights.set(HIGHLIGHT, new Highlight(...ranges));
-}
-
-/**
- * Calls back once the mouse button is released, or the press turned into
- * dragging text (which ends without a mouseup), the window lost the focus or
- * a key is pressed (typing must reach the text, not a block still rendered).
- * With afterMouseUp, a release calls back after the other mouseup handlers,
- * unless a key comes first.
- */
-function untilMouseUp(done: () => void, afterMouseUp = false): void {
-  const events = ["mouseup", "dragstart", "blur", "keydown"] as const;
-  let finished = false;
-  const finish = () => {
-    if (!finished) {
-      finished = true;
-      events.forEach((type) => window.removeEventListener(type, end, true));
-      done();
-    }
-  };
-  const end = (event: Event) => (event.type === "mouseup" && afterMouseUp ? setTimeout(finish) : finish());
-  events.forEach((type) => window.addEventListener(type, end, true));
-}
-
-/**
- * Selecting with the mouse in the source keeps the blocks as they are until
- * the button is released, too: a selection reaching into a rendered block
- * would otherwise switch it to its source under the mouse.
- */
-const mouseSelection = [
-  // Selecting from the source: across rendered blocks like selectWithMouse().
-  EditorView.mouseSelectionStyle.of((view, event) => {
-    if (event.button !== 0 || event.detail > 1 || event.ctrlKey || event.metaKey || event.altKey) {
-      return null;
-    }
-    dragPoints.anchor = null;
-    let anchor = event.shiftKey
-      ? view.state.selection.main.anchor
-      : clicked(view, view.posAtCoords({ x: event.clientX, y: event.clientY }, false));
-    return {
-      get: (current) => {
-        const head = dragHead(view, current, anchor);
-        return EditorSelection.single(anchor, head === null ? anchor : clicked(view, head));
-      },
-      update: (update) => {
-        anchor = update.changes.mapPos(anchor);
-        return false;
-      },
-    };
-  }),
-  EditorView.domEventHandlers({
-    mousedown(event, view) {
-      if (event.button === 0) {
-        view.dispatch({ effects: freezeBlocks.of(true) });
-        // After CodeMirror handled the mouseup.
-        untilMouseUp(() => view.dom.isConnected && view.dispatch({ effects: freezeBlocks.of(false) }), true);
-      }
-      return false;
-    },
-  }),
-  // The selected text of rendered blocks shows selected.
-  ViewPlugin.define((view) => ({
-    update(update: ViewUpdate) {
-      const { frozen } = update.state.field(previewField);
-      if (frozen || update.startState.field(previewField).frozen) {
-        highlightRendered(update.view, frozen);
-      }
-      if (!frozen) {
-        dragPoints.anchor = dragPoints.head = null;
-      }
-    },
-    destroy: () => view.state.field(previewField).frozen && highlightRendered(view, false),
-  })),
-  // Images change the height of blocks when they arrive.
-  ViewPlugin.define((view) => {
-    const onLoad = (event: Event) => event.target instanceof HTMLImageElement && view.requestMeasure();
-    view.contentDOM.addEventListener("load", onLoad, true);
-    return { destroy: () => view.contentDOM.removeEventListener("load", onLoad, true) };
-  }),
-];
-
-function caretAt(x: number, y: number): { node: Node; offset: number } | null {
-  const doc = document as Document & {
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-  };
-  if (doc.caretPositionFromPoint) {
-    const pos = doc.caretPositionFromPoint(x, y);
-    return pos ? { node: pos.offsetNode, offset: pos.offset } : null;
-  }
-  const range = document.caretRangeFromPoint?.(x, y);
-  return range ? { node: range.startContainer, offset: range.startOffset } : null;
-}
-
-/** Positions of a text in another, from the start. */
-function occurrences(text: string, part: string): number[] {
-  const found: number[] = [];
-  for (let i = text.indexOf(part); i >= 0; i = text.indexOf(part, i + 1)) {
-    found.push(i);
-  }
-  return found;
-}
-
-/**
- * Finds a place in rendered text (e.g. the clicked one) in the block source;
- * null if not found. Text that occurs more than once is found at the same
- * occurrence.
- */
-function sourceOffset(source: string, caret: { node: Node; offset: number }, container: Element): number | null {
-  if (caret.node.nodeType !== Node.TEXT_NODE) {
-    return null;
-  }
-  const text = caret.node.textContent ?? "";
-  const k = caret.offset;
-  for (const [a, b] of [
-    [k - 20, k + 20],
-    [k - 8, k + 8],
-    [k, k + 5],
-    [k - 5, k],
-  ]) {
-    const start = Math.max(0, a);
-    const snippet = text.slice(start, Math.min(text.length, b));
-    if (snippet.trim().length < 3) {
-      continue;
-    }
-    const inSource = occurrences(source, snippet);
-    if (inSource.length) {
-      const before = document.createRange();
-      before.selectNodeContents(container);
-      before.setEnd(caret.node, start);
-      const rendered = before.toString() + snippet;
-      const nth = occurrences(rendered, snippet).length - 1;
-      return (inSource[nth] ?? inSource[0]) + (k - start);
-    }
-  }
-  return null;
-}
-
 /** Whether a position is in a list block. */
 export function inListBlock(state: EditorState, pos: number): boolean {
   return state.field(previewField).blocks.some((b) => b.kind === "list" && b.from <= pos && pos <= b.contentTo);
 }
 
-/**
- * Up and Down move like CodeMirror moves them, by visual rows, to the same
- * place on the screen (also within and between wrapped lines), with these
- * corrections:
- * - its column is kept across moves (the selection does not keep it);
- * - where it would not move (e.g. stuck at the space between two blocks) or
- *   would skip a line, it goes to the next line;
- * - a rendered block (code, a table as text) is entered at the column of the
- *   source and shows its source; a table edited as a table, in its cells;
- * - on a list item, the cursor lands in its text, not in its marker: coming
- *   from before the marker of an item, before the marker; selecting (with
- *   Shift), from the start of the line, which selects lines whole.
- */
-function moveLine(view: EditorView, forward: boolean, extend = false): boolean {
-  const { state } = view;
-  const range = state.selection.main;
-  if (!range.empty && !extend) {
-    return false;
-  }
-  const line = state.doc.lineAt(range.head);
-  // The column where the moves started, while the cursor moves on from there:
-  // in the source, and on the screen; and at a soft wrap, on which row the
-  // cursor is (the selection does not keep either).
-  const goal = lineGoals.get(view);
-  const going = goal?.head === range.head ? goal : null;
-  const start = EditorSelection.cursor(range.head, going ? going.assoc : range.assoc, undefined, going?.x);
-  const moved = view.moveVertically(start, forward);
-  const movedLine = state.doc.lineAt(moved.head).number;
-  const column = going ? going.column : range.head - line.from;
-  let head = moved.head;
-  let assoc = moved.assoc;
-  if (movedLine !== line.number || moved.head === range.head) {
-    const number = line.number + (forward ? 1 : -1);
-    if (number < 1 || number > state.doc.lines) {
-      // To the start or end of the text, like CodeMirror.
-      return false;
-    }
-    const target = state.doc.line(number);
-    let rendered = false;
-    let table: number | null = null;
-    state.field(previewField).decorations.between(target.from, target.from, (from, to, deco) => {
-      // Rendered blocks, not points like spacers and image previews.
-      if (deco.spec.block && to > from && from <= target.from && target.from <= to) {
-        rendered = true;
-        if (deco.spec.widget instanceof TableWidget) {
-          table = from;
-        }
-      }
-    });
-    if (table !== null && !extend) {
-      // Into the cells of a table.
-      enterTable(view, table, forward);
-      return true;
-    }
-    if (movedLine !== number || rendered) {
-      // Not on the next line, or in a rendered block, which CodeMirror only
-      // enters at its edges: at the column of the source.
-      head = Math.min(target.from + column, target.to);
-      assoc = forward ? -1 : 1;
-    }
-  }
-  // On a list item, in its text, not in its marker (see above).
-  const target = state.doc.lineAt(head);
-  const item = inListBlock(state, target.from) ? LIST_ITEM.exec(target.text) : null;
-  const text = item ? target.to - item[5].length : null;
-  const beforeMarker = range.head === line.from && inListBlock(state, line.from) && LIST_ITEM.test(line.text);
-  if (text !== null && head < text) {
-    if (beforeMarker) {
-      head = target.from;
-    } else if (!extend || head > target.from) {
-      head = text;
-    }
-  }
-  const x = moved.goalColumn ?? going?.x;
-  view.dispatch({
-    selection: extend
-      ? EditorSelection.range(range.anchor, head, x, undefined, assoc)
-      : EditorSelection.cursor(head, assoc, undefined, x),
-    scrollIntoView: true,
-    userEvent: "select",
-  });
-  lineGoals.set(view, { head, column, x, assoc });
-  return true;
-}
-
-/** Where moving up or down started (its column in the source and its x), and where the cursor is now; see moveLine(). */
-const lineGoals = new WeakMap<EditorView, { head: number; column: number; x: number | undefined; assoc: number }>();
-
+/** The live preview; see above. With mouseSelection.ts and verticalMotion.ts for moving in it. */
 export function livePreview(renderer: BlockRenderer) {
   return [
     blockRenderer.of(renderer),
     // Before previewField, which reads them.
+    focusTracking,
     tableModeField,
     gapsField,
     floatPadsField,
     previewField,
-    floatPadMeasure,
+    floatPadMeasure((state) => state.field(previewField)),
     renderRequests,
     // Renderings arriving: also for the cell being edited live, whose table does not change.
     EditorView.updateListener.of((update) => {
@@ -1154,83 +556,11 @@ export function livePreview(renderer: BlockRenderer) {
       }
     }),
     gapMeasurer((state) => state.field(previewField).missingGaps),
-    mouseSelection,
-    Prec.high(
-      keymap.of([
-        { key: "ArrowDown", run: (view) => moveLine(view, true), shift: (view) => moveLine(view, true, true) },
-        { key: "ArrowUp", run: (view) => moveLine(view, false), shift: (view) => moveLine(view, false, true) },
-      ]),
-    ),
-    // With the focus in a search or dialog opened from the editor, it stays as it is (focusKeeper).
-    EditorView.focusChangeEffect.of((_state, focusing) => (focusing || !keepsFocus() ? setFocused.of(focusing) : null)),
-    focusKeeper,
+    // Images change the height of blocks when they arrive.
+    ViewPlugin.define((view) => {
+      const onLoad = (event: Event) => event.target instanceof HTMLImageElement && view.requestMeasure();
+      view.contentDOM.addEventListener("load", onLoad, true);
+      return { destroy: () => view.contentDOM.removeEventListener("load", onLoad, true) };
+    }),
   ];
 }
-
-/**
- * Searches and dialogs opened from the editor: the pickers (link, reference,
- * image macro, …) and Phorge's dialogs (upload, meme). While they have the
- * focus, the editor counts as focused, so what is being edited keeps showing
- * its source, e.g. a table edited as text.
- */
-const KEEPS_FOCUS = ".rme-picker, .jx-client-dialog";
-
-function keepsFocus(): boolean {
-  return !!document.activeElement?.closest(KEEPS_FOCUS);
-}
-
-/** Whether the editor has the focus now, or a search or dialog opened from it has. */
-export function editing(view: EditorView): boolean {
-  return view.hasFocus || (!!view.state.field(previewField, false)?.focused && keepsFocus());
-}
-
-/** Notices when the focus a search or dialog kept for the editor goes elsewhere. */
-const focusKeeper = ViewPlugin.fromClass(
-  class {
-    private watching = false;
-
-    constructor(private readonly view: EditorView) {}
-
-    update(update: ViewUpdate) {
-      if (update.focusChanged && !update.view.hasFocus && update.state.field(previewField).focused) {
-        this.watch();
-      }
-    }
-
-    private readonly check = () =>
-      // After the event, when the focus has moved (or its element is gone).
-      setTimeout(() => {
-        if (!this.watching || this.view.hasFocus || keepsFocus()) {
-          this.stop(this.view.hasFocus);
-          return;
-        }
-        this.stop(true);
-        if (this.view.state.field(previewField).focused) {
-          this.view.dispatch({ effects: setFocused.of(false) });
-        }
-      });
-
-    private watch() {
-      if (!this.watching) {
-        this.watching = true;
-        for (const type of ["focusin", "focusout", "mousedown", "keydown"]) {
-          document.addEventListener(type, this.check, true);
-        }
-      }
-    }
-
-    /** Stops watching; unless done, only when the focus is back in the editor. */
-    private stop(done: boolean) {
-      if (this.watching && done) {
-        this.watching = false;
-        for (const type of ["focusin", "focusout", "mousedown", "keydown"]) {
-          document.removeEventListener(type, this.check, true);
-        }
-      }
-    }
-
-    destroy() {
-      this.stop(true);
-    }
-  },
-);

@@ -28,6 +28,11 @@ html:not(.phuture-show) .phuture-snoozed {
   text-align: center;
 }
 
+/* Actions of items with a menu (commits): beside the menu, not over it. */
+.phuture-frame {
+  position: relative;
+}
+
 /* Room for a fourth action; Phorge styles up to three. */
 .phui-oi-with-4-actions .phui-oi-content-box {
   margin-right: 102px;
@@ -52,4 +57,35 @@ html:not(.phuture-show) .phuture-snoozed {
 
 .phuture-note {
   padding: 8px 12px;
+}
+
+/* The count of hidden snoozed items in the main menu: shown, but not like unread notifications. */
+.phuture-has-hidden .phabricator-main-menu-alert-count {
+  display: block;
+  opacity: 0.7;
+}
+
+/* Below a list with snoozed items. */
+.phuture-list-note {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #6b748c;
+}
+
+/* The note after snoozing, at the bottom of the window. */
+.phuture-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: 3px;
+  background: #2b3240;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.phuture-toast a {
+  color: #8ec2ff;
+  font-weight: bold;
 }

@@ -34,11 +34,18 @@ final class PhizziwigDownloadConduitAPIMethod extends ConduitAPIMethod {
     return 'map<string, wild>';
   }
 
+  protected function defineErrorTypes() {
+    return array(
+      'ERR-DISABLED' => pht('Phizziwig is not on for you.'),
+      'ERR-NOT-IMAGE' => pht('The URL is not an image.'),
+    );
+  }
+
   protected function execute(ConduitAPIRequest $request) {
     $viewer = $request->getUser();
 
     if (!PhizziwigSetting::isEnabledFor($viewer)) {
-      throw new Exception(pht('Phizziwig is not on for you.'));
+      throw new ConduitException('ERR-DISABLED');
     }
 
     $params = array(
@@ -62,8 +69,8 @@ final class PhizziwigDownloadConduitAPIMethod extends ConduitAPIMethod {
       $params);
 
     if (!$file->isViewableImage()) {
-      $file->delete();
-      throw new Exception(pht('The URL is not an image.'));
+      id(new PhabricatorDestructionEngine())->destroyObject($file);
+      throw new ConduitException('ERR-NOT-IMAGE');
     }
 
     return array(

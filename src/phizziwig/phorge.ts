@@ -217,11 +217,16 @@ async function request(path: string, init: RequestInit, query: Record<string, st
   return (await requestWithMetadata(path, init, query)).payload;
 }
 
-async function post(path: string, params: Record<string, string>): Promise<AjaxResponse> {
-  return requestWithMetadata(path, {
-    method: "POST",
-    body: new URLSearchParams({ __csrf__: csrfToken(), ...params }),
-  });
+async function post(
+  path: string,
+  params: Record<string, string>,
+  query: Record<string, string> = {},
+): Promise<AjaxResponse> {
+  return requestWithMetadata(
+    path,
+    { method: "POST", body: new URLSearchParams({ __csrf__: csrfToken(), ...params }) },
+    query,
+  );
 }
 
 export interface Rendered {
@@ -259,6 +264,11 @@ export function rendererFor(textarea: HTMLTextAreaElement): RenderFunction {
  * reacts to that key in a textarea, so send it there.
  */
 export function submitForm(textarea: HTMLTextAreaElement): boolean {
+  // Phorge submits it as a workflow, without a submit event (see addAttachedFile()).
+  const phids = attached.get(textarea);
+  if (phids) {
+    writeAttached(textarea, phids);
+  }
   textarea.dispatchEvent(
     new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, ctrlKey: true, bubbles: true, cancelable: true }),
   );
@@ -338,12 +348,55 @@ export interface UploadedFile {
   existing?: true;
 }
 
-/** Uploads a file like dropping it on a remarkup textarea does. */
-export async function uploadFile(file: File): Promise<UploadedFile> {
+/** Phorge stores larger files in chunks of this size (PhabricatorChunkedFileStorageEngine). */
+const CHUNK = 4 * 1024 * 1024;
+
+/**
+ * Uploads a file like dropping it on a remarkup textarea does: a file larger
+ * than a chunk in chunks, which servers take whatever their limit of a
+ * request's size (see JX.PhabricatorDragAndDropFileUpload). Tells the share
+ * uploaded so far, of chunked files.
+ */
+export async function uploadFile(file: File, progress?: (done: number) => void): Promise<UploadedFile> {
+  const name = file.name || "pasted-file";
+  const query = { name, length: String(file.size) };
+  if (file.size > CHUNK) {
+    // Without a storage engine for chunks the server answers without a PHID: then in one piece.
+    const allocated = (await post("/file/dropupload/", {}, { ...query, allocate: "1" })).payload as {
+      upload: boolean;
+      id?: number;
+      phid?: string;
+    };
+    if (allocated.phid) {
+      const phid = allocated.phid;
+      if (!allocated.upload) {
+        return { id: allocated.id!, phid };
+      }
+      const chunks = (await post("/file/dropupload/", {}, { ...query, phid, querychunks: "1" })).payload as {
+        byteStart: string | number;
+        byteEnd: string | number;
+        complete: boolean;
+      }[];
+      let done = chunks.filter((chunk) => chunk.complete).length;
+      for (const chunk of chunks.filter((chunk) => !chunk.complete)) {
+        const start = Number(chunk.byteStart);
+        const result = (await request(
+          "/file/dropupload/",
+          { method: "POST", body: file.slice(start, Number(chunk.byteEnd)) },
+          { ...query, phid, uploadchunk: "1", __upload__: "1", byteStart: String(start) },
+        )) as { complete?: boolean; id?: number };
+        progress?.(++done / chunks.length);
+        if (result.complete) {
+          return { id: result.id!, phid };
+        }
+      }
+      throw new Error(`Phorge: the upload of ${name} did not complete`);
+    }
+  }
   const payload = (await request(
     "/file/dropupload/",
     { method: "POST", body: file },
-    { name: file.name || "pasted-file", length: String(file.size), __upload__: "1" },
+    { ...query, __upload__: "1" },
   )) as UploadedFile;
   return { id: payload.id, phid: payload.phid };
 }
@@ -354,6 +407,35 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
  * files (UploadedFile.existing).
  */
 export function addAttachedFile(textarea: HTMLTextAreaElement, phid: string): void {
+  let phids = attached.get(textarea);
+  if (!phids) {
+    attached.set(textarea, (phids = new Set()));
+    // First on submitting, before Phorge's own handlers (Javelin listens on the document).
+    window.addEventListener("submit", reattach, true);
+  }
+  phids.add(phid);
+  writeAttached(textarea, phids);
+}
+
+/**
+ * The files Phizziwig attached, by textarea. Phorge's own upload button
+ * rewrites the metadata input from what it knows, without them; they are
+ * written in again when the form is submitted.
+ */
+const attached = new WeakMap<HTMLTextAreaElement, Set<string>>();
+
+function reattach(event: Event): void {
+  if (event.target instanceof HTMLFormElement) {
+    for (const textarea of Array.from(event.target.querySelectorAll("textarea"))) {
+      const phids = attached.get(textarea);
+      if (phids) {
+        writeAttached(textarea, phids);
+      }
+    }
+  }
+}
+
+function writeAttached(textarea: HTMLTextAreaElement, phids: Set<string>): void {
   // The control renders the metadata input next to its textarea.
   const input = textarea.parentElement?.querySelector<HTMLInputElement>(
     `input[name="${CSS.escape(textarea.name)}_metadata"]`,
@@ -363,7 +445,7 @@ export function addAttachedFile(textarea: HTMLTextAreaElement, phid: string): vo
   }
   try {
     const metadata = JSON.parse(input.value || "{}");
-    metadata.attachedFilePHIDs = [...(metadata.attachedFilePHIDs ?? []), phid];
+    metadata.attachedFilePHIDs = [...new Set([...(metadata.attachedFilePHIDs ?? []), ...phids])];
     input.value = JSON.stringify(metadata);
   } catch (error) {
     // The file is referenced in the text all the same, only not attached.

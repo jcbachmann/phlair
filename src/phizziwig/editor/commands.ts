@@ -1,7 +1,7 @@
 // Keyboard commands and the table toolbar.
 
 import { EditorSelection, type EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import { insertNewlineAndIndent } from "@codemirror/commands";
 import type { Block } from "../blocks";
 import {
@@ -27,7 +27,9 @@ import { CONTROL, TOOLBAR } from "../phorge";
 import { LIST_ITEM, QUOTE_LINE } from "../syntax";
 import { toolbarButton } from "../toolbar";
 import { hostTextarea } from "./host";
-import { blockAtCursor, clicked, inListBlock, previewField, switchTableMode, tableModeField } from "./livePreview";
+import { focusField } from "./focus";
+import { blockAtCursor, clicked, inListBlock, previewField } from "./livePreview";
+import { switchTableMode, tableModeField } from "./tableEditor";
 import { focusCell, focusedCell, focusedCellSource, runOnFocusedCell } from "./tableEditor";
 
 interface TableContext {
@@ -452,8 +454,10 @@ export const tableBar = ViewPlugin.fromClass(
       if (cell) {
         return cell.closest(".rme-table-editor")!.querySelector("table")!.getBoundingClientRect();
       }
-      const { active, blocks, focused } = view.state.field(previewField);
-      const block = focused ? blocks.find((b, i) => active.has(i) && b.kind === "table") : undefined;
+      const { active, blocks } = view.state.field(previewField);
+      const block = view.state.field(focusField)
+        ? blocks.find((b, i) => active.has(i) && b.kind === "table")
+        : undefined;
       if (!block) {
         return null;
       }

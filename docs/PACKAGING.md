@@ -82,7 +82,8 @@ The zip from `npm run package` is uploaded by hand:
      snooze buttons to its lists. It renders previews and uploads files through that Phorge's own endpoints with the
      user's existing session." The `storage` permission keeps the choice of tools of the options page.
    - Remote code: no (all code is in the package; the HTML from Phorge's preview endpoint is content, not code).
-   - Data usage: no user data is collected or sent anywhere but the Phorge the page belongs to; tick the three
+   - Data usage: no user data is collected; requests go to the Phorge the page belongs to and, for images in pasted
+     content, to the sites those images come from (without cookies), to upload them to that Phorge; tick the three
      certifications. A privacy policy URL is only required when user data is handled.
 5. **Distribution:** visibility _Private_ (only users of the company's Google Workspace domain or listed testers) or
    _Unlisted_ (anyone with the link). Submit for review.

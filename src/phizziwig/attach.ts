@@ -6,8 +6,9 @@
 // action. Changes Phorge makes to the textarea are copied back.
 
 import { history, historyKeymap, defaultKeymap } from "@codemirror/commands";
-import { ChangeSet, EditorSelection, EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap, placeholder } from "@codemirror/view";
+import { ChangeSet, Compartment, EditorSelection, EditorState, Prec } from "@codemirror/state";
+import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
+import { EditorView, keymap, panels, placeholder } from "@codemirror/view";
 import { minimalChange } from "./diff";
 import { phabricatorAutocomplete } from "./editor/autocomplete";
 import { markupKeymap, tableBar } from "./editor/commands";
@@ -20,24 +21,27 @@ import {
   shortcuts,
   showShortcuts,
 } from "./editor/actions";
-import { addFormattingButtons, inlineFormat } from "./editor/formatting";
+import { addFormattingButtons } from "./editor/formatting";
 import { cursor } from "./editor/cursor";
 import { clearGaps } from "./editor/gaps";
 import { hostTextarea } from "./editor/host";
-import { imageMenu } from "./editor/imageMenu";
+import { imageMenu, imageMenuKeys } from "./editor/imageMenu";
 import { editLink, links } from "./editor/links";
-import { cellSupport, livePreview, renderedEffect } from "./editor/livePreview";
-import { INLINE_FORMATS } from "./syntax";
+import { keepsFocus } from "./editor/focus";
+import { livePreview, renderedEffect } from "./editor/livePreview";
+import { mouseSelection } from "./editor/mouseSelection";
+import { verticalMotion } from "./editor/verticalMotion";
 import { markdownHabits } from "./editor/markdown";
 import { linkSelection, pasting } from "./editor/pasting";
 import { cellSlashMenu, slashMenu } from "./editor/slashMenu";
+import { pickerRanges } from "./editor/picker";
 import { cellPreview, inlinePreview } from "./editor/inlinePreview";
 import { sourceStyle } from "./editor/sourceStyle";
-import { formatFocusedCell } from "./editor/tableEditor";
+import { cellSupport, formatFocusedCell } from "./editor/tableEditor";
 import { showTablePicker } from "./editor/tablePicker";
-import { fileUpload } from "./editor/upload";
+import { fileUpload, submitWhenUploaded, uploadPanel } from "./editor/upload";
 import { keyLabel } from "./keys";
-import { CONTROL, notifyChange, rendererFor, submitForm, TOOLBAR } from "./phorge";
+import { CONTROL, notifyChange, rendererFor, TOOLBAR } from "./phorge";
 import { BlockRenderer } from "./renderer";
 import { storedChoice } from "../storage";
 import { buttonIcon, toolbarButton } from "./toolbar";
@@ -205,10 +209,21 @@ const overrides: ToolbarOverride[] = [
   },
 ];
 
+/**
+ * The placeholder with where to find what the editor can do, as a sentence of
+ * its own after the page's (e.g. "Write here… Type / to insert, F1 for shortcuts.").
+ */
+function withHints(placeholder: string): string {
+  const text = placeholder.trim();
+  return `${text}${/[.…!?:]$/.test(text) ? "" : "."} Type / to insert, F1 for shortcuts.`;
+}
+
 class LiveEditor {
   readonly view: EditorView;
   private readonly renderer: BlockRenderer;
   private readonly bar: HTMLElement;
+  /** The editor's top panels (Ctrl+F) in the toolbar, which stays in view. */
+  private readonly panelBox = document.createElement("div");
   private readonly wrapper: HTMLElement;
   private readonly status: HTMLElement;
   private readonly removeButtons: () => void;
@@ -216,6 +231,7 @@ class LiveEditor {
   private readonly resizes: ResizeObserver;
   private lastValue: string;
   private destroyed = false;
+  private readonly editable = new Compartment();
   private readonly onBarMouseDown = (event: MouseEvent) => {
     // Clicking a toolbar button must not take the focus from the editor.
     if ((event.target as Element).closest(".remarkup-assist-button")) {
@@ -241,7 +257,11 @@ class LiveEditor {
     private readonly onDestroy: (detached: boolean) => void,
   ) {
     this.lastValue = textarea.value;
+    // Phorge focuses the textarea of a new inline comment or dialog before the editor replaces it.
+    const focused = document.activeElement === textarea;
     this.bar = root.querySelector<HTMLElement>(TOOLBAR)!;
+    this.panelBox.className = "rme-panels";
+    this.bar.append(this.panelBox);
     this.renderer = new BlockRenderer(
       rendererFor(textarea),
       () => {
@@ -272,33 +292,46 @@ class LiveEditor {
         ),
         extensions: [
           hostTextarea.of(textarea),
+          // Not while Phorge submits the form, which disables the textarea.
+          this.editable.of(EditorView.editable.of(!textarea.disabled)),
           history(),
           // Not drawSelection(), only its cursor: the browser's own selection is
           // drawn over the backgrounds of notes and quotes, and in the same color in cells.
           cursor,
           EditorView.lineWrapping,
           EditorState.allowMultipleSelections.of(false),
-          placeholder(textarea.placeholder || "Write here…"),
+          // With where to find what the editor can do.
+          placeholder(withHints(textarea.placeholder || "Write here…")),
           livePreview(this.renderer),
+          mouseSelection,
+          verticalMotion,
           // The editors of table cells.
           cellSupport.of({
-            extensions: (main) => [cellPreview(main), phabricatorAutocomplete, cellSlashMenu, cellShortcuts, links],
-            format: (icon) =>
-              icon === "fa-link"
-                ? editLink
-                : INLINE_FORMATS.some((format) => format.icon === icon)
-                  ? inlineFormat(icon)
-                  : null,
+            extensions: (main) => [
+              cellPreview(main),
+              phabricatorAutocomplete,
+              cellSlashMenu,
+              cellShortcuts,
+              links,
+              pickerRanges,
+              // Finds in the whole text.
+              keymap.of([{ key: "Mod-f", run: () => openSearchPanel(main) }]),
+            ],
+            // What fits in a cell (Action.inline), like in the text.
+            format: (icon) => ACTIONS.find((action) => action.inline && action.icon === icon)?.run ?? null,
             linkSelection,
           }),
           // Before sourceStyle, whose marks then wrap its widgets: the rendered list markers hang like the source ones.
           inlinePreview,
           sourceStyle,
           imageMenu,
+          imageMenuKeys,
           markupKeymap,
           tableBar,
           phabricatorAutocomplete,
+          pickerRanges,
           fileUpload,
+          uploadPanel,
           links,
           pasting,
           shortcuts,
@@ -311,10 +344,16 @@ class LiveEditor {
               return false;
             },
           }),
-          Prec.high(keymap.of([{ key: "Mod-Enter", run: () => submitForm(textarea) }])),
-          // No search keymap: Ctrl+F stays the browser's find, which also
-          // finds text in the rendered blocks.
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          Prec.high(keymap.of([{ key: "Mod-Enter", run: () => submitWhenUploaded(textarea) }])),
+          // Ctrl+F finds in all of the text: the browser's find sees only the
+          // part CodeMirror draws. Not its other keys (Ctrl+D is the browser's bookmark).
+          search({ top: true }),
+          panels({ topContainer: this.panelBox }),
+          keymap.of([
+            ...defaultKeymap,
+            ...historyKeymap,
+            ...searchKeymap.filter((binding) => ["Mod-f", "F3", "Mod-g", "Escape"].includes(binding.key!)),
+          ]),
           // "phabricator-remarkup" lets Phorge's CSS style monospaced and
           // highlighted text in the source like in the rendered text.
           EditorView.contentAttributes.of({
@@ -336,6 +375,11 @@ class LiveEditor {
     });
 
     root.classList.add("rme-active");
+    // Phorge focuses the textarea (e.g. "z" pins the form, fullscreen): the editor takes the focus.
+    textarea.focus = () => this.view.focus();
+    if (focused) {
+      this.view.focus();
+    }
     this.restyle();
     editors.add(this);
     this.bar.addEventListener("mousedown", this.onBarMouseDown);
@@ -385,17 +429,33 @@ class LiveEditor {
     this.lastValue = text;
     this.textarea.value = text;
     notifyChange(this.textarea);
-    if (external !== null && base.length === baseLength) {
-      // Phorge changed the textarea since the last sync (e.g. its upload
-      // dialog inserted a file): apply that change too instead of losing it.
-      const theirs = ChangeSet.of(minimalChange(base, external), base.length).map(changes);
+    // A change of Phorge's still to apply moves with the editor's changes made meanwhile.
+    this.theirs = this.theirs?.map(changes) ?? null;
+    if (external === null) {
+      return;
+    }
+    if (base.length !== baseLength) {
+      console.warn("Phizziwig: a change Phorge made to the text could not be taken over");
+      return;
+    }
+    // Phorge changed the textarea since the last sync (e.g. its upload
+    // dialog inserted a file): apply that change too instead of losing it.
+    const theirs = ChangeSet.of(minimalChange(base, external), base.length).map(changes);
+    const queued = this.theirs !== null;
+    this.theirs = this.theirs ? this.theirs.compose(theirs.map(this.theirs)) : theirs;
+    if (!queued) {
       queueMicrotask(() => {
-        if (!this.destroyed) {
-          this.view.dispatch({ changes: theirs, userEvent: "input.phabricator" });
+        const pending = this.theirs;
+        this.theirs = null;
+        if (pending && !this.destroyed) {
+          this.view.dispatch({ changes: pending, userEvent: "input.phabricator" });
         }
       });
     }
   }
+
+  /** Phorge's change of the textarea that push() takes over after the editor's own change. */
+  private theirs: ChangeSet | null = null;
 
   /** Copies changes Phorge made to the textarea into the editor. */
   pull(): void {
@@ -403,14 +463,18 @@ class LiveEditor {
       this.destroy(true);
       return;
     }
+    if (this.view.state.facet(EditorView.editable) === this.textarea.disabled) {
+      this.view.dispatch({ effects: this.editable.reconfigure(EditorView.editable.of(!this.textarea.disabled)) });
+    }
     const value = this.textarea.value;
     if (value === this.lastValue) {
       return;
     }
     const old = this.view.state.doc.toString();
     // Inserted text (a quote, an upload) is where the user continues; an
-    // emptied form after posting a comment is not a reason to take the focus.
-    const focus = this.view.hasFocus || value.length > old.length;
+    // emptied form after posting a comment is not a reason to take the focus,
+    // nor a search or dialog of the editor that has it.
+    const focus = (this.view.hasFocus || value.length > old.length) && !keepsFocus();
     this.lastValue = value;
     this.view.dispatch({
       changes: minimalChange(old, value),
@@ -469,7 +533,10 @@ class LiveEditor {
     this.view.destroy();
     this.wrapper.remove();
     this.removeButtons();
+    this.panelBox.remove();
     this.root.classList.remove("rme-active");
+    // The textarea's own focus() again.
+    delete (this.textarea as { focus?: unknown }).focus;
     this.onDestroy(detached);
   }
 }

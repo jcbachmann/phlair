@@ -17,8 +17,6 @@ function insertMenu(items: Action[]) {
     private slash: number | null = null;
     private matches: Action[] = [];
     private focus = 0;
-    /** Whether an item was chosen with the arrow keys. */
-    private navigated = false;
     private popup: Popup | null = null;
 
     constructor(private readonly view: EditorView) {}
@@ -48,7 +46,6 @@ function insertMenu(items: Action[]) {
           ) {
             this.slash = fromB;
             this.focus = 0;
-            this.navigated = false;
           }
         });
       }
@@ -100,25 +97,23 @@ function insertMenu(items: Action[]) {
         (i) => this.pick(i),
       );
       this.popup.placeAt(this.view, slash);
+      this.popup.describe(this.view.contentDOM, this.focus);
+    }
+
+    page(direction: 1 | -1): boolean {
+      this.focus = this.popup!.pageFrom(this.focus, direction, this.matches.length);
+      this.refresh();
+      return true;
     }
 
     move(delta: number): boolean {
-      this.navigated = true;
       this.focus = (this.focus + delta + this.matches.length) % this.matches.length;
       this.refresh();
       return true;
     }
 
-    /**
-     * Enter or Tab: inserts the focused item; with nothing typed after "/" and
-     * no item chosen with the arrow keys, the key does its usual work.
-     */
+    /** Enter or Tab: inserts the focused item, also the first one right after "/" (Escape keeps the "/"). */
     accept(): boolean {
-      const slash = this.slash!;
-      if (!this.navigated && this.view.state.selection.main.head === slash + 1) {
-        this.close();
-        return false;
-      }
       return this.pick();
     }
 
@@ -138,6 +133,9 @@ function insertMenu(items: Action[]) {
 
     close(): boolean {
       this.slash = null;
+      if (this.popup) {
+        Popup.undescribe(this.view.contentDOM);
+      }
       this.popup?.remove();
       this.popup = null;
       return true;
@@ -163,6 +161,8 @@ function insertMenu(items: Action[]) {
       keymap.of([
         { key: "ArrowDown", run: withMenu((m) => m.move(1)) },
         { key: "ArrowUp", run: withMenu((m) => m.move(-1)) },
+        { key: "PageDown", run: withMenu((m) => m.page(1)) },
+        { key: "PageUp", run: withMenu((m) => m.page(-1)) },
         { key: "Enter", run: withMenu((m) => m.accept()) },
         { key: "Tab", run: withMenu((m) => m.accept()) },
         { key: "Escape", run: withMenu((m) => m.close()) },

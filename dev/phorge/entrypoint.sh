@@ -12,6 +12,10 @@ bin/config set phabricator.developer-mode false
 bin/config set load-libraries '["/srv/phlair/src"]'
 # Lets the server download images from the host for the E2E tests (phizziwig.download).
 bin/config set security.outbound-blacklist '[]'
+# Files on disk, as in production: files over 4 MB are uploaded in chunks,
+# which need a storage engine for large files (the database's takes 1 MB).
+mkdir -p /var/phorge-files && chown www-data:www-data /var/phorge-files
+bin/config set storage.local-disk.path /var/phorge-files
 
 until mysqladmin ping -h "$MYSQL_HOST" -uroot -p"$MYSQL_PASSWORD" --silent; do sleep 1; done
 bin/storage upgrade --force

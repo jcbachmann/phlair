@@ -71,7 +71,7 @@ function imagesToUpload(
         .replace(/[^\w.-]+/g, " ")
         .trim()
         .slice(0, 40) || "pasted image";
-    const placeholder = uploadPlaceholder(name);
+    const placeholder = uploadPlaceholder(view, name);
     const fallback = /^https?:/i.test(src) ? (alt ? `[[ ${src} | ${alt} ]]` : src) : alt;
     if (existing?.phid) {
       const phid = existing.phid;

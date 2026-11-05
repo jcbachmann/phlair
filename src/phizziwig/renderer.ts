@@ -2,6 +2,8 @@ import { loadImage, type Rendered, type RenderFunction } from "./phorge";
 import { escapeText, parseHtml } from "./html";
 
 const MIN_CACHE = 1000;
+/** How many blocks are rendered at once when a batch failed. */
+const SINGLE_REQUESTS = 4;
 const MAX_BATCH_CHARS = 200_000;
 /** Delays before retrying a block that failed to render, growing per failure. */
 const RETRY_DELAYS = [2_000, 5_000, 15_000, 60_000];
@@ -171,9 +173,11 @@ export class BlockRenderer {
       this.fail(items[0], new Error("Rendering failed."));
     } else {
       // A block the server fails on, or a separator that did not survive,
-      // must not keep the other blocks from rendering.
-      await Promise.all(
-        items.map(async (item) => {
+      // must not keep the other blocks from rendering: one by one, a few at a
+      // time (all of them fail alike when the server is down).
+      const rest = [...items];
+      const worker = async () => {
+        for (let item = rest.shift(); item; item = rest.shift()) {
           try {
             const [html] = (await this.renderJoined([item])) ?? [];
             if (html === undefined) {
@@ -183,8 +187,9 @@ export class BlockRenderer {
           } catch (error) {
             this.fail(item, error);
           }
-        }),
-      );
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(SINGLE_REQUESTS, items.length) }, worker));
     }
     items.forEach((item) => this.inFlight.delete(this.key(item)));
   }

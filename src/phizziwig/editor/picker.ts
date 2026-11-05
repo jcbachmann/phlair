@@ -2,9 +2,9 @@
 // title, wiki pages, people and other objects, or paste a URL. It looks like
 // Phorge's autocomplete, with an input in its head.
 
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { conduit, typeahead } from "../phorge";
-import { syncFocus } from "./livePreview";
+import { syncFocus } from "./focus";
 import { Popup, type PopupItem } from "./popup";
 
 export interface Target {
@@ -114,15 +114,25 @@ export async function search(query: string): Promise<Target[]> {
   return [...tasks, ...objects];
 }
 
+/** A range of the text, from–to. */
+export interface Range {
+  from: number;
+  to: number;
+}
+
 export interface PickerOptions {
   headIcon: string;
   headText: string;
   placeholder: string;
   /** The text the input starts with, e.g. the target of the link being changed. */
   initial?: string;
-  /** Where the popup is placed: below a position of the text, or below an element (a table cell). */
-  at: number | HTMLElement;
-  pick: (target: Target) => void;
+  /** The text the pick replaces (empty: where it inserts); the popup shows below it. */
+  range: Range;
+  /**
+   * Called with the target picked and the range, moved by the changes made
+   * while the picker was open (e.g. uploads finishing before it).
+   */
+  pick: (target: Target, range: Range) => void;
   /** What to search, also with nothing typed yet; tasks, pages, people, … by default (search()). */
   search?: (query: string) => Promise<Target[]>;
 }
@@ -139,11 +149,14 @@ class Picker {
   private query: string | null = null;
   /** The query the shown results are for. */
   private shownQuery: string | null = null;
+  /** The range of the pick, as the text changes. */
+  range: Range;
 
   constructor(
-    private readonly view: EditorView,
+    readonly view: EditorView,
     private readonly options: PickerOptions,
   ) {
+    this.range = { from: options.range.from, to: options.range.to };
     this.input = document.createElement("input");
     this.input.type = "text";
     this.input.className = "rme-picker-input";
@@ -158,11 +171,10 @@ class Picker {
     this.input.addEventListener("input", () => this.changed());
     this.input.addEventListener("keydown", (event) => this.onKeyDown(event));
     this.input.addEventListener("blur", () => setTimeout(() => this.close(false), 0));
-    // Measured with the block being edited showing its source, which it
-    // keeps while the picker has the focus (livePreview.ts).
+    // Placed with the block being edited showing its source, which it keeps
+    // while the picker has the focus (livePreview.ts).
     syncFocus(view);
-    const at = typeof options.at === "number" ? view.coordsAtPos(options.at) : null;
-    this.popup.placeAt(view, at ?? options.at);
+    this.popup.placeAt(view, this.range.from);
     // It is placed in the next measure; until then it is at the end of the page.
     this.input.focus({ preventScroll: true });
     this.input.select();
@@ -176,13 +188,24 @@ class Picker {
     }
     this.query = query;
     clearTimeout(this.timer);
+    if (query.trim() && !this.results.length) {
+      this.popup.setNote("Searching…");
+    }
     this.timer = setTimeout(async () => {
-      const results = await (this.options.search ?? search)(query);
+      let results: Target[] = [];
+      let failed = false;
+      try {
+        results = await (this.options.search ?? search)(query);
+      } catch (error) {
+        console.warn("Phizziwig: the search failed", error);
+        failed = true;
+      }
       if (this.query === query && current === this) {
         this.results = results;
         this.shownQuery = query;
         this.focus = results.length ? 0 : null;
         this.render();
+        this.popup.setNote(failed ? "The search failed." : !results.length && query.trim() ? "Nothing found." : null);
       }
     }, 150);
   }
@@ -210,6 +233,12 @@ class Picker {
         this.focus = ((this.focus ?? -1) + delta + this.results.length) % this.results.length;
         this.render();
       }
+    } else if (key === "PageDown" || key === "PageUp") {
+      event.preventDefault();
+      if (this.results.length) {
+        this.focus = this.popup.pageFrom(this.focus ?? 0, key === "PageDown" ? 1 : -1, this.results.length);
+        this.render();
+      }
     } else if (key === "Enter" || (key === "Tab" && this.input.value.trim())) {
       event.preventDefault();
       if (this.shownQuery === this.input.value && this.focus !== null) {
@@ -217,7 +246,7 @@ class Picker {
       } else {
         // Typed faster than the search: take the first result for what is typed.
         const query = this.input.value;
-        void search(query).then(([first]) => {
+        void (this.options.search ?? search)(query).then(([first]) => {
           if (first && current === this && this.input.value === query) {
             this.choose(first);
           }
@@ -240,7 +269,7 @@ class Picker {
 
   private choose(target: Target): void {
     this.close(true);
-    this.options.pick(target);
+    this.options.pick(target, this.range);
   }
 
   close(refocus: boolean): void {
@@ -262,6 +291,19 @@ export function closePicker(): boolean {
   picker?.close(true);
   return picker !== null;
 }
+
+/**
+ * Moves the range of the open picker with the changes of its editor's text;
+ * in every editor that opens pickers (the text, table cells).
+ */
+export const pickerRanges = EditorView.updateListener.of((update) => {
+  if (current?.view === update.view && update.docChanged) {
+    const { from, to } = current.range;
+    // A range being replaced keeps what is typed at its edges outside of it.
+    const start = update.changes.mapPos(from, from === to ? -1 : 1);
+    current.range = { from: start, to: Math.max(start, update.changes.mapPos(to, -1)) };
+  }
+});
 
 /** Opens the picker; the editor gets the focus back when it closes. */
 export function openPicker(view: EditorView, options: PickerOptions): void {

@@ -1,0 +1,46 @@
+# The checks that do not need a Phorge: formatting, types and unit tests, the
+# extension against AMO's rules, and the library's PHP on old and new PHP.
+# The E2E tests run locally against dev/phorge (README.md).
+name: Check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest Node of "engines", and a current one.
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Lint the extension
+        env:
+          PHLAIR_HOSTS: https://phorge.example.com/*
+          PHLAIR_GECKO_ID: ci@example.com
+        run: node build.mjs --extension && npx web-ext lint --self-hosted
+
+  php:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ["7.4", "8.1", "8.3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: none
+      - name: Syntax of the library
+        run: find phorge -name '*.php' -print0 | xargs -0 -n1 php -l

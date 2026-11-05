@@ -31,13 +31,6 @@ function icon(classes: string): HTMLElement {
 
 let popups = 0;
 
-/** A box on the screen, as from getBoundingClientRect(). */
-export interface Box {
-  left: number;
-  top: number;
-  bottom: number;
-}
-
 export class Popup {
   readonly node: HTMLElement;
   /** The text after the prompt; replaced by an input in pickers. */
@@ -132,25 +125,92 @@ export class Popup {
     );
   }
 
+  /** Page Up or Down from an item: the item a page of the shown list away, or the first or last. */
+  pageFrom(index: number, direction: 1 | -1, count: number): number {
+    const item = this.list.querySelector<HTMLElement>(".jx-result");
+    const page = item ? Math.max(1, Math.floor(this.list.clientHeight / item.offsetHeight) - 1) : 1;
+    return Math.min(count - 1, Math.max(0, index + direction * page));
+  }
+
   optionId(index: number): string {
     return `${this.listId}-${index}`;
   }
 
+  /** A note below the items, e.g. that a search runs or found nothing; null removes it. */
+  setNote(text: string | null): void {
+    let note = this.node.querySelector<HTMLElement>(".rme-popup-note");
+    if (text === null) {
+      note?.remove();
+      return;
+    }
+    if (!note) {
+      note = document.createElement("div");
+      note.className = "rme-popup-note";
+      note.setAttribute("role", "status");
+      this.node.append(note);
+    }
+    note.textContent = text;
+  }
+
   /**
-   * Places the popup below a position or an element of the text, or a box
-   * measured before; layout is read in CodeMirror's measure phase.
+   * Tells assistive technology that the text being typed in (the editor's
+   * content) has this menu, with its focused item; like CodeMirror's own
+   * autocomplete does.
    */
-  placeAt(view: EditorView, at: number | HTMLElement | Box): void {
+  describe(content: HTMLElement, focus: number | null): void {
+    content.setAttribute("aria-autocomplete", "list");
+    content.setAttribute("aria-haspopup", "listbox");
+    content.setAttribute("aria-controls", this.listId);
+    if (focus === null) {
+      content.removeAttribute("aria-activedescendant");
+    } else {
+      content.setAttribute("aria-activedescendant", this.optionId(focus));
+    }
+  }
+
+  /** The menu is gone: see describe(). */
+  static undescribe(content: HTMLElement): void {
+    for (const name of ["aria-autocomplete", "aria-haspopup", "aria-controls", "aria-activedescendant"]) {
+      content.removeAttribute(name);
+    }
+  }
+
+  /** Where the popup is placed, while it is: placed again when something scrolls. */
+  private placed: { view: EditorView; at: number } | null = null;
+  private readonly onScroll = (event: Event) => {
+    // Not its own list scrolling.
+    if (this.placed && !this.node.contains(event.target as Node)) {
+      this.measure(this.placed.view, this.placed.at);
+    }
+  };
+
+  /**
+   * Places the popup below a position of the text, and keeps it there when
+   * the page or a box around the editor scrolls (e.g. the editor in a
+   * dialog); hidden while the position is scrolled out of the editor's view.
+   */
+  placeAt(view: EditorView, at: number): void {
+    if (!this.placed) {
+      document.addEventListener("scroll", this.onScroll, true);
+    }
+    this.placed = { view, at };
+    this.measure(view, at);
+  }
+
+  /** Layout is read in CodeMirror's measure phase. */
+  private measure(view: EditorView, at: number): void {
     view.requestMeasure({
       key: this,
-      read: () =>
-        typeof at === "number" ? view.coordsAtPos(at) : at instanceof HTMLElement ? at.getBoundingClientRect() : at,
-      write: (coords) => {
-        if (!coords) {
+      read: () => ({ coords: view.coordsAtPos(at), box: view.scrollDOM.getBoundingClientRect() }),
+      write: ({ coords, box }) => {
+        const outside = !coords || coords.bottom < box.top || coords.top > box.bottom;
+        this.node.style.visibility = outside ? "hidden" : "";
+        if (!coords || outside) {
           return;
         }
         // Below the text, or above it where there is more room; a list that
-        // fits on neither side scrolls.
+        // fits on neither side scrolls (and keeps where it is scrolled to).
+        const scrolled = this.list.scrollTop;
         this.list.style.maxHeight = "";
         const height = this.node.offsetHeight;
         const below = window.innerHeight - coords.bottom - 8;
@@ -165,11 +225,14 @@ export class Popup {
         const left = Math.min(coords.left, window.innerWidth - this.node.offsetWidth - 8);
         this.node.style.left = `${Math.max(0, left) + window.scrollX}px`;
         this.node.style.top = `${y + window.scrollY}px`;
+        this.list.scrollTop = scrolled;
       },
     });
   }
 
   remove(): void {
+    document.removeEventListener("scroll", this.onScroll, true);
+    this.placed = null;
     this.node.remove();
   }
 }

@@ -42,7 +42,7 @@ export interface Action {
   label: string;
   icon: string;
   run: (view: EditorView) => boolean;
-  /** Keyboard shortcut, see matchesKey(). */
+  /** Keyboard shortcut, as CodeMirror names keys ("Mod-Shift-x"). */
   key?: string;
   /** In the "/" insert menu, with these extra words to find it by. */
   insert?: string;
@@ -231,7 +231,7 @@ const OTHER_KEYS: [string, string][] = [
   ["/", "At the start of a line or after a space: insert menu"],
   ["@  #  [[  :", "Find people, projects, pages, emoji"],
   [keyLabel("Mod-Enter"), "Submit"],
-  ["Ctrl+click", "Open a link"],
+  [keyLabel("Mod-click"), "Open a link"],
   ["Right click", "Change an image"],
 ];
 
@@ -258,7 +258,12 @@ export function showShortcuts(view: EditorView, right?: number, top?: number): b
  */
 export const OVERVIEW_KEYS = ["F1", "Mod-/"];
 
-/** The shortcuts of actions. Digits by their key, so they work in every layout. */
+/**
+ * The shortcuts of actions. Not through CodeMirror's keymap, which matches a
+ * typed character without Shift first: Ctrl+Shift+K with Caps Lock (a "k")
+ * would be the link's Ctrl+K, and on German keyboards Ctrl+Shift+7 (a "/")
+ * the overview's Ctrl+/. matchesKey() checks every modifier, digits by their key.
+ */
 function shortcutsOf(actions: Action[], overview: boolean) {
   return Prec.highest(
     EditorView.domEventHandlers({

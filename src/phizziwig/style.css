@@ -91,6 +91,11 @@
   outline: none;
 }
 
+/* With the focus, the glow Phorge gives its focused fields (phui-form.css). */
+.rme-editor:focus-within {
+  box-shadow: 0 0 1pt 1pt rgba(82, 168, 236, 0.7) inset;
+}
+
 .rme-editor .cm-scroller {
   flex: 1;
   font: inherit;
@@ -781,6 +786,13 @@ body:has(.rme-active) .phui-remarkup-preview {
 }
 
 /* Pictures in the results of a search, e.g. of image macros: beside the name. */
+/* A note of a search: it runs, found nothing or failed. */
+.rme-autocomplete .rme-popup-note {
+  padding: 6px 8px;
+  opacity: 0.7;
+  font-style: italic;
+}
+
 /* The groups of the insert menu: a quiet heading above each. */
 .rme-autocomplete .rme-popup-group {
   padding: 6px 8px 2px;
@@ -813,4 +825,102 @@ body:has(.rme-active) .phui-remarkup-preview {
   width: 96px;
   height: 56px;
   object-fit: contain;
+}
+
+/* The uploads below the text (upload.ts), in a CodeMirror panel. */
+.rme-editor .cm-panels {
+  background: transparent;
+  color: inherit;
+}
+
+.rme-editor .cm-panels-bottom {
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.rme-upload-status {
+  padding: 4px 12px;
+  font-size: 12px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.rme-upload-status[hidden] {
+  display: none;
+}
+
+.rme-upload-status a {
+  color: var(--rme-link-color, #136cb2);
+}
+
+.rme-status-error {
+  color: #c0392b;
+}
+
+/* The search panel (Ctrl+F), below the toolbar's buttons: it stays in view with them. */
+.rme-panels {
+  clear: both;
+}
+
+.rme-panels .cm-panels {
+  position: static;
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.rme-panels .cm-search {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.rme-panels .cm-search .cm-textfield,
+.rme-panels .cm-search .cm-button {
+  margin: 2px 4px 2px 0;
+  height: 24px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.rme-panels .cm-search .cm-textfield {
+  width: 180px;
+  padding: 2px 6px;
+}
+
+.rme-panels .cm-search label {
+  margin-right: 8px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.rme-panels .cm-search [name="close"] {
+  top: 4px;
+  right: 6px;
+  height: auto;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: inherit;
+  font-size: 18px;
+}
+
+/* The button for the menu of the image under the mouse (imageMenu.ts). */
+.rme-image-more {
+  position: absolute;
+  z-index: 2;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: none;
+  color: #fff;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.rme-image-more[hidden] {
+  display: none;
 }

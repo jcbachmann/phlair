@@ -1,6 +1,6 @@
 // Keyboard shortcuts, written like CodeMirror's key names ("Mod-b",
-// "Mod-Shift-x"), for places outside of the editor's keymap (table cells) and
-// for showing them in tooltips.
+// "Mod-Shift-x"): matched with every modifier (see shortcutsOf() for why not
+// by CodeMirror's keymap), and shown in tooltips.
 
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 

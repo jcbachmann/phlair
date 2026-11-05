@@ -70,6 +70,31 @@ describe("BlockRenderer", () => {
     renderer.destroy();
   });
 
+  it("renders the blocks of a failed batch a few at a time", async () => {
+    let running = 0;
+    let most = 0;
+    const render = async (text: string): Promise<Rendered> => {
+      if (text.includes("RMESEP") && text.split("RMESEP").length > 2) {
+        throw new Error("down");
+      }
+      running++;
+      most = Math.max(most, running);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      running--;
+      const html = text
+        .split(/\n\n+/)
+        .map((p) => `<p>${p}</p>`)
+        .join("");
+      return { html: `<div class="phabricator-remarkup">${html}</div>`, metadata: [], behaviors: {} };
+    };
+    const renderer = new BlockRenderer(render, () => {});
+    renderer.request(Array.from({ length: 20 }, (_, i) => item(`Block ${i}`)));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(renderer.get(item("Block 19"))).toBe("<p>Block 19</p>");
+    expect(most).toBe(4);
+    renderer.destroy();
+  });
+
   it("forgets failures of texts that are no longer blocks", async () => {
     const { render } = server((text) => text.includes("bad"));
     const renderer = new BlockRenderer(render, () => {});

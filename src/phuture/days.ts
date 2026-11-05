@@ -64,9 +64,9 @@ export function untilTomorrow(now: Date): number {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime();
 }
 
-/** A day for people: "Mon, Nov 9", with the year if it is not this year's. */
+/** A day for people: "Mon, Nov 9", with the year if it is not this year's; in English, like the labels around it. */
 export function formatDay(day: Day, today: Day): string {
-  return start(day).toLocaleDateString(undefined, {
+  return start(day).toLocaleDateString("en-US", {
     weekday: "short",
     month: "short",
     day: "numeric",

@@ -35,14 +35,19 @@ async function snoozeButton(page: Page, id: number): Promise<Locator> {
   return item(page, id).locator(".phuture-action a");
 }
 
+/** An item of the open menu: an action or a choice among others ("menuitemradio"). */
+function menuItem(page: Page, name: string | RegExp): Locator {
+  return page.locator(".phuture-menu [role^='menuitem']").filter({ hasText: name });
+}
+
 async function snooze(page: Page, id: number, choice: string | RegExp): Promise<void> {
   await (await snoozeButton(page, id)).click();
-  await page.locator(".phuture-menu").getByRole("link", { name: choice }).click();
+  await menuItem(page, choice).click();
 }
 
 async function mainMenu(page: Page, choice: string): Promise<void> {
   await page.locator(".phuture-menu-button").click();
-  await page.locator(".phuture-menu").getByRole("link", { name: choice }).click();
+  await menuItem(page, choice).click();
 }
 
 const count = (page: Page) => page.locator(".phuture-menu-button .phabricator-main-menu-alert-count");
@@ -77,13 +82,14 @@ test("a snoozed item is hidden on every list, until it is woken up", async ({ pa
   await expect(count(page)).toBeHidden();
   const button = await snoozeButton(page, first);
   await expect(button).toHaveText("+1");
-  await expect(button).toHaveAttribute("aria-label", /^Snoozed until /);
+  // In English like the labels, naming the item for screen readers.
+  await expect(button).toHaveAttribute("aria-label", /^Snoozed until [A-Z][a-z]{2}, [A-Z][a-z]{2} \d+: Snooze me$/);
 
   await button.click();
   await expect(page.locator(".phuture-menu")).toContainText("Snoozed until");
-  await page.locator(".phuture-menu").getByRole("link", { name: "Wake up now" }).click();
+  await menuItem(page, "Wake up now").click();
   await expect(button).toHaveText("");
-  await expect(button).toHaveAttribute("aria-label", "Snooze");
+  await expect(button).toHaveAttribute("aria-label", "Snooze: Snooze me");
   await mainMenu(page, "Show snoozed items");
   await expect(item(page, first)).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("phuture-snoozes"))).toBeNull();
@@ -245,19 +251,26 @@ async function addToPage(page: Page, html: string): Promise<void> {
 test("commits, as in audit lists, can be snoozed: their items have a menu", async ({ page }) => {
   const [id] = await createTasks(page, "Beside a commit");
   await openList(page, [id]);
-  // A commit as DiffusionCommitGraphView renders it (with PHP, in dev/phorge), with its menu.
+  // A commit as DiffusionCommitGraphView renders it (with PHP, in dev/phorge), with its menu; with
+  // Phorge's grid style (fuel-grid.css), which only pages with such items load.
   const hash = `rDEMO${Date.now().toString(16)}`;
   await addToPage(
     page,
-    `<ul class="phui-oi-list-view phui-oi-list-flush "><li class="phui-oi phui-oi-no-bar phui-oi-enabled phui-oi-standard" data-sigil=""><div class="phui-oi-frame"><div class="fuel-grid-tablet fuel-grid-component"><div class="fuel-grid"><div class="fuel-grid-body"><div class="fuel-grid-row fuel-grid-cell-count-2"><div class="fuel-grid-cell"><div class="phui-oi-frame-content"><div class="phui-oi-content-box"><div class="phui-oi-table"><div class="phui-oi-table-row"><div class="phui-oi-col1"><div class="phui-oi-name"><span class="phui-oi-objname" data-sigil="ungrabbable">rDEMOabc123</span> <a href="/${hash}" class="phui-oi-link" title="Fix the detector">Fix the detector</a></div><div class="phui-oi-content"></div></div></div></div></div></div></div><div class="phui-oi-menu fuel-grid-cell"><div class="fuel-menu-component"><div class="fuel-menu"><div class="fuel-menu-item fuel-menu-item-background-color-orange has-link"><a href="/${hash}" class="fuel-menu-item-link"><span class="fuel-menu-item-icon"><span class="visual-only phui-icon-view phui-font-fa fa-exclamation-circle orange" aria-hidden="true"></span></span>Needs Audit</a></div></div></div></div></div></div></div></div></div></li></ul>`,
+    `<style>
+      .device-desktop .fuel-grid { display: table; table-layout: fixed; }
+      .device-desktop .fuel-grid-body { display: table-row-group; }
+      .device-desktop .fuel-grid-row { display: table-row; }
+      .device-desktop .fuel-grid-cell { display: table-cell; vertical-align: top; }
+    </style><ul class="phui-oi-list-view phui-oi-list-flush "><li class="phui-oi phui-oi-no-bar phui-oi-enabled phui-oi-standard" data-sigil=""><div class="phui-oi-frame"><div class="fuel-grid-tablet fuel-grid-component"><div class="fuel-grid"><div class="fuel-grid-body"><div class="fuel-grid-row fuel-grid-cell-count-2"><div class="fuel-grid-cell"><div class="phui-oi-frame-content"><div class="phui-oi-content-box"><div class="phui-oi-table"><div class="phui-oi-table-row"><div class="phui-oi-col1"><div class="phui-oi-name"><span class="phui-oi-objname" data-sigil="ungrabbable">rDEMOabc123</span> <a href="/${hash}" class="phui-oi-link" title="Fix the detector">Fix the detector, which drifted for weeks after the last calibration of the lab</a></div><div class="phui-oi-content"></div></div></div></div></div></div></div><div class="phui-oi-menu fuel-grid-cell"><div class="fuel-menu-component"><div class="fuel-menu"><div class="fuel-menu-item fuel-menu-item-background-color-orange has-link"><a href="/${hash}" class="fuel-menu-item-link"><span class="fuel-menu-item-icon"><span class="visual-only phui-icon-view phui-font-fa fa-exclamation-circle orange" aria-hidden="true"></span></span>Needs Audit</a></div></div></div></div></div></div></div></div></div></li></ul>`,
   );
   const commit = page.locator("li.phui-oi").filter({ has: page.locator(`a.phui-oi-link[href="/${hash}"]`) });
   await commit.hover();
+  // The button is beside the menu (the audit's state), not over it.
+  const button = (await commit.locator(".phuture-action a").boundingBox())!;
+  const menu = (await commit.locator(".phui-oi-menu").boundingBox())!;
+  expect(button.x + button.width).toBeLessThanOrEqual(menu.x);
   await commit.locator(".phuture-action a").click();
-  await page
-    .locator(".phuture-menu")
-    .getByRole("link", { name: /^Tomorrow/ })
-    .click();
+  await menuItem(page, /^Tomorrow/).click();
   await expect(commit).toBeHidden();
   await expect(item(page, id)).toBeVisible();
   await expect(count(page)).toHaveText("1");
@@ -285,4 +298,98 @@ test("choices like Choose Subtype of a new task have no snooze button", async ({
   await expect(item(page, id).last().locator(".phuture-action")).toHaveCount(1);
   await expect(page.locator(`a.phui-oi-link[href^="/maniphest/task/edit/form/"]`)).toHaveCount(2);
   await expect(page.locator(".phuture-action")).toHaveCount(2);
+});
+
+test("hidden snoozed tasks are not selected by Select All for a bulk edit", async ({ page }) => {
+  const [first, second] = await createTasks(page, "Snoozed, not bulk edited", "Bulk edited");
+  await openList(page, [first, second]);
+  await snooze(page, first, /^Tomorrow/);
+  await page.getByRole("link", { name: "Select All" }).click();
+  await expect(item(page, second)).toHaveClass(/phui-oi-selected/);
+  await expect(item(page, first)).not.toHaveClass(/phui-oi-selected/);
+  // Phorge's own count (with its "1 Selected Tasks").
+  await expect(page.getByText(/^1 Selected Task/)).toBeVisible();
+  // Shown, they can be selected.
+  await mainMenu(page, "Show snoozed items");
+  await page.getByRole("link", { name: "Select All" }).click();
+  // After Phuture's check, which follows the click.
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve)));
+  await expect(item(page, first)).toHaveClass(/phui-oi-selected/);
+});
+
+test("a note after snoozing undoes it; a line below the list shows or hides the snoozed items", async ({ page }) => {
+  const [first, second] = await createTasks(page, "Undo my snooze", "Stays");
+  await openList(page, [first, second]);
+  await snooze(page, first, /^Tomorrow/);
+  const toast = page.locator(".phuture-toast");
+  await expect(toast).toHaveText(/^Snoozed until .+\. Undo$/);
+  await toast.getByRole("link", { name: "Undo" }).click();
+  await expect(toast).toHaveCount(0);
+  await expect(item(page, first)).toBeVisible();
+  await expect(count(page)).toBeHidden();
+  await expect(page.locator(".phuture-list-note")).toHaveCount(0);
+
+  await snooze(page, first, /^In a week/);
+  await expect(item(page, first)).toBeHidden();
+  const note = page.locator(".phuture-list-note");
+  await expect(note).toHaveText("1 snoozed item hidden · Show");
+  await note.getByRole("link", { name: "Show" }).click();
+  await expect(item(page, first)).toBeVisible();
+  await expect(note).toHaveText("1 snoozed item shown · Hide");
+  await note.getByRole("link", { name: "Hide" }).click();
+  await expect(item(page, first)).toBeHidden();
+  // Waking it up can be undone too.
+  await mainMenu(page, "Show snoozed items");
+  await snooze(page, first, "Wake up now");
+  await expect(toast).toHaveText("Woken up. Undo");
+  await toast.getByRole("link", { name: "Undo" }).click();
+  await expect(note).toHaveText("1 snoozed item shown · Hide");
+});
+
+test("the clock's menu lists all snoozes, the next first, and opens them; its count is not an alert", async ({
+  page,
+}) => {
+  const [later, sooner] = await createTasks(page, "Wakes up later", "Wakes up sooner");
+  await openList(page, [later, sooner]);
+  await snooze(page, later, /^In a month/);
+  await snooze(page, sooner, /^Tomorrow/);
+  await expect(page.locator(".phuture-menu-button")).not.toHaveClass(/alert-unread/);
+  await expect(count(page)).toBeVisible();
+  await page.locator(".phuture-menu-button").click();
+  const menu = page.locator(".phuture-menu");
+  await expect(menu.getByText("Snoozed (2)")).toBeVisible();
+  const entries = menu.locator("a", { hasText: /^T\d+ Wakes up/ });
+  await expect(entries).toHaveText([/^T\d+ Wakes up sooner/, /^T\d+ Wakes up later/]);
+  await entries.first().click();
+  await expect(page).toHaveURL(new RegExp(`/T${sooner}$`));
+});
+
+test("the menus work by keyboard: Enter or Space opens, the arrow keys move, Escape closes", async ({ page }) => {
+  const [id] = await createTasks(page, "Snoozed by keyboard");
+  await openList(page, [id]);
+  const clock = page.locator(".phuture-menu-button");
+  await clock.focus();
+  await page.keyboard.press("Enter");
+  await expect(clock).toHaveAttribute("aria-expanded", "true");
+  await expect(menuItem(page, "Show snoozed items")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menuItem(page, "Export snoozes")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".phuture-menu")).toHaveCount(0);
+  await expect(clock).toBeFocused();
+  await expect(clock).toHaveAttribute("aria-expanded", "false");
+  // Tab leaves it, from the clock on.
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".phuture-menu")).toHaveCount(0);
+  await expect(clock).not.toBeFocused();
+
+  const button = await snoozeButton(page, id);
+  await button.focus();
+  await page.keyboard.press(" ");
+  await expect(menuItem(page, /^Tomorrow/)).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press(" ");
+  await expect(item(page, id)).toBeHidden();
+  await expect(count(page)).toHaveText("1");
 });

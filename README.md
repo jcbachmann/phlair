@@ -93,11 +93,15 @@ nothing moves when the cursor moves.
 
 ### Images and files
 
-- **Upload** by pasting or dropping files.
+- **Upload** by pasting or dropping files. Files over 4 MB go in chunks, like Phorge's own uploads, so the server's
+  request size limit does not stop them. A line below the text shows the uploads running (with their progress) and the
+  ones that failed. A form submitted meanwhile is sent once the uploads are done (_Don't send_ cancels that), not with
+  their placeholders in the text.
 - **Images** stay visible while their `{F123}` is edited: above the text if the block starts with the image, as on the
   page, and floating beside it if the image floats.
-- **Image menu:** right-clicking an image (a long press on touch screens) opens a menu for its size, layout, text flow
-  and alternative text.
+- **Image menu:** right-clicking an image, its "⋯" button (shown on the image under the mouse), a long press on touch
+  screens, or `Shift+F10` (or the menu key) with the cursor on its `{F123}` opens a menu for its size, layout, text
+  flow and alternative text.
 
 ![The image menu](docs/screenshots/image-menu.png)
 
@@ -119,7 +123,12 @@ nothing moves when the cursor moves.
 - **Keyboard shortcuts:** `Ctrl+B`/`I`/`U`/`E` (bold, italic, underline, monospaced), `Ctrl+Shift+X`/`H`
   (strikethrough, highlight), `Ctrl+Shift+1`–`5` (heading levels), `Ctrl+Shift+7`/`8`/`9` (numbered, bulleted,
   checklist), `Ctrl+K` (link). They are named in the tooltips, also of Phorge's own buttons; `F1`, `Ctrl+/` (where
-  `/` needs no Shift) or the keyboard button shows them all. `Ctrl+F` is the browser's find.
+  `/` needs no Shift) or the keyboard button shows them all; the empty editor says so.
+- **Find and replace:** `Ctrl+F` in the editor finds in all of the text (the browser's find only sees the part on the
+  screen), in a bar below the toolbar; `Enter`/`F3` go to the next match, `Escape` closes it.
+- **Menus by keyboard:** the menus (images, shortcuts, Phuture's) take the focus when they open: the arrow keys,
+  `Home` and `End` move in them, `Enter` or `Space` chooses, `Escape` and `Tab` close them. The table button's size
+  grid goes by the arrow keys too.
 - **Wrapping:** typing `*`, `` ` ``, `{` or `[` over selected text puts the text in bold markers, backticks, braces or
   brackets.
 - **Lists** switch kinds: the bulleted and numbered buttons and shortcuts turn the items of the list level the cursor is
@@ -155,8 +164,8 @@ nothing moves when the cursor moves.
   userscript can fetch them from any site (Tampermonkey asks once to allow that); the extension from sites that allow it
   (CORS), such as Wikipedia. Images that can not be read (e.g. of a web mail behind its login, or attachments
   of a desktop mail program) become a link or their alternative text.
-- **Markdown text** becomes remarkup (headings, emphasis, code blocks, images, tables). Headings only get the leading
-  `=`.
+- **Markdown text** becomes remarkup (headings, emphasis, code blocks, images, tables, reference links), as a Markdown
+  parser reads it (`@lezer/markdown`, with GitHub's extensions). Headings only get the leading `=`.
 - `Ctrl+Shift+V` pastes plain text, and code blocks always get the plain text; undo right after a converted paste brings
   back the plain text.
 
@@ -181,9 +190,12 @@ and people lists, commits (audits). Lists of choices, like "Choose Subtype" when
 
 - **Snooze** an item until tomorrow, next Monday, in a week, in a month or a picked day. It is hidden on every list
   until that day begins in your time zone, also on a page that stays open over midnight.
-- **The clock in the main menu** counts the snoozed items of the page and shows them again (_Show snoozed items_):
-  dimmed, with the days until they wake up on their clock (red tomorrow, blue in two weeks or later). Their clock menu
-  says until when they sleep and wakes them up now.
+- **Undo:** a note after snoozing (or waking up) an item undoes it.
+- **Below a list** with snoozed items, a line says how many are hidden and shows them (or hides them again).
+- **The clock in the main menu** counts the hidden snoozed items of the page, lists all snoozes (the next to wake up
+  first) and shows the snoozed items again (_Show snoozed items_): dimmed, with the days until they wake up on their
+  clock (red tomorrow, blue in two weeks or later). Their clock menu says until when they sleep and wakes them up now.
+- **Bulk edits** leave hidden snoozed tasks out: Maniphest's _Select All_ selects only the tasks shown.
 - **Kept in the browser:** snoozes belong to the browser they were made in. _Export snoozes_ and _Import snoozes…_ in
   the main menu's clock take them to another browser. The snoozes of the old "JCB Phabricator Snooze" plugin are
   taken over on the first visit, and its exports can be imported.
@@ -227,16 +239,17 @@ cd dev/phorge && docker compose up -d
 It is at http://phorge.localhost:8098/. Log in with the link of `docker compose exec phorge bin/auth recover admin`. The built files are served at `/rme-dev/`, so the editor can
 be tried in any page by adding `<script src="/rme-dev/phlair.user.js">`.
 
-| Command                                    | Does                                                                  |
-| ------------------------------------------ | --------------------------------------------------------------------- |
-| `npm run build`                            | Release build of the library, and for `PHLAIR_HOSTS` the extension.   |
-| `npm run build:dev` / `npm run watch`      | Build that also runs on the local instance (needed by the E2E tests). |
-| `npm test`                                 | Unit tests (Vitest).                                                  |
-| `npm run e2e`                              | Dev build, Playwright tests in Firefox and Chromium, extension test.  |
-| `npm run lint:extension`                   | Mozilla's extension linter (`web-ext lint`).                          |
-| `npm run screenshots`                      | Takes the screenshots of this README again (local Phorge).            |
-| `npm run check`                            | Formatting, types and unit tests.                                     |
-| `node scripts/generate-block-fixtures.mjs` | Regenerates the block splitting fixtures with the PHP engine.         |
+| Command                                     | Does                                                                  |
+| ------------------------------------------- | --------------------------------------------------------------------- |
+| `npm run build`                             | Release build of the library, and for `PHLAIR_HOSTS` the extension.   |
+| `npm run build:dev` / `npm run watch`       | Build that also runs on the local instance (needed by the E2E tests). |
+| `npm test`                                  | Unit tests (Vitest).                                                  |
+| `npm run e2e`                               | Dev build, Playwright tests in Firefox and Chromium, extension test.  |
+| `npm run lint:extension`                    | Mozilla's extension linter (`web-ext lint`).                          |
+| `npm run screenshots`                       | Takes the screenshots of this README again (local Phorge).            |
+| `npm run check`                             | Formatting, types and unit tests.                                     |
+| `node scripts/generate-block-fixtures.mjs`  | Regenerates the block splitting fixtures with the PHP engine.         |
+| `node scripts/generate-inline-fixtures.mjs` | Regenerates the inline markup fixtures with the PHP engine.           |
 
 Keep the feature lists and the screenshots current with every change of a feature: `npm run screenshots` takes them
 again from the local instance, with `scripts/screenshots.spec.ts`.
@@ -253,21 +266,30 @@ shared.
 
 - `blocks.ts` splits the text into top-level blocks exactly like `PhutilRemarkupEngine` (a port of the block rules).
   `test/blocks.test.ts` checks it against the PHP engine on ~3000 texts.
+- `inline.ts` finds the inline markup of a block like Phorge's inline rules (a port of the rules, in their order):
+  formatting (also across lines), links, references, mentions, embeds, icons, emoji. `test/inline.test.ts` checks it
+  against the PHP engine on ~5000 texts. Rules of equal priority run in PHP 8's order (PHP 7's sort, in the dev
+  container, orders a few differently; the tests use that).
 - `renderer.ts` renders blocks in batches: the texts are joined with a separator paragraph and the HTML is split at
   the separators.
   Every block but the last one of the text is followed by a separator, because Phorge renders some blocks
   differently at the end of a text.
 - `editor/` holds the CodeMirror 6 extensions:
-  - `livePreview.ts`: which blocks show as source and which rendered, images beside the text, mouse selection, `↑`/`↓`;
-    `gaps.ts`: the space between blocks on consecutive lines, measured with the page's CSS; `sourceStyle.ts`: the
-    styling of the source (with `list.ts`, a port of Phorge's list structure, for list levels and numbers);
-  - `tableEditor.ts`: tables edited as tables; `commands.ts`: keyboard commands and the table buttons;
+  - `livePreview.ts`: which blocks show as source and which rendered; `imagePreview.ts`: images beside the text;
+    `mouseSelection.ts`: clicking and selecting in rendered blocks; `verticalMotion.ts`: `↑`/`↓`; `focus.ts`: when
+    the editor counts as focused (also while its searches, panels and menus are); `heights.ts`: the height estimates of
+    blocks not drawn yet; `gaps.ts`: the space between blocks on consecutive lines, measured with the page's CSS;
+    `inlineTokens.ts`: the inline markup of each block (`inline.ts`) at its place in the text;
+    `sourceStyle.ts`: the styling of the source (with `list.ts`, a port of Phorge's list structure, for list levels and
+    numbers);
+  - `tableEditor.ts`: tables edited as tables (and whether as tables or as text); `commands.ts`: keyboard commands and the table buttons;
     `tablePicker.ts`: the size grid for new tables;
   - `formatting.ts`, `actions.ts`: formatting commands and buttons, the shortcuts; `slashMenu.ts`: the insert menu;
   - `links.ts`, `picker.ts`: links and the search for pages and tasks; `autocomplete.ts`: Phorge's autocomplete;
   - `popup.ts`: Phorge's autocomplete popup, for the menus above;
   - `inlinePreview.ts`: the markup of the text hidden and its references rendered, except where the cursor is;
-  - `upload.ts`, `pasting.ts` (with `paste.ts`), `imageMenu.ts`, `markdown.ts`; `host.ts`: the textarea.
+  - `upload.ts` (with its panel of uploads), `pasting.ts` (with `paste.ts` and `markdownPaste.ts`), `imageMenu.ts`,
+    `markdown.ts`; `openLink.ts`: `Ctrl`+click on links; `host.ts`: the textarea.
 - `attach.ts` puts the editor in place of the textarea, keeps both in sync and takes fonts, sizes and colors from
   the page. `phorge.ts` holds everything that talks to the server or knows its page structure.
 

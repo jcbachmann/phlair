@@ -7,8 +7,11 @@ export default defineConfig({
   testDir: "e2e",
   globalSetup: "./e2e/global-setup.ts",
   fullyParallel: true,
-  reporter: "list",
+  forbidOnly: !!process.env.CI,
+  reporter: [["list"], ["html", { open: "never" }]],
   use: {
+    // What a failed test saw, for the tests that share the database and run in parallel.
+    trace: "retain-on-failure",
     baseURL: BASE_URL,
     storageState: AUTH_FILE,
     viewport: { width: 1280, height: 900 },

@@ -644,6 +644,44 @@ test.describe("tables", () => {
       "Before.\n\n| Element | Line\n| ------- | ------\n| Fe      | **Ka**\n| Cu      | Ka\nNext paragraph\nAfter.",
     );
   });
+
+  test("the other keys of a cell: Shift+Tab, Shift+Enter, redo, the ends of the table, Ctrl+Enter", async ({
+    page,
+  }) => {
+    const changed = (from: string, to: string) => `Before.\n\n${TABLE.replace(from, to)}\n\nAfter.`;
+    await cell(page, "Cu").click();
+    // Shift+Tab selects the cell before, like Tab the one after.
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.type("!");
+    expect(await source(page)).toBe(changed("**Ka**", "!"));
+    // A cell has one line: Shift+Enter does nothing.
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.type("?");
+    expect(await source(page)).toBe(changed("**Ka**", "!?"));
+    // The text's history: undo, and redo with both keys.
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe(changed("**Ka**", "**Ka**"));
+    // A capital Z, as a keyboard sends it with Shift.
+    await page.keyboard.press("Control+Shift+Z");
+    await expect.poll(() => source(page)).toBe(changed("**Ka**", "!?"));
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+y");
+    await expect.poll(() => source(page)).toBe(changed("**Ka**", "!?"));
+    // ← at the start of the first cell and → at the end of the last stay in the cell.
+    await cell(page, "Element").click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.type("<");
+    await expect.poll(() => source(page)).toContain("| <Element |");
+    await cell(page, "Cu").locator("xpath=following-sibling::td").click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.type(">");
+    await expect.poll(() => source(page)).toMatch(/\| Cu +\| Ka>\n/);
+    // Ctrl+Enter saves the page.
+    await page.keyboard.press("Control+Enter");
+    await expect(page).not.toHaveURL(/\/phriction\/edit\//);
+  });
 });
 
 test.describe("images", () => {

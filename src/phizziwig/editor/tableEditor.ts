@@ -7,11 +7,19 @@
 // (rows, columns, header) rewrite the table aligned.
 
 import { isolateHistory, redo, undo } from "@codemirror/commands";
-import { EditorSelection, EditorState, Prec } from "@codemirror/state";
+import {
+  Annotation,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  Facet,
+  Prec,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
 import { standardKeymap } from "@codemirror/commands";
-import { EditorView, keymap, WidgetType } from "@codemirror/view";
+import { EditorView, type KeyBinding, keymap, WidgetType } from "@codemirror/view";
 import { minimalChange } from "../diff";
-import { submitForm } from "../phorge";
 import { INLINE_FORMATS } from "../syntax";
 import {
   type CellPos,
@@ -22,6 +30,7 @@ import {
   insertColumn,
   insertRow,
   isEmptyRow,
+  moveColumn,
   moveRow,
   nextCell,
   parseTable,
@@ -29,15 +38,60 @@ import {
   type Table,
 } from "../table";
 import { hostTextarea } from "./host";
-import { hasText, uploadFiles } from "./upload";
-import { cellSupport, openLinkOnModClick, type TableMode, tableModeField } from "./livePreview";
+import { hasText, submitWhenUploaded, uploadFiles } from "./upload";
+import { keepsFocus } from "./focus";
+import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
+import { openLinkOnModClick } from "./openLink";
+import { storedChoice } from "../../storage";
 import { parseHtml, setHtml } from "../html";
+
+/** What the editor of a table cell needs of the editor of the text, which it can not import (see attach.ts). */
+export interface CellSupport {
+  /** The extensions of a cell's editor (live preview, autocomplete, insert menu, shortcuts), for the editor of the text. */
+  extensions(main: EditorView): Extension;
+  /** A toolbar button's command in a cell, by its icon (e.g. "fa-bold"); null if it is none. */
+  format(icon: string): ((view: EditorView) => boolean) | null;
+  /** Pastes a URL over the selected text as a link with that text; false if it is no URL or nothing is selected. */
+  linkSelection(view: EditorView, text: string): boolean;
+}
+
+export const cellSupport = Facet.define<CellSupport, CellSupport | null>({
+  combine: (values) => values[0] ?? null,
+});
+
+/**
+ * How tables are edited: as tables, cell by cell, the cell being edited with
+ * the live preview of the text ("table"); or as their text.
+ */
+export type TableMode = "table" | "text";
+
+const tableModeChoice = storedChoice<TableMode>("phizziwig-table-mode", "table", ["table", "text"]);
+
+export const setTableMode = StateEffect.define<TableMode>();
+
+/** Switches between editing tables as tables and as text, and remembers the choice. */
+export function switchTableMode(mode: TableMode): StateEffect<TableMode> {
+  tableModeChoice.set(mode);
+  return setTableMode.of(mode);
+}
+
+/** How tables are edited: as tables (TableWidget) or as their text. Remembered per browser. */
+export const tableModeField = StateField.define<TableMode>({
+  create: () => tableModeChoice.get(),
+  update(mode, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setTableMode)) {
+        return effect.value;
+      }
+    }
+    return mode;
+  },
+});
 
 interface TableDom extends HTMLElement {
   /** The source text of the table, as of the last update. */
   rmeText?: string;
   rmeHtml?: string;
-  rmeMode?: TableMode;
 }
 
 /**
@@ -60,8 +114,8 @@ function inCellEditor(event: Event): boolean {
   return event.composedPath().some((node) => node instanceof Element && node.classList.contains("rme-cell-editor"));
 }
 
-/** While the text of a cell's editor is set from the source: not written back. */
-let settingCell = false;
+/** A change of a cell's editor that sets its text from the source: not written back. */
+const fromSource = Annotation.define<boolean>();
 
 /** A cell's text: of its editor, or of the cell. */
 function cellText(cell: HTMLElement): string {
@@ -95,12 +149,20 @@ function replaceInCell(cell: HTMLElement, from: number, to: number, insert: stri
  * closed link. Typed as two changes, so the completion of pages ("[[")
  * starts like in the text and does not take the "]]" in.
  */
+const openingLink = Annotation.define<boolean>();
+
 const closeLinks = EditorView.inputHandler.of((view, from, to, text) => {
   const { state } = view;
   if (text !== "[" || state.sliceDoc(from - 1, from) !== "[" || state.sliceDoc(to, to + 2) === "]]") {
     return false;
   }
-  view.dispatch({ changes: { from, to, insert: "[" }, selection: { anchor: from + 1 }, userEvent: "input.type" });
+  view.dispatch({
+    changes: { from, to, insert: "[" },
+    selection: { anchor: from + 1 },
+    userEvent: "input.type",
+    // Open only until the next change closes it.
+    annotations: openingLink.of(true),
+  });
   view.dispatch({
     changes: { from: from + 1, insert: "]]" },
     selection: EditorSelection.cursor(from + 1),
@@ -124,7 +186,6 @@ function editCell(
   if (!editor) {
     const { row, col } = positionOf(cell);
     const source = parseTable(dom.rmeText ?? "").rows[row]?.cells[col] ?? "";
-    cell.dataset.editing = "1";
     delete cell.dataset.written;
     cell.replaceChildren();
     const support = view.state.facet(cellSupport);
@@ -138,7 +199,8 @@ function editCell(
           EditorView.contentAttributes.of({ class: "phabricator-remarkup", "aria-label": "Table cell" }),
           support ? support.extensions(view) : [],
           closeLinks,
-          // Keys of the table (Tab, Enter, arrows at the ends, Escape, undo, …) go to it (onKeyDown()).
+          // Keys of the table (Tab, Enter, arrows at the ends, Escape, undo, …), then the cell's own.
+          keymap.of(tableKeys(view, dom, cell)),
           Prec.low(
             keymap.of(
               standardKeymap.filter(
@@ -148,18 +210,19 @@ function editCell(
             ),
           ),
           // One line, and "|" only in "[[ link | name ]]": else it would split the cell.
+          // No "[[" left open either: it would take in the next cells up to a "]]" in them.
           EditorState.transactionFilter.of((tr) => {
-            if (!tr.docChanged || settingCell) {
+            if (!tr.docChanged || tr.annotation(fromSource) || tr.annotation(openingLink)) {
               return tr;
             }
-            const text = tr.newDoc.toString();
-            if (!/[\r\n]/.test(text) && !/\|/.test(text.replace(/\[\[[^\]]*\]\]/g, ""))) {
-              return tr;
-            }
-            return [];
+            const outside = tr.newDoc.toString().replace(/\[\[[^\]]*\]\]/g, "");
+            return /[\r\n|]|\[\[/.test(outside) ? [] : tr;
           }),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged && !settingCell) {
+            // A link being opened is written into the source once it is closed: open, it would take in the next cells.
+            const opening = update.transactions.some((tr) => tr.annotation(openingLink));
+            const setFromSource = update.transactions.some((tr) => tr.annotation(fromSource));
+            if (update.docChanged && !setFromSource && !opening) {
               onInput(view, dom, cell, update.state.doc.toString());
             }
           }),
@@ -183,8 +246,7 @@ function editCell(
               // Unless the focus stays in the cell, or goes to a search for it
               // (link, reference, image macro) or one of Phorge's dialogs (upload, meme).
               setTimeout(() => {
-                const focus = document.activeElement;
-                if (!cell.contains(focus) && !focus?.closest(".rme-picker, .jx-client-dialog")) {
+                if (!cell.contains(document.activeElement) && !keepsFocus()) {
                   stopEditing(dom, cell);
                 }
               });
@@ -199,14 +261,7 @@ function editCell(
   }
   editor.focus();
   const length = editor.state.doc.length;
-  const anchor =
-    typeof where === "object"
-      ? (editor.posAtCoords(where) ?? length)
-      : where === "start"
-        ? 0
-        : where === "all"
-          ? 0
-          : length;
+  const anchor = typeof where === "object" ? (editor.posAtCoords(where) ?? length) : where === "end" ? length : 0;
   editor.dispatch({ selection: { anchor, head: where === "all" ? length : anchor } });
 }
 
@@ -226,7 +281,6 @@ function stopEditing(dom: TableDom, cell: HTMLElement): void {
   }
   cellEditors.delete(cell);
   editor.destroy();
-  delete cell.dataset.editing;
   delete cell.dataset.source;
   cell.textContent = "";
   sync(dom, dom.rmeText ?? "", dom.rmeHtml);
@@ -296,21 +350,22 @@ function sync(dom: TableDom, text: string, html: string | undefined): void {
         // Only text changed elsewhere (e.g. undo) replaces what is typed (spaces
         // being typed at the end are not in the source yet); the live preview
         // updates (renderings).
-        settingCell = true;
-        try {
-          const text = editor.state.doc.toString();
-          if (text.trim() !== source) {
-            // What the cell wrote is gone, so is the length it wrote.
-            delete cell.dataset.written;
-          }
-          editor.dispatch(
-            text.trim() === source
-              ? {}
-              : { changes: { from: 0, to: text.length, insert: source }, selection: { anchor: source.length } },
-          );
-        } finally {
-          settingCell = false;
+        const text = editor.state.doc.toString();
+        // As written into the source (onInput()).
+        const same = text.replace(/\u00a0/g, " ").trim() === source;
+        if (!same) {
+          // What the cell wrote is gone, so is the length it wrote.
+          delete cell.dataset.written;
         }
+        editor.dispatch(
+          same
+            ? {}
+            : {
+                changes: { from: 0, to: text.length, insert: source },
+                selection: { anchor: source.length },
+                annotations: fromSource.of(true),
+              },
+        );
         continue;
       }
       const cellHtml = useRendered ? rendered[k][col] : undefined;
@@ -331,9 +386,6 @@ function sync(dom: TableDom, text: string, html: string | undefined): void {
 function positionOf(cell: HTMLElement): { row: number; col: number } {
   return { row: Number((cell.parentElement as HTMLElement).dataset.row), col: Number(cell.dataset.col) };
 }
-
-/** The keys a cell's editor leaves to the table: see onKeyDown(). */
-const TABLE_KEYS = /^(Tab|Enter|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|z|Z|y|Y)$/;
 
 /** Offset of the caret in a cell's text, or null if the selection is not a caret in it. */
 function cellCaret(cell: HTMLElement): number | null {
@@ -473,75 +525,108 @@ function onInput(view: EditorView, dom: TableDom, cell: HTMLElement, typed: stri
   }
 }
 
-/** The keys of the table in a cell (TABLE_KEYS): moving between cells, rows, undo, … */
-function onKeyDown(view: EditorView, dom: TableDom, cell: HTMLElement, event: KeyboardEvent): void {
-  const table = parseTable(dom.rmeText ?? "");
-  const { row, col } = positionOf(cell);
-  const at = { row, col, offset: 0 };
-  const rows = shownRows(table);
-  const shown = rows.indexOf(row);
-  const mod = event.ctrlKey || event.metaKey;
-  const handled = () => {
-    event.preventDefault();
-    event.stopPropagation();
+/**
+ * The keys of the table in a cell's editor: moving between cells and rows,
+ * moving rows and columns, leaving the table, the editor's undo history.
+ * Below the cell's menus (autocomplete, insert menu) and shortcuts; above its
+ * own cursor movement, which ← and → at the ends of the cell leave to these.
+ */
+function tableKeys(view: EditorView, dom: TableDom, cell: HTMLElement): KeyBinding[] {
+  /** Runs a command with the table as it is now and the cell's place in it. */
+  const at = (run: (table: Table, here: CellPos, rows: number[], shown: number) => boolean) => (): boolean => {
+    const table = parseTable(dom.rmeText ?? "");
+    const { row, col } = positionOf(cell);
+    const rows = shownRows(table);
+    return run(table, { row, col, offset: 0 }, rows, rows.indexOf(row));
   };
-
-  if (event.key === "Tab" && !mod && !event.altKey) {
-    handled();
-    apply(view, dom, event.shiftKey ? previousCell(table, at) : nextCell(table, at), table);
-  } else if (event.key === "Enter" && mod) {
-    handled();
-    const textarea = view.state.facet(hostTextarea);
-    if (textarea) {
-      submitForm(textarea);
-    }
-  } else if (event.key === "Enter") {
-    handled();
-    if (event.shiftKey) {
-      return;
-    }
-    if (shown === rows.length - 1 && isEmptyRow(table.rows[row]) && rows.length > 1) {
-      // Enter in an empty last row removes it and leaves the table.
-      const rest = { ...table, rows: table.rows.filter((_, i) => i !== row) };
-      const from = view.posAtDOM(dom);
-      const textAfter = formatTable(rest).text;
-      view.dispatch({ changes: { from, to: from + (dom.rmeText ?? "").length, insert: textAfter } });
-      leave(view, dom, true);
-      return;
-    }
-    apply(view, dom, insertRow(table, at, true), table);
-  } else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && event.altKey && !mod) {
-    handled();
-    apply(view, dom, moveRow(table, at, event.key === "ArrowUp" ? -1 : 1), table);
-  } else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !mod && !event.shiftKey) {
-    handled();
-    const target = rows[shown + (event.key === "ArrowUp" ? -1 : 1)];
-    if (target === undefined) {
-      leave(view, dom, event.key === "ArrowDown");
-    } else {
-      focusCell(view, view.posAtDOM(dom), target, col, "end");
-    }
-  } else if (event.key === "ArrowLeft" && !mod && !event.shiftKey && cellCaret(cell) === 0) {
-    if (col > 0 || shown > 0) {
-      handled();
-      const target = col > 0 ? { row, col: col - 1 } : { row: rows[shown - 1], col: columnCount(table) - 1 };
-      focusCell(view, view.posAtDOM(dom), target.row, target.col, "end");
-    }
-  } else if (event.key === "ArrowRight" && !mod && !event.shiftKey && cellCaret(cell) === cellText(cell).length) {
-    const last = col === columnCount(table) - 1;
-    if (!last || shown < rows.length - 1) {
-      handled();
-      const target = last ? { row: rows[shown + 1], col: 0 } : { row, col: col + 1 };
-      focusCell(view, view.posAtDOM(dom), target.row, target.col, "start");
-    }
-  } else if (event.key === "Escape") {
-    handled();
-    leave(view, dom, true);
-  } else if (mod && !event.altKey && /^[zy]$/i.test(event.key)) {
-    // The editor's undo history, not the cell's.
-    handled();
-    (event.key.toLowerCase() === "y" || event.shiftKey ? redo : undo)(view);
-  }
+  const edit = (change: (table: Table, here: CellPos) => Edit | null) =>
+    at((table, here) => {
+      apply(view, dom, change(table, here), table);
+      return true;
+    });
+  const vertical = (down: boolean) =>
+    at((_table, { col }, rows, shown) => {
+      const target = rows[shown + (down ? 1 : -1)];
+      if (target === undefined) {
+        leave(view, dom, down);
+      } else {
+        focusCell(view, view.posAtDOM(dom), target, col, "end");
+      }
+      return true;
+    });
+  // The editor's undo history, not the cell's.
+  const history = (command: typeof undo) => () => {
+    command(view);
+    return true;
+  };
+  return [
+    { key: "Tab", run: edit(nextCell), shift: edit(previousCell) },
+    {
+      key: "Enter",
+      run: at((table, here, rows, shown) => {
+        if (shown === rows.length - 1 && isEmptyRow(table.rows[here.row]) && rows.length > 1) {
+          // Enter in an empty last row removes it and leaves the table.
+          const rest = { ...table, rows: table.rows.filter((_, i) => i !== here.row) };
+          const from = view.posAtDOM(dom);
+          view.dispatch({ changes: { from, to: from + (dom.rmeText ?? "").length, insert: formatTable(rest).text } });
+          leave(view, dom, true);
+        } else {
+          apply(view, dom, insertRow(table, here, true), table);
+        }
+        return true;
+      }),
+    },
+    {
+      key: "Mod-Enter",
+      run: () => {
+        const textarea = view.state.facet(hostTextarea);
+        if (textarea) {
+          submitWhenUploaded(textarea);
+        }
+        return true;
+      },
+    },
+    { key: "Alt-ArrowUp", run: edit((table, here) => moveRow(table, here, -1)) },
+    { key: "Alt-ArrowDown", run: edit((table, here) => moveRow(table, here, 1)) },
+    { key: "Alt-Shift-ArrowLeft", run: edit((table, here) => moveColumn(table, here, -1)) },
+    { key: "Alt-Shift-ArrowRight", run: edit((table, here) => moveColumn(table, here, 1)) },
+    { key: "ArrowUp", run: vertical(false) },
+    { key: "ArrowDown", run: vertical(true) },
+    {
+      key: "ArrowLeft",
+      run: at((table, { col }, rows, shown) => {
+        if (cellCaret(cell) !== 0 || (col === 0 && shown === 0)) {
+          return false;
+        }
+        const target =
+          col > 0 ? { row: rows[shown], col: col - 1 } : { row: rows[shown - 1], col: columnCount(table) - 1 };
+        focusCell(view, view.posAtDOM(dom), target.row, target.col, "end");
+        return true;
+      }),
+    },
+    {
+      key: "ArrowRight",
+      run: at((table, { col }, rows, shown) => {
+        const last = col === columnCount(table) - 1;
+        if (cellCaret(cell) !== cellText(cell).length || (last && shown === rows.length - 1)) {
+          return false;
+        }
+        const target = last ? { row: rows[shown + 1], col: 0 } : { row: rows[shown], col: col + 1 };
+        focusCell(view, view.posAtDOM(dom), target.row, target.col, "start");
+        return true;
+      }),
+    },
+    {
+      key: "Escape",
+      run: () => {
+        leave(view, dom, true);
+        return true;
+      },
+    },
+    { key: "Mod-z", run: history(undo) },
+    { key: "Mod-y", run: history(redo) },
+    { key: "Mod-Shift-z", run: history(redo) },
+  ];
 }
 
 /**
@@ -628,27 +713,42 @@ export class TableWidget extends WidgetType {
   constructor(
     readonly text: string,
     readonly html: string | undefined,
-    readonly mode: TableMode = "table",
   ) {
     super();
   }
 
   override eq(other: TableWidget): boolean {
-    return other.text === this.text && other.html === this.html && other.mode === this.mode;
+    return other.text === this.text && other.html === this.html;
   }
 
   override updateDOM(dom: HTMLElement): boolean {
-    if ((dom as TableDom).rmeMode !== this.mode) {
-      return false;
-    }
     sync(dom as TableDom, this.text, this.html);
     return true;
   }
 
+  /** The table is gone (its text changed shape, or it scrolled away): so are the editors of its cells. */
+  override destroy(dom: HTMLElement): void {
+    for (const cell of Array.from(dom.querySelectorAll<HTMLElement>("th, td"))) {
+      const editor = cellEditors.get(cell);
+      if (editor) {
+        cellEditors.delete(cell);
+        editor.destroy();
+      }
+      if (editedCell?.cell === cell) {
+        editedCell = null;
+      }
+    }
+  }
+
+  override get estimatedHeight(): number {
+    // A row is about a line and a half high, with its padding and border.
+    return knownHeight(`table:${this.text}`, (this.text.split("\n").length - 1) * LINE_HEIGHT * 1.5 + 16);
+  }
+
   toDOM(view: EditorView): HTMLElement {
     const dom = document.createElement("div") as TableDom;
-    dom.rmeMode = this.mode;
     dom.className = "rme-block rme-block-table rme-table-editor phabricator-remarkup";
+    rememberHeight(`table:${this.text}`, dom);
     const wrap = document.createElement("div");
     wrap.className = "remarkup-table-wrap";
     const table = document.createElement("table");
@@ -666,13 +766,6 @@ export class TableWidget extends WidgetType {
       // The cell itself, e.g. by the keyboard: its editor.
       if (cell && !inCellEditor(event)) {
         editCell(view, dom, cell, "end");
-      }
-    });
-    dom.addEventListener("keydown", (event) => {
-      const cell = cellOf(event);
-      // The keys of the table that the cell's editor leaves.
-      if (cell && inCellEditor(event) && !event.defaultPrevented && TABLE_KEYS.test(event.key)) {
-        onKeyDown(view, dom, cell, event);
       }
     });
     // Files dropped on the table go in the cell they are dropped on, or the nearest.
@@ -785,10 +878,11 @@ export function focusedCell(view: EditorView): HTMLElement | null {
   return cell?.closest(".rme-table-editor") && view.contentDOM.contains(cell) ? cell : null;
 }
 
-/** Buttons that insert text; in a cell only the formatting ones apply. */
+/** Buttons that insert text; in a cell only those of what fits in a cell apply (cellSupport.format). */
 const INSERTING = new Set([
   ...INLINE_FORMATS.map((f) => f.icon),
   "fa-link",
+  "fa-anchor",
   "fa-list-ul",
   "fa-list-ol",
   "fa-code",

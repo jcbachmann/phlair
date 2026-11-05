@@ -35,6 +35,7 @@ export function showTablePicker(view: EditorView, button: HTMLElement): void {
       cell.dataset.row = String(row);
       cell.setAttribute("aria-label", `${col + 1} columns, ${Math.max(1, row)} rows`);
       cell.addEventListener("mouseenter", () => mark(col + 1, Math.max(1, row)));
+      cell.addEventListener("focus", () => mark(col + 1, Math.max(1, row)));
       cell.addEventListener("click", (event) => {
         event.preventDefault();
         closeDropdown();
@@ -45,8 +46,20 @@ export function showTablePicker(view: EditorView, button: HTMLElement): void {
       grid.append(cell);
     }
   }
+  // The arrow keys move in the grid.
+  grid.addEventListener("keydown", (event) => {
+    const move = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+    const { col, row } = (event.target as HTMLElement).dataset;
+    if (!move || col === undefined || row === undefined) {
+      return;
+    }
+    event.preventDefault();
+    const to = (value: number, max: number) => Math.min(max, Math.max(0, value));
+    cells[to(Number(row) + move[1], ROWS) * COLUMNS + to(Number(col) + move[0], COLUMNS - 1)].focus();
+  });
   content.append(grid, label);
-  mark(3, 2);
   const rect = button.getBoundingClientRect();
   showDropdownContent(rect.left, rect.bottom + 2, content, "rme-table-picker-menu");
+  // 3 columns × 2 rows to start with.
+  cells[2 * COLUMNS + 2].focus({ preventScroll: true });
 }

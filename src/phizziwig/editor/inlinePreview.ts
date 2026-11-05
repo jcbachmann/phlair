@@ -1,7 +1,9 @@
 // The text blocks show rendered, except for what the cursor or the selection
-// is on, which shows its source for editing:
-// - references, people, projects, links and URLs show as Phorge renders
-//   them, each rendered by the server on its own and cached by its text;
+// is on, which shows its source for editing. What is markup is what Phorge's
+// inline rules find in the block (inlineTokens.ts):
+// - references, people, projects, links, URLs, icons, keys and navigation
+//   paths show as Phorge renders them, each rendered by the server on its own
+//   and cached by its text; emoji names (":smile:") show their emoji;
 // - the markers of bold, italic, monospaced, struck through, highlighted and
 //   underlined text are hidden (sourceStyle.ts styles the text);
 // - headers hide their markers, unless the cursor is on their line; quotes
@@ -15,47 +17,27 @@
 // A click on a rendered reference or link puts the cursor at its end, where
 // it shows its source again; Ctrl+click opens it.
 
-import type { EditorState, Line, Range } from "@codemirror/state";
+import type { EditorState, Line, Range, Text } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import type { Block } from "../blocks";
 import { escapeText, parseHtml, setHtml } from "../html";
 import type { ListItem } from "../list";
 import type { BlockRenderer, RenderItem } from "../renderer";
-import { decorateLine } from "./sourceStyle";
+import { emojiOf, type InlineToken } from "../inline";
+import { blockTokens, textTokens } from "./inlineTokens";
+import { decorateLine, styleTokens } from "./sourceStyle";
 import { LIST_ITEM } from "../syntax";
 import {
   appendInLists,
   clicked,
   clickPosition,
-  editing,
   listItems,
-  openLinkOnModClick,
   previewField,
   rendererOf,
   STYLED_BLOCKS,
 } from "./livePreview";
-
-// Rendered by the server: links, URLs, then references to objects ("T12",
-// "D3#7"), people ("@alice"), projects ("#docs") and task and revision cards
-// ("{T12}"), like Phorge finds them.
-const LINKS = [
-  /\[\[[^\]\n]+?\]\]/g,
-  /\[[^[\]\n]+\]\([^()\s]*[/@][^()\s]*\)/g,
-  /\bhttps?:\/\/[^\s\]<>`]+[^\s\]<>`.,;:!?)'"]/g,
-];
-const REFERENCE =
-  /(?<![\w/#@&{])(?:[A-Z]\d+(?:#\d+)?|@[\w.-]*\w)(?![\w@])|\{[TD]\d+\}|(?<![\w&#/@])#[\w.-]*[A-Za-z][\w-]*(?![\w#])/g;
-// Formatting, by its marker; monospaced text first, nothing inside it is formatted.
-const MONOSPACED = [/`[^`\n]+`/g, /##(?=\S)[^\n#]+?##/g];
-const FORMATS = [
-  /\*\*(?=\S)[^\n]+?\*\*/g,
-  /(?<![:\w])\/\/(?=\S)[^\n]+?\/\//g,
-  /~~[^\n]+?~~/g,
-  /!![^\n]+?!!/g,
-  /(?<!\w)__[^\n]+?__(?!\w)/g,
-];
-// Literal text: nothing in it is rendered.
-const LITERAL = /%%%.*?%%%/g;
+import { editing } from "./focus";
+import { openLinkOnModClick } from "./openLink";
 
 const inlineCache = new Map<string, string | null>();
 
@@ -229,39 +211,11 @@ function revealed(state: EditorState, piece: Piece): boolean {
   });
 }
 
-function overlaps(ranges: [number, number][], from: number, to: number): boolean {
-  return ranges.some(([a, b]) => from < b && to > a);
-}
-
-/** File embeds ("{F12}", "{F12, size=full}"). */
-const EMBED = /\{(F\d+)(?:[,\s][^}\n]*)?\}/g;
-
-/** Anchors to link to ("{anchor #name}"), like Phorge's PhutilRemarkupAnchorRule. */
-const ANCHOR = /\{anchor\s+#([^\s}]+)\}/g;
-
-/** Memes ("{meme, src=cat, above=…}"). */
-const MEME = /\{meme,[^}\n]*\}/g;
-
-/** Markup that Phorge draws: icons ("{icon camera color=red}"), keys ("{key Ctrl K}"), navigation paths ("{nav Home > Settings}"). */
-const DRAWN = /\{(?:icon|key|nav)\b[^{}\n]*\}/g;
-
-/** An image macro: its name alone on a line. */
-const MACRO = /^\s*([a-z0-9:_-]{3,})\s*$/;
-
-/** The pieces of a line of a block being edited. */
-function linePieces(
-  block: Block,
-  line: Line,
-  items: Map<number, ListItem>,
-  render: (text: string, from: number, to: number, whole?: boolean) => Range<Decoration> | null,
-  /** The rendered images of the block, which show beside its text (livePreview.ts). */
-  images: string[],
-): Piece[] {
+/** The pieces of the block markup of a line of a block being edited. */
+function linePieces(block: Block, line: Line, items: Map<number, ListItem>): Piece[] {
   const pieces: Piece[] = [];
   const text = line.text;
   const at = (i: number) => line.from + i;
-  const taken: [number, number][] = Array.from(text.matchAll(LITERAL), (m) => [m.index, m.index + m[0].length]);
-  const literal = [...taken];
 
   // Line markers.
   let match: RegExpExecArray | null;
@@ -311,115 +265,120 @@ function linePieces(
     });
   }
 
-  // Embedded images, memes and image macros: they hide while their images show.
-  const shown = (part: string) => images.some((html) => html.includes(part));
-  const hideImage = (from: number, to: number) => {
-    taken.push([from, to]);
-    pieces.push({ from: at(from), to: at(to), side: "token", decorations: [HIDE.range(at(from), at(to))] });
-  };
-  for (const [pattern, part] of [
-    [EMBED, (m: RegExpExecArray) => `data-rme-file="${m[1]}"`],
-    [MEME, () => 'alt="Macro '],
-  ] as const) {
-    for (const m of text.matchAll(pattern)) {
-      const from = m.index;
-      const to = from + m[0].length;
-      if (!overlaps(taken, from, to) && !overlaps(monospacedIn(text), from, to) && shown(part(m))) {
-        hideImage(from, to);
-      }
-    }
-  }
-  const macro = MACRO.exec(text);
-  if (macro && block.kind === "paragraph" && shown(`alt="${macro[1]}"`)) {
-    hideImage(macro.index, text.length);
-  }
-
-  // Anchors: Phorge shows nothing, the editor an anchor with its name (its "#name" is no project).
-  for (const m of text.matchAll(ANCHOR)) {
-    const from = m.index;
-    const to = from + m[0].length;
-    if (!overlaps(taken, from, to) && !overlaps(monospacedIn(text), from, to)) {
-      taken.push([from, to]);
-      const html = `<span class="rme-anchor" title="An anchor to link to: #${escapeText(m[1])}"><span class="phui-icon-view phui-font-fa fa-hashtag" aria-hidden="true"></span>${escapeText(m[1])}</span>`;
-      pieces.push({
-        from: at(from),
-        to: at(to),
-        side: "token",
-        decorations: [Decoration.replace({ widget: new Rendered(html, to - from) }).range(at(from), at(to))],
-      });
-    }
-  }
-
-  // Icons, keys and navigation paths, then links and URLs, then references, rendered by the server.
-  for (const m of text.matchAll(DRAWN)) {
-    const from = m.index;
-    const to = from + m[0].length;
-    if (!overlaps(taken, from, to) && !overlaps(monospacedIn(text), from, to)) {
-      taken.push([from, to]);
-      const decoration = render(m[0], at(from), at(to), true);
-      if (decoration) {
-        pieces.push({ from: at(from), to: at(to), side: "token", decorations: [decoration] });
-      }
-    }
-  }
-  for (const pattern of [...LINKS, REFERENCE]) {
-    for (const m of text.matchAll(pattern)) {
-      const from = m.index;
-      const to = from + m[0].length;
-      if (overlaps(taken, from, to) || overlaps(monospacedIn(text), from, to)) {
-        continue;
-      }
-      taken.push([from, to]);
-      const decoration = render(m[0], at(from), at(to));
-      if (decoration) {
-        pieces.push({ from: at(from), to: at(to), side: "token", decorations: [decoration] });
-      }
-    }
-  }
-
-  // Formatting: its markers hide.
-  const monospaced: [number, number][] = [];
-  for (const [i, pattern] of MONOSPACED.entries()) {
-    for (const m of text.matchAll(pattern)) {
-      const from = m.index;
-      const to = from + m[0].length;
-      if (overlaps(literal, from, to) || overlaps(monospaced, from, to)) {
-        continue;
-      }
-      monospaced.push([from, to]);
-      const n = i === 0 ? 1 : 2;
-      pieces.push({
-        from: at(from),
-        to: at(to),
-        side: "token",
-        decorations: [HIDE_OPEN.range(at(from), at(from + n)), HIDE_CLOSE.range(at(to - n), at(to))],
-      });
-    }
-  }
-  for (const pattern of FORMATS) {
-    for (const m of text.matchAll(pattern)) {
-      const from = m.index;
-      const to = from + m[0].length;
-      // Not in monospaced text, literal text or a rendered link, and not across one.
-      if (overlaps([...literal, ...monospaced, ...taken.filter(([a, b]) => !(a >= from && b <= to))], from, to)) {
-        continue;
-      }
-      pieces.push({
-        from: at(from),
-        to: at(to),
-        side: "token",
-        decorations: [HIDE_OPEN.range(at(from), at(from + 2)), HIDE_CLOSE.range(at(to - 2), at(to))],
-      });
-    }
-  }
   return pieces;
 }
 
-/** Monospaced text of a line: nothing in it is a link or reference. */
-function monospacedIn(text: string): [number, number][] {
-  return MONOSPACED.flatMap((pattern) =>
-    Array.from(text.matchAll(pattern), (m) => [m.index, m.index + m[0].length] as [number, number]),
-  );
+type Render = (text: string, from: number, to: number, whole?: boolean) => Range<Decoration> | null;
+
+/**
+ * The pieces of the inline markup of a block being edited (inlineTokens.ts):
+ * the markers of formatting hide, links, references, icons and the like show
+ * as the server renders them, images their reference hides while they show.
+ */
+function tokenPieces(
+  doc: Text,
+  tokens: InlineToken[],
+  render: Render,
+  /** The rendered images of the block, which show beside its text (livePreview.ts). */
+  images: string[],
+  paragraph: boolean,
+  /** Whether a token shows its source now (the cursor on it): it is not rendered, e.g. while typed. */
+  asSource: (from: number, to: number) => boolean,
+): Piece[] {
+  const pieces: Piece[] = [];
+  const shown = (part: string) => images.some((html) => html.includes(part));
+  const piece = (token: InlineToken, decorations: Range<Decoration>[]) =>
+    pieces.push({ from: token.from, to: token.to, side: "token", decorations });
+  for (const token of tokens) {
+    const { from, to } = token;
+    const text = doc.sliceString(from, to);
+    switch (token.kind) {
+      case "monospace":
+      case "bold":
+      case "italic":
+      case "del":
+      case "underline":
+      case "highlight": {
+        // A piece of formatting that the browser splits may lack a marker.
+        const markers: Range<Decoration>[] = [];
+        if (token.contentFrom !== undefined && token.contentFrom > from) {
+          markers.push(HIDE_OPEN.range(from, token.contentFrom));
+        }
+        if (token.contentTo !== undefined && to > token.contentTo) {
+          markers.push(HIDE_CLOSE.range(token.contentTo, to));
+        }
+        if (markers.length) {
+          piece(token, markers);
+        }
+        pieces.push(...tokenPieces(doc, token.children ?? [], render, images, paragraph, asSource));
+        break;
+      }
+      case "embed":
+      case "meme":
+      case "macro": {
+        // Images hide their reference while they show; other embeds ("{T12}") are cards.
+        const image =
+          token.kind === "meme"
+            ? 'alt="Macro '
+            : token.kind === "macro"
+              ? `alt="${text.trim()}"`
+              : /^\{(F\d+)/.exec(text)
+                ? `data-rme-file="${/^\{(F\d+)/.exec(text)![1]}"`
+                : null;
+        if (image) {
+          if ((token.kind !== "macro" || paragraph) && shown(image)) {
+            piece(token, [HIDE.range(from, to)]);
+          }
+          break;
+        }
+        const decoration = !asSource(from, to) && render(text, from, to);
+        if (decoration) {
+          piece(token, [decoration]);
+        }
+        break;
+      }
+      case "anchor": {
+        // Phorge shows nothing; the editor an anchor with its name.
+        const name = /#([^\s}]+)/.exec(text)?.[1] ?? "";
+        const html = `<span class="rme-anchor" title="An anchor to link to: #${escapeText(name)}"><span class="phui-icon-view phui-font-fa fa-hashtag" aria-hidden="true"></span>${escapeText(name)}</span>`;
+        piece(token, [Decoration.replace({ widget: new Rendered(html, to - from) }).range(from, to)]);
+        break;
+      }
+      case "emoji": {
+        const emoji = emojiOf(text.slice(1, -1));
+        if (emoji) {
+          piece(token, [Decoration.replace({ widget: new Rendered(escapeText(emoji), to - from) }).range(from, to)]);
+        }
+        break;
+      }
+      case "icon":
+      case "key":
+      case "nav": {
+        // Never text: all of what the server renders.
+        const decoration = !asSource(from, to) && render(text, from, to, true);
+        if (decoration) {
+          piece(token, [decoration]);
+        }
+        break;
+      }
+      case "link":
+      case "url":
+      case "object":
+      case "mention":
+      case "project":
+      case "handle":
+      case "config":
+      case "source":
+      case "symbol": {
+        const decoration = !asSource(from, to) && render(text, from, to);
+        if (decoration) {
+          piece(token, [decoration]);
+        }
+        break;
+      }
+    }
+  }
+  return pieces;
 }
 
 /** Renders references, links and other markup of the text with the server's HTML, asking for what is missing. */
@@ -464,18 +423,30 @@ function build(view: EditorView): DecorationSet {
         items.set(unit.from, unit.item);
       }
     }
-    for (const visible of view.visibleRanges) {
-      const from = Math.max(block.from, visible.from);
-      const to = Math.min(block.contentTo, visible.to);
+    const visible = (from: number, to: number) => view.visibleRanges.some((r) => from <= r.to && to >= r.from);
+    const asSource = (from: number, to: number) =>
+      focused && revealed(state, { from, to, side: "token", decorations: [] });
+    const pieces = tokenPieces(
+      state.doc,
+      blockTokens(state.doc, block),
+      render,
+      images,
+      block.kind === "paragraph",
+      asSource,
+    );
+    for (const range of view.visibleRanges) {
+      const from = Math.max(block.from, range.from);
+      const to = Math.min(block.contentTo, range.to);
       for (let pos = from; pos <= to;) {
         const line = state.doc.lineAt(pos);
         pos = line.to + 1;
-        for (const piece of linePieces(block, line, items, render, images)) {
-          // Without the focus, all of it shows rendered.
-          if (!focused || !revealed(state, piece)) {
-            ranges.push(...piece.decorations);
-          }
-        }
+        pieces.push(...linePieces(block, line, items));
+      }
+    }
+    for (const piece of pieces) {
+      // Without the focus, all of it shows rendered.
+      if (visible(piece.from, piece.to) && (!focused || !revealed(state, piece))) {
+        ranges.push(...piece.decorations);
       }
     }
   }
@@ -485,12 +456,6 @@ function build(view: EditorView): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
-/**
- * A click on the bullet or number of a list item (left of its text, on its
- * first row) puts the cursor after it, where it shows its source for editing;
- * left of it, at the start of the line. A checkbox toggles instead
- * (ItemMarker).
- */
 /** The list item line of a click left of its text, on its first row: its line and marker; null elsewhere. */
 function markerArea(view: EditorView, event: MouseEvent): { line: Line; match: RegExpExecArray; pos: number } | null {
   if (
@@ -518,6 +483,12 @@ function markerArea(view: EditorView, event: MouseEvent): { line: Line; match: R
   return { line, match, pos };
 }
 
+/**
+ * A click on the bullet or number of a list item (left of its text, on its
+ * first row) puts the cursor after it, where it shows its source for editing;
+ * left of it, at the start of the line. A checkbox toggles instead
+ * (ItemMarker).
+ */
 const markerClick = EditorView.domEventHandlers({
   mousedown(event, view) {
     const area = markerArea(view, event);
@@ -656,8 +627,12 @@ export function cellPreview(main: EditorView) {
     const block: Block = { kind: "paragraph", from: 0, to: length, contentTo: length, empty: false };
     const ranges: Range<Decoration>[] = [];
     decorateLine(block, line.from, line.text, true, ranges);
+    const tokens = textTokens(line.text, line.from);
+    styleTokens(tokens, ranges);
     const missing: RenderItem[] = [];
-    for (const piece of linePieces(block, line, new Map(), tokenRenderer(renderer, missing), [])) {
+    const asSource = (from: number, to: number) =>
+      view.hasFocus && revealed(view.state, { from, to, side: "token", decorations: [] });
+    for (const piece of tokenPieces(view.state.doc, tokens, tokenRenderer(renderer, missing), [], false, asSource)) {
       if (!view.hasFocus || !revealed(view.state, piece)) {
         ranges.push(...piece.decorations);
       }

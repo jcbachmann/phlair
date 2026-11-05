@@ -12,8 +12,8 @@ import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirro
 import { typeahead, type TypeaheadResult } from "../phorge";
 import { Popup } from "./popup";
 
-/** Where the completed text is: the editor's text, or a table cell's. Positions are offsets in it. */
-export interface Host {
+/** Where the completed text is (the text of an editor, of the text or a table cell). Positions are offsets in it. */
+interface Host {
   slice(from: number, to: number): string;
   selection(): { from: number; to: number; head: number };
   /** The start of the line of a position. */
@@ -21,6 +21,8 @@ export interface Host {
   replace(from: number, to: number, insert: string): void;
   /** Where a position is on the screen, for the menu. */
   place(popup: Popup, at: number): void;
+  /** Tells assistive technology about the menu and its focused item, or that it is gone (Popup.describe()). */
+  describe(popup: Popup | null, focus: number | null): void;
 }
 
 interface Spec {
@@ -95,11 +97,11 @@ function trimSuffixes(text: string): string {
 }
 
 /** Characters that start a completion. */
-export function isTrigger(char: string): boolean {
+function isTrigger(char: string): boolean {
   return char.length === 1 && char in SPECS;
 }
 
-export class Autocomplete {
+class Autocomplete {
   private trigger: string | null = null;
   /** Position after the trigger character. */
   private head = 0;
@@ -165,8 +167,7 @@ export class Autocomplete {
     this.trigger = null;
     this.query = "";
     clearTimeout(this.timer);
-    this.popup?.remove();
-    this.popup = null;
+    this.closePopup();
   }
 
   private refresh(): void {
@@ -288,6 +289,14 @@ export class Autocomplete {
     }
   }
 
+  /** Page Up and Down move the focus by a page, to the first or last result at most. */
+  pageFocus(direction: 1 | -1): void {
+    if (this.focus !== null && this.popup) {
+      this.focus = this.popup.pageFrom(this.focus, direction, this.results.length);
+      this.render();
+    }
+  }
+
   /** Enter or Tab: inserts the focused result. Returns false to let the key through. */
   accept(): boolean {
     if (this.host.selection().head === this.head) {
@@ -319,8 +328,7 @@ export class Autocomplete {
 
   private render(): void {
     if (!this.visible) {
-      this.popup?.remove();
-      this.popup = null;
+      this.closePopup();
       return;
     }
     const spec = SPECS[this.trigger!];
@@ -337,7 +345,16 @@ export class Autocomplete {
       this.focus,
       (i) => this.insert(this.results[i]),
     );
+    this.host.describe(this.popup, this.focus);
     this.position();
+  }
+
+  private closePopup(): void {
+    if (this.popup) {
+      this.host.describe(null, null);
+    }
+    this.popup?.remove();
+    this.popup = null;
   }
 
   position(): void {
@@ -372,6 +389,7 @@ class TextAutocomplete {
         });
       },
       place: (popup, at) => popup.placeAt(view, at),
+      describe: (popup, focus) => (popup ? popup.describe(view.contentDOM, focus) : Popup.undescribe(view.contentDOM)),
     });
   }
 
@@ -414,15 +432,18 @@ function withMenu(run: (menu: Autocomplete) => boolean) {
 }
 
 /**
- * The keys of a completion: arrow keys, Enter, Tab and Escape. Returns
- * whether the key was used, e.g. for a table cell's own key handling.
+ * The keys of a completion: arrow keys, Page Up and Down, Enter, Tab and Escape. Returns
+ * whether the key was used.
  */
-export function completionKey(menu: Autocomplete, key: string): boolean {
+function completionKey(menu: Autocomplete, key: string): boolean {
   switch (key) {
     case "ArrowDown":
       return menu.visible && (menu.moveFocus(1), true);
     case "ArrowUp":
       return menu.visible && (menu.moveFocus(-1), true);
+    case "PageDown":
+    case "PageUp":
+      return menu.visible && (menu.pageFocus(key === "PageDown" ? 1 : -1), true);
     case "Enter":
     case "Tab":
       return menu.accept();
@@ -438,7 +459,7 @@ export const phabricatorAutocomplete = [
   autocompletePlugin,
   Prec.highest(
     keymap.of([
-      ...["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].map((key) => ({
+      ...["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Enter", "Tab", "Escape"].map((key) => ({
         key,
         run: withMenu((m) => completionKey(m, key)),
       })),

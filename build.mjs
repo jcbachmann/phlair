@@ -57,6 +57,7 @@ ${MATCHES.map((m) => `// @match        ${m}`).join("\n")}
 ${updateUrl ? `// @updateURL    ${updateUrl}\n// @downloadURL  ${updateUrl}\n` : ""}// @grant        GM.xmlHttpRequest
 // @grant        GM_xmlhttpRequest
 // @connect      *
+// @noframes
 // @run-at       document-idle
 // ==/UserScript==
 `;
@@ -79,7 +80,8 @@ const manifest = {
       ...(geckoId ? { id: geckoId } : {}),
       // 140 (the current ESR) is the first version that knows data_collection_permissions.
       strict_min_version: "140.0",
-      // Required by AMO; the editor only talks to the Phorge it runs on.
+      // Required by AMO: no user data is collected. Requests go to the Phorge the page belongs to and,
+      // for images in pasted content, to the sites those images come from (without cookies).
       data_collection_permissions: { required: ["none"] },
     },
     gecko_android: { strict_min_version: "142.0" },
@@ -167,7 +169,8 @@ const target = (name) => ({ ...options.define, __TARGET__: JSON.stringify(name) 
 
 // Celerity reads what a script provides from its first doc comment, and must
 // not minify it again (its minifier is not made for esbuild's output). It
-// needs Javelin's "javelin-behavior", which every page of Phorge loads first.
+// needs Javelin's "javelin-behavior", which every page of Phorge loads first;
+// it can not be required here: a library's map knows only its own resources.
 const PHORGE_SCRIPT = "phorge/rsrc/phlair.js";
 /**
  * Writes the Celerity map of the library's script, as "bin/celerity map" in

@@ -16,9 +16,6 @@ export function inMonospace(before: string): boolean {
  */
 export const LIST_ITEM = /^(\s*)((?:[-*]+|#+|\d+[.)])(?=\s)|(?=\[[ xX]?\]\s))(\s*)(\[[ xX]?\]\s+)?(.*)$/;
 
-/** A checklist item marker, e.g. "- [ ] " or "  * [X] ". */
-export const CHECKBOX = /^(\s*)[-*] \[[ xX]?\]\s?/;
-
 /** A line of a quote. */
 export const QUOTE_LINE = /^(>+ ?)(.*)$/;
 
@@ -33,7 +30,7 @@ export interface InlineFormat {
   placeholder: string;
   /** The Font Awesome icon of the toolbar button. */
   icon: string;
-  /** Keyboard shortcut, see matchesKey(). */
+  /** Keyboard shortcut, as CodeMirror names keys ("Mod-Shift-x"). */
   key: string;
 }
 

@@ -43,21 +43,20 @@ function inCell(view: EditorView): boolean {
  * where Phorge shows its picture (in a table cell, in the cell).
  */
 export function insertMacro(view: EditorView): boolean {
-  const range = view.state.selection.main;
   openPicker(view, {
     headIcon: "fa-picture-o",
     headText: "Image macro:",
     placeholder: "Search image macros by name",
-    at: range.from,
+    range: view.state.selection.main,
     search: async (query) => {
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       // All of them, to browse: the list scrolls, and their pictures load when scrolled to (popup.ts).
       return (await loadMacros()).filter((macro) => words.every((word) => macro.label.includes(word)));
     },
-    pick: (target) => {
+    pick: (target, range) => {
       const { state } = view;
       const line = state.doc.lineAt(range.from);
-      const alone = inCell(view) || (!line.text.trim() && range.empty);
+      const alone = inCell(view) || (!line.text.trim() && range.from === range.to);
       // After the line of the cursor, on a line of its own.
       const from = alone ? range.from : line.to;
       const insert = alone ? target.reference : `\n${target.reference}`;
@@ -74,14 +73,13 @@ export function insertMacro(view: EditorView): boolean {
 
 /** A task or revision card ("{T12}"), found by its title or number. */
 export function insertCard(view: EditorView): boolean {
-  const range = view.state.selection.main;
   openPicker(view, {
     headIcon: "fa-id-card-o",
     headText: "Card:",
     placeholder: "Search tasks and revisions by title or number",
-    at: range.from,
+    range: view.state.selection.main,
     search: async (query) => (await search(query)).filter((target) => /^[TD]\d+$/.test(target.reference)),
-    pick: (target) => {
+    pick: (target, range) => {
       const insert = `{${target.reference}}`;
       view.dispatch({
         changes: { from: range.from, to: range.to, insert },
@@ -215,14 +213,13 @@ export function findIcons(query: string): Target[] {
 
 /** An icon ("{icon camera color=red}"), found by its name, with its color. */
 export function insertIcon(view: EditorView): boolean {
-  const range = view.state.selection.main;
   openPicker(view, {
     headIcon: "fa-flag",
     headText: "Icon:",
     placeholder: "Search icons; add a color (red, blue, green, …) or spin",
-    at: range.from,
+    range: view.state.selection.main,
     search: async (query) => findIcons(query),
-    pick: (target) => {
+    pick: (target, range) => {
       view.dispatch({
         changes: { from: range.from, to: range.to, insert: target.reference },
         selection: { anchor: range.from + target.reference.length },
