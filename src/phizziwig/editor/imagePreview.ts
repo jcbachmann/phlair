@@ -49,6 +49,36 @@ export function imagesOf(html: string): string | null {
   return images;
 }
 
+const splitCache = new Map<string, { html: string; file: string | null }[]>();
+
+/**
+ * The images of imagesOf one by one, each with the file it embeds ("F123"; null
+ * for macros and memes), in their order.
+ */
+export function splitImages(images: string): { html: string; file: string | null }[] {
+  let parts = splitCache.get(images);
+  if (!parts) {
+    parts = [];
+    let empty = "";
+    for (const el of Array.from(parseHtml(images).children)) {
+      // The empty paragraph before an embed belongs to it (see imagesOf).
+      if (el.tagName === "P" && !el.childElementCount && !el.textContent?.trim()) {
+        empty = "<p></p>";
+        continue;
+      }
+      const file =
+        el.getAttribute("data-rme-file") ?? el.querySelector("[data-rme-file]")?.getAttribute("data-rme-file");
+      parts.push({ html: empty + el.outerHTML, file: file ?? null });
+      empty = "";
+    }
+    splitCache.set(images, parts);
+    if (splitCache.size > 200) {
+      splitCache.delete(splitCache.keys().next().value!);
+    }
+  }
+  return parts;
+}
+
 /** The images of a block being edited, shown below its source. */
 export class ImagePreview extends WidgetType {
   constructor(
@@ -59,12 +89,25 @@ export class ImagePreview extends WidgetType {
      * lines flow around them).
      */
     readonly placement: "below" | "above" | "float",
+    /** Classes for its place, e.g. in a quote (livePreview.ts). */
+    readonly classes = "",
+    /**
+     * How many file embeds of its block come before its images in the text,
+     * for finding the embed of an image (imageMenu.ts): a block may show its
+     * images in more places than one (list items, the paragraphs of a quote).
+     */
+    readonly firstEmbed = 0,
   ) {
     super();
   }
 
   override eq(other: ImagePreview): boolean {
-    return other.html === this.html && other.placement === this.placement;
+    return (
+      other.html === this.html &&
+      other.placement === this.placement &&
+      other.classes === this.classes &&
+      other.firstEmbed === this.firstEmbed
+    );
   }
 
   /** Floating images have no height of their own; others had theirs when they showed before. */
@@ -74,7 +117,9 @@ export class ImagePreview extends WidgetType {
 
   toDOM(): HTMLElement {
     const dom = document.createElement("div");
-    dom.className = `rme-block rme-image-preview rme-preview-${this.placement} phabricator-remarkup`;
+    dom.className =
+      `rme-block rme-image-preview rme-preview-${this.placement} phabricator-remarkup ${this.classes}`.trim();
+    dom.dataset.rmeFirstEmbed = String(this.firstEmbed);
     // Server-rendered images of the block.
     setHtml(dom, this.html);
     if (this.placement !== "float") {

@@ -14,17 +14,21 @@ function embedOf(view: EditorView, image: Element): { embed: Embed; offset: numb
   if (!monogram || !widget) {
     return null;
   }
-  // Rendered blocks sit at the start of their block, image previews at its end.
+  // Rendered blocks sit at the start of their block, image previews in it or at its ends.
   const pos = view.posAtDOM(widget);
   const { blocks } = view.state.field(previewField);
-  const block = blocks.find((b) => b.from === pos) ?? blocks.find((b) => !b.empty && b.contentTo === pos);
+  const block = blocks.find((b) => !b.empty && pos >= b.from && pos <= b.contentTo);
   if (!block) {
     return null;
   }
-  // The n-th image of the file in the block is its n-th embed in the text.
+  // The n-th image of the file in the widget is its n-th embed in the text
+  // from the first embed the widget shows (see ImagePreview.firstEmbed).
   const index = Array.from(widget.querySelectorAll(`[data-rme-file="${monogram}"]`)).indexOf(image);
+  const first = Number(widget.dataset.rmeFirstEmbed ?? 0);
   const text = view.state.doc.sliceString(block.from, block.contentTo);
-  const embed = findEmbeds(text).filter((e) => e.monogram === monogram)[index];
+  const embed = findEmbeds(text)
+    .slice(first)
+    .filter((e) => e.monogram === monogram)[index];
   return embed ? { embed, offset: block.from } : null;
 }
 

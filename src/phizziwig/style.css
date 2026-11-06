@@ -300,6 +300,30 @@
   padding-bottom: 8px;
 }
 
+/* Images in a quote are in the quote, like in the rendered quote (livePreview.ts). */
+.rme-editor .rme-image-preview.rme-preview-quote {
+  padding: 0 12px;
+  border-left: 3px solid var(--rme-quote-border-color, #a7b5bf);
+  background: var(--rme-quote-background, #f8f9fc);
+}
+
+/* At an end of the quote, they have its padding there instead of its line. */
+.rme-editor .rme-image-preview.rme-quote-first {
+  padding-top: 8px;
+}
+
+.rme-editor .rme-image-preview.rme-quote-last {
+  padding-bottom: 8px;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-first.rme-image-above {
+  padding-top: 0;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-last.rme-image-below {
+  padding-bottom: 0;
+}
+
 /*
  * List lines are indented like Phorge's lists (30px, nested lists 24px
  * more, checklist items 6px more), and the marker hangs into the indent, so

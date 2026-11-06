@@ -1436,6 +1436,35 @@ test.describe("third test round", () => {
     );
     expect(Math.abs((await image()) - before)).toBeLessThan(2);
   });
+
+  test("images in a quote show in the quote, by the paragraph that embeds them", async ({ page }) => {
+    // Like a reply quoting a comment with a screenshot (T30643).
+    await startWith(page, "> Quoted text.\n>\n> {F1}\n>\n> More text.\n\nAfter.");
+    const top = (text: string) =>
+      page.locator(".cm-line", { hasText: text }).evaluate((line) => line.getBoundingClientRect().top);
+    const preview = page.locator(".rme-image-preview");
+    await expect(preview).toHaveCount(1);
+    await expect(preview).toHaveClass(/rme-preview-quote/);
+    const box = (await preview.boundingBox())!;
+    // Between the paragraphs of the quote, on its border.
+    expect(box.y).toBeGreaterThan(await top("Quoted text."));
+    expect(box.y + box.height).toBeLessThanOrEqual((await top("More text.")) + 1);
+    const quoteLeft = await page
+      .locator(".cm-line", { hasText: "Quoted text." })
+      .evaluate((line) => line.getBoundingClientRect().left);
+    expect(Math.abs(box.x - quoteLeft)).toBeLessThan(1);
+    // Its reference hides while the image shows.
+    await expect(page.locator(".cm-line", { hasText: "{F1}" })).toHaveCount(0);
+  });
+
+  test("the image menu changes the embed of the image in a quote", async ({ page }) => {
+    await startWith(page, "> {F1}\n>\n> Between.\n>\n> {F1}");
+    const images = page.locator(".rme-image-preview img");
+    await expect(images).toHaveCount(2);
+    await images.nth(1).click({ button: "right" });
+    await page.locator(".rme-image-menu a", { hasText: "Full width" }).click();
+    await expect.poll(() => source(page)).toBe("> {F1}\n>\n> Between.\n>\n> {F1, size=wide}");
+  });
 });
 
 test.describe("fourth test round", () => {
