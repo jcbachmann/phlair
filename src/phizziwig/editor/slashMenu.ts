@@ -1,6 +1,8 @@
 // "/" at the start of a line or after a space opens a menu of what can be
 // inserted: headings, lists, tables, notes, images, ... Typing filters it,
 // Enter inserts. A "/" in a word or path ("and/or", "/home") stays text.
+// While nothing matches (a typo, or a path like "/home") the menu only hides:
+// Backspace brings it back. It ends with the "/", a space, Escape or leaving.
 
 import { Prec } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
@@ -21,8 +23,9 @@ function insertMenu(items: Action[]) {
 
     constructor(private readonly view: EditorView) {}
 
+    /** Shown: its keys (Enter, arrows, ...) are the menu's. */
     get active(): boolean {
-      return this.slash !== null;
+      return this.popup !== null;
     }
 
     update(update: ViewUpdate): void {
@@ -79,8 +82,8 @@ function insertMenu(items: Action[]) {
           .some((w) => w.startsWith(q)),
       );
       if (!this.matches.length) {
-        // E.g. a path like "/home": not for the menu.
-        this.close();
+        // A typo or a path like "/home": hidden, but Backspace can bring it back.
+        this.hide();
         return;
       }
       this.focus = Math.min(this.focus, this.matches.length - 1);
@@ -131,14 +134,25 @@ function insertMenu(items: Action[]) {
       return true;
     }
 
+    /** Escape: ends the menu, and takes the key only if the menu was shown. */
+    cancel(): boolean {
+      const shown = this.active;
+      this.close();
+      return shown;
+    }
+
     close(): boolean {
       this.slash = null;
+      this.hide();
+      return true;
+    }
+
+    private hide(): void {
       if (this.popup) {
         Popup.undescribe(this.view.contentDOM);
       }
       this.popup?.remove();
       this.popup = null;
-      return true;
     }
 
     destroy(): void {
@@ -165,7 +179,7 @@ function insertMenu(items: Action[]) {
         { key: "PageUp", run: withMenu((m) => m.page(-1)) },
         { key: "Enter", run: withMenu((m) => m.accept()) },
         { key: "Tab", run: withMenu((m) => m.accept()) },
-        { key: "Escape", run: withMenu((m) => m.close()) },
+        { key: "Escape", run: (view) => view.plugin(plugin)?.cancel() ?? false },
       ]),
     ),
   ];

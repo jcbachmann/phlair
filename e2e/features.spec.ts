@@ -1081,6 +1081,39 @@ test.describe("review fixes", () => {
     await expect(page.locator(".rme-autocomplete")).toHaveCount(0);
   });
 
+  test("the insert menu hides while nothing matches and comes back when Backspace fixes the typo", async ({ page }) => {
+    await openNewWikiPage(page, "Slash typo");
+    await editor(page).click();
+    const menu = page.locator(".rme-autocomplete");
+    await page.keyboard.type("/tabx");
+    await expect(menu).toHaveCount(0);
+    await page.keyboard.press("Backspace");
+    await expect(menu.locator(".jx-result.focused")).toContainText("Table");
+    // Down to no match again and back.
+    await page.keyboard.type("yz");
+    await expect(menu).toHaveCount(0);
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+    await expect(menu).toHaveCount(1);
+    // Backspace to the "/" keeps it, deleting the "/" closes it.
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Backspace");
+    await expect(menu.locator(".jx-result.focused")).toContainText("Heading");
+    await page.keyboard.press("Backspace");
+    await expect(menu).toHaveCount(0);
+    await expect.poll(() => source(page)).toBe("");
+    // A space ends it: Backspace does not bring it back.
+    await page.keyboard.type("/tabx ");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+    await expect(menu).toHaveCount(0);
+    // While hidden, Enter is a line break, not an insert.
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("/tabx");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("/tabx\n");
+  });
+
   test("F1 opens the shortcut overview", async ({ page }) => {
     await openNewWikiPage(page, "F1");
     await editor(page).click();

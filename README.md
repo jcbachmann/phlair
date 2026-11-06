@@ -113,7 +113,7 @@ nothing moves when the cursor moves.
   image, image macro (found by name, with its picture, in a list to scroll through), meme, task or revision card,
   anchor, literal text, icon (found by name; a color word like `red` colors it, `spin` makes it spin), keyboard keys,
   navigation path, ASCII art (`cowsay`, `figlet`), mention, emoji, …), grouped under headings (headings, lists,
-  blocks, links, text, images, ASCII art); in a table cell, what fits in a cell; type to filter, arrow keys and `Enter` insert. A `/` in a word or path (`and/or`, `/home`) is just text.
+  blocks, links, text, images, ASCII art); in a table cell, what fits in a cell; type to filter, arrow keys and `Enter` insert. While nothing matches, the menu hides until `Backspace` fixes the typo; a space, `Escape` or deleting the `/` ends it. A `/` in a word or path (`and/or`, `/home`) is just text.
 
   ![The insert menu](docs/screenshots/insert-menu.png)
 
