@@ -1465,6 +1465,37 @@ test.describe("third test round", () => {
     await page.locator(".rme-image-menu a", { hasText: "Full width" }).click();
     await expect.poll(() => source(page)).toBe("> {F1}\n>\n> Between.\n>\n> {F1, size=wide}");
   });
+
+  test("an image that goes to a block of its own shows only there, not also in the block it left", async ({ page }) => {
+    const images = page.locator(".rme-image-preview img");
+    const below = async (text: string) =>
+      (await images.boundingBox())!.y >= (await page.locator(".cm-line", { hasText: text }).boundingBox())!.y;
+    // A blank line splits a paragraph.
+    await startWith(page, "Paragraph\n{F1}");
+    await expect(images).toHaveCount(1);
+    await page.locator(".cm-line", { hasText: "Paragraph" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("Paragraph\n\n{F1}");
+    await settled(page);
+    await expect(images).toHaveCount(1);
+    expect(await below("Paragraph")).toBe(true);
+
+    // The image's line leaves a quote.
+    await editor(page).press("Control+a");
+    await page.keyboard.insertText("> Quoted\n>> {F1}");
+    await expect(images).toHaveCount(1);
+    await page.locator(".cm-line", { hasText: "Quoted" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+    await expect.poll(() => source(page)).toBe("> Quoted\n{F1}");
+    await settled(page);
+    await expect(images).toHaveCount(1);
+    expect(await below("Quoted")).toBe(true);
+  });
 });
 
 test.describe("fourth test round", () => {
@@ -1524,6 +1555,26 @@ test.describe("fourth test round", () => {
     await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText\n\n  # one**bold text**");
     await toolbarButton("fa-bold").click();
     await expect.poll(() => source(page)).toBe("  - a\n    - b\n  - [ ] c\n\nText\n\n  # onebold text");
+  });
+
+  test("the quote button quotes paragraphs as one quote, and unquotes them", async ({ page }) => {
+    const text = "Intro\n\nHello Michael,\n\nYou can ignore this.\n\nBest regards\n\nEnd";
+    await startWith(page, text);
+    // From the blank line after "Intro" to the one before "End".
+    await page.locator(".cm-line", { hasText: "Intro" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowDown");
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press("Shift+ArrowDown");
+    }
+    const quoteButton = page.locator(".remarkup-assist-bar .remarkup-assist.fa-quote-right").first();
+    await quoteButton.click();
+    await expect
+      .poll(() => source(page))
+      .toBe("Intro\n\n> Hello Michael,\n>\n> You can ignore this.\n>\n> Best regards\n\nEnd");
+    // The cursor is on the blank line after the quote.
+    await quoteButton.click();
+    await expect.poll(() => source(page)).toBe(text);
   });
 
   test("Shift+Up and Down select line by line, also into rendered blocks", async ({ page }) => {
@@ -1865,6 +1916,120 @@ test.describe("everything renders until the cursor is on it", () => {
     await page.keyboard.press("Home");
     await page.keyboard.press("Home");
     await expect(page.locator(".cm-line.rme-src-quote")).toHaveText("> Quoted");
+  });
+
+  test("quotes in quotes show inside the quote, and Enter, Backspace and the quote button take one level", async ({
+    page,
+  }) => {
+    await startWith(page, "Start");
+    // Both ways of writing a nested quote, as Phorge takes them (the editor would tidy them).
+    await textarea(page).evaluate((t: HTMLTextAreaElement) => {
+      t.value = "> Outer line\n>\n> > Inner one\n>> Inner two\n>\n> Outer again";
+    });
+    const line = (text: string) => page.locator(".cm-line", { hasText: text });
+    await expect(line("Outer again")).toBeVisible();
+    // Where the text starts on the screen.
+    const textLeft = (text: string) =>
+      line(text).evaluate((element, word) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.textContent!.indexOf(word);
+          if (at >= 0) {
+            const range = document.createRange();
+            range.setStart(node, at);
+            range.setEnd(node, at + 1);
+            return range.getBoundingClientRect().left;
+          }
+        }
+        throw new Error(`no ${word}`);
+      }, text.split(" ")[0]);
+    // Without their markers.
+    await expect(line("Inner one")).toHaveText("Inner one");
+    await expect(line("Inner two")).toHaveText("Inner two");
+    await expect(line("Inner one")).toHaveClass(/rme-quote-depth-2 rme-quote-open/);
+    await expect(line("Inner two")).toHaveClass(/rme-quote-depth-2 rme-quote-close/);
+    await expect(line("Outer line")).not.toHaveClass(/rme-quote-depth/);
+    // Blank lines between them: no extra space.
+    await expect(line("Inner one")).not.toHaveClass(/rme-quote-apart/);
+    // As Phorge renders it: the inner quote's border and padding, 15px further in.
+    const outer = await textLeft("Outer line");
+    expect(Math.abs((await textLeft("Inner one")) - outer - 15)).toBeLessThan(1);
+    expect(Math.abs((await textLeft("Inner two")) - outer - 15)).toBeLessThan(1);
+    expect(Math.abs((await textLeft("Outer again")) - outer)).toBeLessThan(1);
+
+    // Enter continues the nested quote; on an empty line of it, the outer one.
+    await line("Inner two").click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("three");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("back");
+    await expect
+      .poll(() => source(page))
+      .toBe("> Outer line\n>\n>> Inner one\n>> Inner two\n>> three\n> back\n>\n> Outer again");
+    // Without a blank line, Phorge's margin between the nested quote and the text after it.
+    await expect(line("three")).toHaveClass(/rme-quote-close rme-quote-apart/);
+
+    // Backspace at the start of the text takes off the marker of its level.
+    await line("three").click();
+    await page.keyboard.press("End");
+    for (let i = 0; i < "three".length; i++) {
+      await page.keyboard.press("ArrowLeft");
+    }
+    await page.keyboard.press("Backspace");
+    await expect
+      .poll(() => source(page))
+      .toBe("> Outer line\n>\n>> Inner one\n>> Inner two\n> three\n> back\n>\n> Outer again");
+
+    // The quote button takes off one level.
+    await line("Inner two").click();
+    await page.locator(".remarkup-assist-bar .remarkup-assist.fa-quote-right").first().click();
+    await expect
+      .poll(() => source(page))
+      .toBe("> Outer line\n>\n>> Inner one\n> Inner two\n> three\n> back\n>\n> Outer again");
+  });
+
+  test("quote markers are written as Phorge quotes while editing: levels together, a space before the text", async ({
+    page,
+  }) => {
+    // Firefox inserts this text as an input method would, which is not tidied while it is composed.
+    await startWith(
+      page,
+      "> one \n>>two\n> > three\n>  indented\n> \n>>! In T1, @alice wrote:\n> > four\n\n```\n> > code\n```",
+    );
+    // An edit of the quote tidies all of it; a code block is no quote.
+    await page.locator(".cm-line", { hasText: "four" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("!");
+    await expect
+      .poll(() => source(page))
+      .toBe("> one \n>> two\n>> three\n>  indented\n>\n>>! In T1, @alice wrote:\n>> four!\n\n```\n> > code\n```");
+
+    // Typed: the space comes before the cursor, the levels go together.
+    await editor(page).press("Control+a");
+    await page.keyboard.insertText("Text");
+    await page.keyboard.press("Home");
+    await page.keyboard.type(">");
+    await expect.poll(() => source(page)).toBe("> Text");
+    await page.keyboard.type("y");
+    await expect.poll(() => source(page)).toBe("> yText");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("> > z");
+    await expect.poll(() => source(page)).toBe("> yText\n\n>> z");
+    // Where the cursor is, a blank line keeps its space for the text to come.
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("> yText\n\n>> z\n>> ");
+    // Phorge's own changes stay as they are.
+    await textarea(page).evaluate((t: HTMLTextAreaElement) => {
+      t.value = `> > Quoted.\n\n${t.value}`;
+    });
+    await expect(page.locator(".cm-line", { hasText: "Quoted." })).toBeVisible();
+    // The editor writes its text back with the next edit, in another quote.
+    await page.keyboard.type("w");
+    await expect.poll(() => source(page)).toBe("> > Quoted.\n\n> yText\n\n>> z\n>> w");
   });
 });
 

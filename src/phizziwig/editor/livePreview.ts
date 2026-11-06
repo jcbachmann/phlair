@@ -28,7 +28,10 @@ import { focusedCellSource, refreshCellEditor, setTableMode, TableWidget, tableM
 import { setHtml } from "../html";
 import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { type ListItem, parseList } from "../list";
-import { LIST_ITEM } from "../syntax";
+import { LIST_ITEM, QUOTE_LINE, quoteDepth } from "../syntax";
+
+/** The deepest nested quote that style.css draws; deeper ones look like it. */
+export const MAX_QUOTE_DEPTH = 4;
 
 /** Blocks that show their source, styled; see above. */
 export const STYLED_BLOCKS = new Set<BlockKind>(["paragraph", "header", "list", "quote", "note", "rule"]);
@@ -219,8 +222,7 @@ function buildDecorations(
     } else if ((active.has(i) && !tableSelected(state, block)) || alwaysSource(state, block)) {
       // A block with images keeps showing them by its source, so it does not
       // collapse; until the edited text is rendered, the last images stay.
-      const html = htmls[i];
-      const images = (html !== undefined ? imagesOf(html) : undefined) ?? oldPreviews.get(block.from);
+      const images = currentImages(state, block, block.from, block.contentTo, htmls[i], oldPreviews);
       if (images) {
         previews.set(block.from, images);
         if (lineImages(state, block, block.from, block.contentTo, images, ranges, true)) {
@@ -274,13 +276,34 @@ function listImages(
 ): void {
   const renderer = state.facet(blockRenderer);
   for (const unit of listItems(state, block)) {
-    const html = renderer?.get(unit.render);
-    const images = (html !== undefined ? imagesOf(html) : undefined) ?? oldPreviews.get(unit.from);
+    const images = currentImages(state, block, unit.from, unit.to, renderer?.get(unit.render), oldPreviews);
     if (images) {
       previews.set(unit.from, images);
       lineImages(state, block, unit.from, unit.to, images, ranges, false);
     }
   }
+}
+
+/**
+ * The images of a block (or list item) from `from` to `to`: those of its
+ * HTML, or until its text is rendered, the last ones it showed, if it still
+ * has any. Not the last ones once it is rendered without images: a block
+ * that lost its image to another block (a blank line or a quote marker
+ * between them) would show it as well.
+ */
+function currentImages(
+  state: EditorState,
+  block: Block,
+  from: number,
+  to: number,
+  html: string | undefined,
+  oldPreviews: Map<number, string>,
+): string | null | undefined {
+  if (html !== undefined) {
+    return imagesOf(html);
+  }
+  const old = oldPreviews.get(from);
+  return old && imageSources(state, block, from, to).length ? old : undefined;
 }
 
 /** The text of a quote line without its markers (">", ">>! In T1, @alice wrote:" too). */
@@ -369,7 +392,8 @@ function lineImages(
         : line.number === last
           ? "rme-quote-last"
           : "";
-      classes = `rme-preview-quote ${edge}`.trim();
+      const depth = Math.min(quoteDepth(QUOTE_LINE.exec(line.text)![1]), MAX_QUOTE_DEPTH);
+      classes = `rme-preview-quote ${depth > 1 ? `rme-quote-depth-${depth} ` : ""}${edge}`.trim();
       if (edge) {
         ranges.push(Decoration.line({ class: above ? "rme-image-above" : "rme-image-below" }).range(line.from));
       }

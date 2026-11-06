@@ -16,8 +16,45 @@ export function inMonospace(before: string): boolean {
  */
 export const LIST_ITEM = /^(\s*)((?:[-*]+|#+|\d+[.)])(?=\s)|(?=\[[ xX]?\]\s))(\s*)(\[[ xX]?\]\s+)?(.*)$/;
 
-/** A line of a quote. */
-export const QUOTE_LINE = /^(>+ ?)(.*)$/;
+/**
+ * A line of a quote: its markers and its text. Each level of a nested quote
+ * has a ">", with a space or not ("> > text", ">> text"), as Phorge takes one
+ * ">" and its space off per level; the ">>!" of a reply's header ("In T1,
+ * @alice wrote:") is one level.
+ */
+export const QUOTE_LINE = /^((?:>(?!>!) ?)*(?:>>! ?)?)(.*)$/;
+
+/** The markers of a quote line alone (QUOTE_LINE). */
+export const QUOTE_MARKERS = /^(?:>(?!>!) ?)*(?:>>! ?)?/;
+
+/** How deeply a line is quoted, by its markers (QUOTE_LINE). */
+export function quoteDepth(markers: string): number {
+  return (markers.match(/>/g)?.length ?? 0) - (markers.includes(">>!") ? 1 : 0);
+}
+
+/** The markers of a line with text at a depth, as Phorge quotes: ">> text". */
+export function quoteMarkers(depth: number): string {
+  return `${">".repeat(depth)} `;
+}
+
+/**
+ * The markers of a quote line written as Phorge quotes: the ">" of all levels
+ * together and a space before the text (">> text", not "> >text"), only ">"
+ * on a blank line. Only the space after each ">" counts as a marker, so
+ * deliberate indentation of the text stays. A blank line keeps its space at
+ * the end if `keepSpace` (the cursor's: "> " is where the text will be typed).
+ */
+export function tidyQuoteMarkers(markers: string, text: string, keepSpace: boolean): string {
+  const depth = quoteDepth(markers);
+  const levels = markers.includes(">>!") ? `${">".repeat(depth - 1)}>>!` : ">".repeat(depth);
+  return levels + (text || (keepSpace && markers.endsWith(" ")) ? " " : "");
+}
+
+/** The markers of a quote line one level less deep: without the innermost level, with the space before the text. */
+export function outerQuote(markers: string): string {
+  const outer = markers.replace(/(?:>>!|>) ?$/, "");
+  return outer && markers.endsWith(" ") ? outer.replace(/ ?$/, " ") : outer;
+}
 
 export const NOTE_WORDS = ["NOTE", "IMPORTANT", "WARNING"] as const;
 

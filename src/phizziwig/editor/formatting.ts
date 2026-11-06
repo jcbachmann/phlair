@@ -2,7 +2,7 @@
 // do not need to know the syntax: headers, strikethrough, underline,
 // highlight, checklists, note boxes and horizontal rules.
 
-import { EditorSelection, type EditorState, type Line } from "@codemirror/state";
+import { EditorSelection, type EditorState, type Line, type SelectionRange } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { INLINE_FORMATS, LIST_ITEM, NOTE_PREFIX, NOTE_WORDS } from "../syntax";
 import { toolbarButton } from "../toolbar";
@@ -362,15 +362,43 @@ export const toggleChecklist: Command = (view) => {
   return true;
 };
 
-/** Quotes the lines, or unquotes them. */
+/**
+ * Quotes the lines, or unquotes them. Blank lines between quoted ones get a
+ * ">" too, so paragraphs stay in one quote; those at the edges of a
+ * selection stay blank. Whether to unquote follows the cursor's line, or the
+ * first line with text of the selection if the cursor's is blank. Unquoting
+ * takes off one level of nested quotes.
+ */
 export const toggleQuote: Command = (view) => {
   const { state } = view;
-  const line = state.doc.lineAt(state.selection.main.head);
-  if (state.selection.main.empty && !line.text.trim()) {
+  const main = state.selection.main;
+  const line = state.doc.lineAt(main.head);
+  if (main.empty && !line.text.trim()) {
     return insertBlock(view, "> ", [2, 2]);
   }
-  const remove = /^>/.test(line.text);
-  changeLines(view, (text) => (remove ? text.replace(/^>+ ?/, "") : text.trim() ? `> ${text}` : text));
+  const filledLines = (range: SelectionRange): number[] => {
+    const numbers = [];
+    for (let n = state.doc.lineAt(range.from).number; n <= state.doc.lineAt(range.to).number; n++) {
+      if (state.doc.line(n).text.trim()) {
+        numbers.push(n);
+      }
+    }
+    return numbers;
+  };
+  const decisive = line.text.trim() ? line : state.doc.line(filledLines(main)[0] ?? line.number);
+  if (/^>/.test(decisive.text)) {
+    // One level: a nested quote stays quoted; a reply's header loses its ">>!".
+    changeLines(view, (text) => text.replace(/^(?:>>!|>) ?/, ""));
+    return true;
+  }
+  const inside = new Set<number>();
+  for (const range of state.selection.ranges) {
+    const filled = filledLines(range);
+    for (let n = filled[0]; n <= filled[filled.length - 1]; n++) {
+      inside.add(n);
+    }
+  }
+  changeLines(view, (text, n) => (text.trim() ? `> ${text}` : inside.has(n) ? ">" : text));
   return true;
 };
 

@@ -9,7 +9,7 @@ import { EditorView } from "@codemirror/view";
 import { matchesKey } from "../keys";
 import { htmlToRemarkup, type ImageMarkup, markdownToRemarkup, shouldConvertHtml, tsvToRemarkup } from "../paste";
 import { embeddedFile, fetchImage, fileByPhid } from "../phorge";
-import { inMonospace, LITERAL_BLOCKS, QUOTE_LINE } from "../syntax";
+import { inMonospace, LITERAL_BLOCKS, QUOTE_LINE, quoteDepth, quoteMarkers } from "../syntax";
 import { blockAtCursor } from "./livePreview";
 import { hasText, uploadInPlace, uploadPlaceholder } from "./upload";
 
@@ -119,7 +119,8 @@ export const pasting = EditorView.domEventHandlers({
     }
     const { state } = view;
     const range = state.selection.main;
-    const quote = block?.kind === "quote" ? QUOTE_LINE.exec(state.doc.lineAt(range.from).text)?.[1] : undefined;
+    const markers = block?.kind === "quote" ? QUOTE_LINE.exec(state.doc.lineAt(range.from).text)?.[1] : undefined;
+    const quote = markers && quoteMarkers(quoteDepth(markers));
     if (quote) {
       const lines = (insert ?? text).replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
       if (lines.length === 1 && insert === null) {

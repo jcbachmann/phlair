@@ -11,7 +11,7 @@ import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { EditorView, keymap, panels, placeholder } from "@codemirror/view";
 import { minimalChange } from "./diff";
 import { phabricatorAutocomplete } from "./editor/autocomplete";
-import { markupKeymap, tableBar } from "./editor/commands";
+import { markupKeymap, tableBar, tidyQuotes } from "./editor/commands";
 import {
   ACTIONS,
   cellShortcuts,
@@ -76,6 +76,8 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
     return header;
   });
   const quote = document.createElement("blockquote");
+  const innerQuote = document.createElement("blockquote");
+  quote.append(innerQuote);
   const link = document.createElement("a");
   link.href = "#";
   probe.append(quote, link);
@@ -143,6 +145,9 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
   editor.style.setProperty("--rme-quote-color", quoteStyle.color);
   editor.style.setProperty("--rme-quote-background", quoteStyle.backgroundColor);
   editor.style.setProperty("--rme-quote-border-color", quoteStyle.borderLeftColor);
+  const innerQuoteStyle = getComputedStyle(innerQuote);
+  editor.style.setProperty("--rme-inner-quote-background", innerQuoteStyle.backgroundColor);
+  editor.style.setProperty("--rme-inner-quote-border-color", innerQuoteStyle.borderLeftColor);
   editor.style.setProperty("--rme-link-color", getComputedStyle(link).color);
   // A rule is its border or its background, depending on the style.
   const ruleStyle = getComputedStyle(rule);
@@ -364,6 +369,7 @@ class LiveEditor {
           imageMenu,
           imageMenuKeys,
           markupKeymap,
+          tidyQuotes,
           tableBar,
           phabricatorAutocomplete,
           pickerRanges,

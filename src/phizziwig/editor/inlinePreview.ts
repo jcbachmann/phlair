@@ -26,7 +26,7 @@ import type { BlockRenderer, RenderItem } from "../renderer";
 import { emojiOf, type InlineToken } from "../inline";
 import { blockTokens, textTokens } from "./inlineTokens";
 import { decorateLine, styleTokens } from "./sourceStyle";
-import { LIST_ITEM } from "../syntax";
+import { LIST_ITEM, QUOTE_LINE } from "../syntax";
 import {
   appendInLists,
   clicked,
@@ -243,13 +243,13 @@ function linePieces(block: Block, line: Line, items: Map<number, ListItem>): Pie
       side: "before",
       decorations: [HIDE.range(line.from, at(match[0].length))],
     });
-  } else if (block.kind === "quote" && (match = /^>+(?:! ?)?\s?/.exec(text))) {
-    // Also the ">>!" of a reply's header ("In T1, @alice wrote:").
+  } else if (block.kind === "quote" && (match = QUOTE_LINE.exec(text)) && match[1]) {
+    // All levels of a nested quote, also the ">>!" of a reply's header ("In T1, @alice wrote:").
     pieces.push({
       from: line.from,
-      to: at(match[0].length),
+      to: at(match[1].length),
       side: "before",
-      decorations: [HIDE.range(line.from, at(match[0].length))],
+      decorations: [HIDE.range(line.from, at(match[1].length))],
     });
   } else if (block.kind === "list" && (match = LIST_ITEM.exec(text)) && items.has(line.from)) {
     const item = items.get(line.from)!;

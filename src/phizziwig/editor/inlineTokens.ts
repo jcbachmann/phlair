@@ -9,7 +9,7 @@ import type { Text } from "@codemirror/state";
 import type { Block } from "../blocks";
 import { type InlineToken, tokenizeInline } from "../inline";
 import { parseList } from "../list";
-import { LIST_ITEM, NOTE_PREFIX } from "../syntax";
+import { LIST_ITEM, NOTE_PREFIX, QUOTE_MARKERS } from "../syntax";
 
 /** Ranges of the document whose texts, joined with newlines, are one text for the inline rules. */
 type Parts = { from: number; to: number }[];
@@ -94,7 +94,7 @@ function inlineParts(doc: Text, block: Block): Parts[] {
       ];
     case "quote":
       // Also the text of a reply's header (">>! In T1, @alice wrote:").
-      return [strip(/^>+!?\s?/)];
+      return [strip(QUOTE_MARKERS)];
     case "list":
       return parseList(lines.map((line) => line.text)).map((item) =>
         lines.slice(item.first, item.last + 1).map((line, i) => {

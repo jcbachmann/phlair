@@ -325,6 +325,117 @@
 }
 
 /*
+ * Nested quotes ("> > text", sourceStyle.ts) are drawn inside the quote, as
+ * Phorge renders a blockquote in a blockquote: each level 12px in from the
+ * one around it on both sides, with its border and its tint over the
+ * background of the one around it, and its text 12px after its border. Lines
+ * are flat, so the levels are layers of the line's background: a bar and a
+ * tint for each, from the innermost.
+ */
+.rme-editor {
+  --rme-inner-quote-bar: linear-gradient(
+    var(--rme-inner-quote-border-color, #a7b5bf),
+    var(--rme-inner-quote-border-color, #a7b5bf)
+  );
+  --rme-inner-quote-tint: linear-gradient(
+    var(--rme-inner-quote-background, rgba(175, 175, 175, 0.1)),
+    var(--rme-inner-quote-background, rgba(175, 175, 175, 0.1))
+  );
+}
+
+.rme-editor .rme-src-quote.rme-quote-depth-2,
+.rme-editor .rme-preview-quote.rme-quote-depth-2,
+.rme-editor .rme-src-quote.rme-quote-depth-3,
+.rme-editor .rme-preview-quote.rme-quote-depth-3,
+.rme-editor .rme-src-quote.rme-quote-depth-4,
+.rme-editor .rme-preview-quote.rme-quote-depth-4 {
+  --rme-quote-height: calc(100% - var(--rme-quote-top, 0px) - var(--rme-quote-bottom, 0px));
+  background-repeat: no-repeat;
+}
+
+.rme-editor .rme-src-quote.rme-quote-depth-2,
+.rme-editor .rme-preview-quote.rme-quote-depth-2 {
+  padding-left: 27px;
+  padding-right: 24px;
+  background-image: var(--rme-inner-quote-bar), var(--rme-inner-quote-tint);
+  background-position: 12px var(--rme-quote-top, 0px);
+  background-size:
+    3px var(--rme-quote-height),
+    calc(100% - 24px) var(--rme-quote-height);
+}
+
+.rme-editor .rme-src-quote.rme-quote-depth-3,
+.rme-editor .rme-preview-quote.rme-quote-depth-3 {
+  padding-left: 42px;
+  padding-right: 36px;
+  background-image:
+    var(--rme-inner-quote-bar), var(--rme-inner-quote-tint), var(--rme-inner-quote-bar), var(--rme-inner-quote-tint);
+  background-position:
+    27px var(--rme-quote-top, 0px),
+    27px var(--rme-quote-top, 0px),
+    12px var(--rme-quote-top, 0px),
+    12px var(--rme-quote-top, 0px);
+  background-size:
+    3px var(--rme-quote-height),
+    calc(100% - 51px) var(--rme-quote-height),
+    3px var(--rme-quote-height),
+    calc(100% - 24px) var(--rme-quote-height);
+}
+
+.rme-editor .rme-src-quote.rme-quote-depth-4,
+.rme-editor .rme-preview-quote.rme-quote-depth-4 {
+  padding-left: 57px;
+  padding-right: 48px;
+  background-image:
+    var(--rme-inner-quote-bar), var(--rme-inner-quote-tint), var(--rme-inner-quote-bar), var(--rme-inner-quote-tint),
+    var(--rme-inner-quote-bar), var(--rme-inner-quote-tint);
+  background-position:
+    42px var(--rme-quote-top, 0px),
+    42px var(--rme-quote-top, 0px),
+    27px var(--rme-quote-top, 0px),
+    27px var(--rme-quote-top, 0px),
+    12px var(--rme-quote-top, 0px),
+    12px var(--rme-quote-top, 0px);
+  background-size:
+    3px var(--rme-quote-height),
+    calc(100% - 78px) var(--rme-quote-height),
+    3px var(--rme-quote-height),
+    calc(100% - 51px) var(--rme-quote-height),
+    3px var(--rme-quote-height),
+    calc(100% - 24px) var(--rme-quote-height);
+}
+
+/* Where a nested quote starts or ends, its padding; at an end of the whole quote, after the quote's own. */
+.rme-editor .cm-line.rme-src-quote.rme-quote-open {
+  padding-top: 8px;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-quote-close {
+  padding-bottom: 8px;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-first.rme-quote-open {
+  --rme-quote-top: 8px;
+  padding-top: 16px;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-last.rme-quote-close {
+  --rme-quote-bottom: 8px;
+  padding-bottom: 16px;
+}
+
+/* Text right before or after a nested quote has Phorge's 12px between them, outside the nested quote. */
+.rme-editor .cm-line.rme-src-quote.rme-quote-open.rme-quote-apart {
+  --rme-quote-top: 12px;
+  padding-top: 20px;
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-quote-close.rme-quote-apart {
+  --rme-quote-bottom: 12px;
+  padding-bottom: 20px;
+}
+
+/*
  * List lines are indented like Phorge's lists (30px, nested lists 24px
  * more, checklist items 6px more), and the marker hangs into the indent, so
  * the item text starts where the rendered item text starts.

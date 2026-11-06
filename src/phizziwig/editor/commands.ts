@@ -1,6 +1,6 @@
 // Keyboard commands and the table toolbar.
 
-import { EditorSelection, type EditorState, Prec } from "@codemirror/state";
+import { ChangeSet, EditorSelection, EditorState, Prec, type Text } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import { insertNewlineAndIndent } from "@codemirror/commands";
 import type { Block } from "../blocks";
@@ -24,7 +24,7 @@ import {
   toggleHeader,
 } from "../table";
 import { CONTROL, TOOLBAR } from "../phorge";
-import { LIST_ITEM, QUOTE_LINE } from "../syntax";
+import { LIST_ITEM, outerQuote, QUOTE_LINE, quoteDepth, quoteMarkers, tidyQuoteMarkers } from "../syntax";
 import { toolbarButton } from "../toolbar";
 import { hostTextarea } from "./host";
 import { focusField } from "./focus";
@@ -192,6 +192,16 @@ function continueMarkup(view: EditorView): boolean {
     return false;
   }
   const content = item ? item[5] : quote![2];
+  if (quote && quoteDepth(quote[1]) > 1 && content.trim() === "" && range.head === line.to) {
+    // An empty line of a nested quote ends that quote: the line continues the one around it.
+    const insert = outerQuote(quote[1]);
+    view.dispatch({
+      changes: { from: line.from, to: line.to, insert },
+      selection: { anchor: line.from + insert.length },
+      userEvent: "delete",
+    });
+    return true;
+  }
   if (content.trim() === "" && range.head === line.to) {
     // An empty item ends the list or quote: its line stays, empty, with the
     // cursor on it. At the end of the text, the cursor goes to a new line
@@ -210,7 +220,8 @@ function continueMarkup(view: EditorView): boolean {
     const marker = number ? `${Number(number[1]) + 1}${number[2]}` : item[2];
     prefix = item[1] + marker + item[3] + (item[4] ? "[ ] " : "");
   } else {
-    prefix = quote![1];
+    // A reply's header (">>! In T1, @alice wrote:") continues as its quote.
+    prefix = quoteMarkers(quoteDepth(quote![1]));
   }
   view.dispatch(state.replaceSelection("\n" + prefix), { scrollIntoView: true, userEvent: "input" });
   return true;
@@ -219,7 +230,8 @@ function continueMarkup(view: EditorView): boolean {
 /**
  * Backspace at the start of the text of a quote line, whose marker does not
  * show: removes the marker ("> ") instead of its space, which would seem to
- * do nothing, like Enter on an empty quote line does.
+ * do nothing, like Enter on an empty quote line does. In a nested quote, the
+ * marker of its level ("> > " → "> ").
  */
 function removeQuoteMarker(view: EditorView): boolean {
   const { state } = view;
@@ -233,12 +245,86 @@ function removeQuoteMarker(view: EditorView): boolean {
   if (!marker || range.head !== line.from + marker) {
     return false;
   }
+  const insert = outerQuote(quote![1]);
   view.dispatch({
-    changes: { from: line.from, to: range.head },
-    selection: { anchor: line.from },
+    changes: { from: line.from, to: range.head, insert },
+    selection: { anchor: line.from + insert.length },
     userEvent: "delete.backward",
   });
   return true;
+}
+
+/**
+ * Writes the markers of the quotes being edited as Phorge quotes (">> text",
+ * see tidyQuoteMarkers), so the text reads well without the editor too:
+ * after typing, deleting, pasting and formatting, in the quotes that changed.
+ * Not on undo, not while composing (an input method's text is not final), and
+ * not where Phorge changes the text. The cursor stays at the text: a space
+ * written before it goes before the cursor.
+ */
+export const tidyQuotes = EditorState.transactionFilter.of((tr) => {
+  if (
+    !tr.docChanged ||
+    !(tr.isUserEvent("input") || tr.isUserEvent("delete")) ||
+    tr.isUserEvent("input.type.compose") ||
+    tr.isUserEvent("input.phabricator")
+  ) {
+    return tr;
+  }
+  const doc = tr.newDoc;
+  const changed: [number, number][] = [];
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => changed.push([fromB, toB]));
+  // Cheap first: every line of a quote starts with ">".
+  if (!changed.some(([from, to]) => quoteLineIn(doc, from, to))) {
+    return tr;
+  }
+  const blocks = tr.state.field(previewField, false)?.blocks ?? [];
+  const cursorLine = doc.lineAt(tr.state.selection.main.head).number;
+  const changes: { from: number; to?: number; insert?: string }[] = [];
+  for (const block of blocks) {
+    if (block.kind !== "quote" || !changed.some(([from, to]) => from <= block.contentTo && to >= block.from)) {
+      continue;
+    }
+    for (let n = doc.lineAt(block.from).number; n <= doc.lineAt(block.contentTo).number; n++) {
+      const line = doc.line(n);
+      const [, markers, text] = QUOTE_LINE.exec(line.text)!;
+      const tidy = tidyQuoteMarkers(markers, text, n === cursorLine);
+      if (tidy !== markers) {
+        // Only what differs, so the cursor stays where it is relative to the text.
+        let start = 0;
+        while (start < tidy.length && tidy[start] === markers[start]) {
+          start++;
+        }
+        let end = 0;
+        while (
+          end < tidy.length - start &&
+          end < markers.length - start &&
+          tidy[tidy.length - 1 - end] === markers[markers.length - 1 - end]
+        ) {
+          end++;
+        }
+        changes.push({
+          from: line.from + start,
+          to: line.from + markers.length - end,
+          insert: tidy.slice(start, tidy.length - end),
+        });
+      }
+    }
+  }
+  if (!changes.length) {
+    return tr;
+  }
+  const tidying = ChangeSet.of(changes, doc.length);
+  return [tr, { changes: tidying, selection: tr.newSelection.map(tidying, 1), sequential: true }];
+});
+
+function quoteLineIn(doc: Text, from: number, to: number): boolean {
+  for (let n = doc.lineAt(from).number; n <= doc.lineAt(to).number; n++) {
+    if (doc.line(n).text.startsWith(">")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** A marker repeated for nesting, like "--" in "-- item", by its list item match. */
