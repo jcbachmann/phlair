@@ -2,9 +2,11 @@
 // without knowing the "{F123, size=full, layout=right}" syntax. It uses the
 // markup of Phorge's dropdown menus, so it looks like them.
 
+import { EditorSelection } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import { type Embed, findEmbeds, formatEmbed, getOption, setOption } from "../embed";
 import { closeDropdown, DIVIDER, type DropdownItem, showDropdown } from "../../dropdown";
+import { setFocused } from "./focus";
 import { previewField } from "./livePreview";
 
 /** Finds the embed in the text that an image of a rendered block shows. */
@@ -97,7 +99,9 @@ function items(view: EditorView, href: string, embed: Embed, offset: number): Dr
 
 /**
  * Opens the image menu on right click on an image in the editor, a long press
- * on touch screens, or the "⋯" button shown on the image under the mouse.
+ * on touch screens, or the "⋯" button shown on the image under the mouse. A
+ * click on an image (or a file's card, a macro) puts the cursor after its
+ * embed, like on a link; Ctrl+click opens it.
  */
 export const imageMenu = ViewPlugin.define((view) => {
   const open = (target: EventTarget | null, x: number, y: number): boolean => {
@@ -116,14 +120,50 @@ export const imageMenu = ViewPlugin.define((view) => {
   };
   // Safari on iOS has no "contextmenu" for a long press.
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Whether the touch opened the menu: its end is no click.
+  let pressed = false;
   const onTouchStart = (event: TouchEvent) => {
     const touch = event.touches[0];
     clearTimeout(timer);
+    pressed = false;
     if (event.touches.length === 1) {
-      timer = setTimeout(() => open(event.target, touch.clientX, touch.clientY), 550);
+      timer = setTimeout(() => (pressed = open(event.target, touch.clientX, touch.clientY)), 550);
     }
   };
   const cancel = () => clearTimeout(timer);
+  const onTouchEnd = (event: TouchEvent) => {
+    cancel();
+    if (pressed) {
+      pressed = false;
+      event.preventDefault();
+    }
+  };
+  const onClick = (event: MouseEvent) => {
+    const target = event.target as Element;
+    const preview = target.closest?.<HTMLElement>(".rme-image-preview");
+    if (!preview || event.button !== 0 || !view.contentDOM.contains(preview)) {
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      // A card is no link, but has the file's address.
+      const href = target.closest("a[href], [data-rme-file][href]")?.getAttribute("href");
+      if (href) {
+        window.open(new URL(href, location.href).href, "_blank", "noopener");
+      }
+      return;
+    }
+    // After the embed of the image, else (a macro, an image of an older text) at the end of its line.
+    const image = target.closest("[data-rme-file]");
+    const found = image && embedOf(view, image);
+    const pos = found ? found.offset + found.embed.to : view.state.doc.lineAt(view.posAtDOM(preview)).to;
+    // Focus first: focusing places the browser's caret, which the editor would take over.
+    view.focus();
+    view.dispatch({
+      selection: event.shiftKey ? EditorSelection.range(view.state.selection.main.anchor, pos) : { anchor: pos },
+      effects: setFocused.of(true),
+      userEvent: "select.pointer",
+    });
+  };
   // The button, in the scroller, which scrolls with the images.
   const more = document.createElement("button");
   more.type = "button";
@@ -169,7 +209,8 @@ export const imageMenu = ViewPlugin.define((view) => {
   view.dom.addEventListener("contextmenu", onContextMenu);
   view.dom.addEventListener("touchstart", onTouchStart, { passive: true });
   view.dom.addEventListener("touchmove", cancel, { passive: true });
-  view.dom.addEventListener("touchend", cancel);
+  view.dom.addEventListener("touchend", onTouchEnd);
+  view.dom.addEventListener("click", onClick);
   view.dom.addEventListener("mouseover", onMouseOver);
   view.dom.addEventListener("mouseout", onMouseOut);
   return {
@@ -187,7 +228,8 @@ export const imageMenu = ViewPlugin.define((view) => {
       view.dom.removeEventListener("contextmenu", onContextMenu);
       view.dom.removeEventListener("touchstart", onTouchStart);
       view.dom.removeEventListener("touchmove", cancel);
-      view.dom.removeEventListener("touchend", cancel);
+      view.dom.removeEventListener("touchend", onTouchEnd);
+      view.dom.removeEventListener("click", onClick);
       view.dom.removeEventListener("mouseover", onMouseOver);
       view.dom.removeEventListener("mouseout", onMouseOut);
       more.remove();

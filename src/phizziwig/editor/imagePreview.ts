@@ -1,6 +1,7 @@
-// The images of blocks being edited (and the cards of embedded files that
-// are not images), shown with their source as they are in the rendered
-// text: below or above it, or floating beside it.
+// The images of the blocks of the text (and the cards of embedded files that
+// are not images), shown with their source as they are in the rendered text:
+// each by the line of its embed, above or below it, or floating beside the
+// lines from there on.
 
 import { type EditorState, StateEffect, StateField } from "@codemirror/state";
 import { ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
@@ -79,22 +80,61 @@ export function splitImages(images: string): { html: string; file: string | null
   return parts;
 }
 
-/** The images of a block being edited, shown below its source. */
+/** Where an image shows in the text: a file's embed ("F123"), an image macro's line (its name), or a meme. */
+export type ImageSource = { pos: number } & ({ file: string } | { macro: string } | { meme: true });
+
+/**
+ * Where each image of splitImages comes from in the text (positions of its
+ * sources, which are in their order): the n-th image of a file from the n-th
+ * embed of it after the image before, a macro from a line of its name, a meme
+ * from the next meme. An image of none (e.g. while the server renders a
+ * changed text) goes with the image before it, or else the one after it, or
+ * else to `fallback`.
+ */
+export function imagePositions(
+  parts: { html: string; file: string | null }[],
+  sources: ImageSource[],
+  fallback: number,
+): number[] {
+  let next = 0;
+  const found = parts.map((part) => {
+    const macro = part.html.includes("phabricator-remarkup-macro") ? /alt="([^"]*)"/.exec(part.html)?.[1] : undefined;
+    const k = sources.findIndex(
+      (source, i) =>
+        i >= next &&
+        (part.file
+          ? "file" in source && source.file === part.file
+          : macro !== undefined
+            ? "macro" in source && source.macro === macro
+            : "meme" in source),
+    );
+    if (k < 0) {
+      return null;
+    }
+    next = k + 1;
+    return sources[k]!.pos;
+  });
+  return found.map(
+    (pos, k) => pos ?? found.slice(0, k).findLast((p) => p !== null) ?? found.find((p) => p !== null) ?? fallback,
+  );
+}
+
+/** Images of the text, shown by the line of their embeds (livePreview.ts). */
 export class ImagePreview extends WidgetType {
   constructor(
     readonly html: string,
     /**
-     * Where the images are: below the source, above it (a block starting with
-     * an image), or floating beside it (no height of their own, the source
-     * lines flow around them).
+     * Where the images are: above the line of their embeds, below it (with
+     * text before them on the line), or floating beside the lines from there
+     * on (no height of their own, the source lines flow around them).
      */
     readonly placement: "below" | "above" | "float",
     /** Classes for its place, e.g. in a quote (livePreview.ts). */
     readonly classes = "",
     /**
      * How many file embeds of its block come before its images in the text,
-     * for finding the embed of an image (imageMenu.ts): a block may show its
-     * images in more places than one (list items, the paragraphs of a quote).
+     * for finding the embed of an image (imageMenu.ts): a block shows the
+     * images of each line by that line.
      */
     readonly firstEmbed = 0,
   ) {
@@ -125,7 +165,7 @@ export class ImagePreview extends WidgetType {
     if (this.placement !== "float") {
       rememberHeight(this.html, dom);
     }
-    // Keep the cursor in the source; the images have a context menu.
+    // Nothing of the page's: a click edits their embed, the images have a context menu (imageMenu.ts).
     dom.addEventListener("mousedown", (event) => event.preventDefault());
     dom.addEventListener("click", (event) => event.preventDefault());
     return dom;
@@ -137,8 +177,7 @@ export class ImagePreview extends WidgetType {
 }
 
 /**
- * How far the floating images of a block being edited reach below its last
- * line, by block start: that line gets as much padding, so the image stays
+ * How far the floating images of a block reach below its last line, by block start: that line gets as much padding, so the image stays
  * within the block like in the rendered text.
  */
 export const setFloatPads = StateEffect.define<Map<number, number>>();
@@ -174,8 +213,8 @@ export const floatPadMeasure = (preview: (state: EditorState) => { blocks: Block
           const pads = new Map<number, number>();
           const { blocks } = preview(view.state);
           view.contentDOM.querySelectorAll<HTMLElement>(".rme-preview-float").forEach((preview) => {
-            const from = view.posAtDOM(preview);
-            const block = blocks.find((b) => b.from === from);
+            const pos = view.posAtDOM(preview);
+            const block = blocks.find((b) => !b.empty && pos >= b.from && pos <= b.contentTo);
             const line = block && (view.domAtPos(block.contentTo).node as Node);
             const lineDom =
               line instanceof Element ? line.closest(".cm-line") : line?.parentElement?.closest(".cm-line");
@@ -189,8 +228,9 @@ export const floatPadMeasure = (preview: (state: EditorState) => { blocks: Block
             const lineBottom =
               lineDom.getBoundingClientRect().bottom - parseFloat(getComputedStyle(lineDom).paddingBottom);
             const pad = Math.max(...images) - lineBottom;
-            if (pad > 0.5) {
-              pads.set(from, pad);
+            // The lowest of the floating images of the block.
+            if (pad > 0.5 && pad > (pads.get(block.from) ?? 0)) {
+              pads.set(block.from, pad);
             }
           });
           return pads;

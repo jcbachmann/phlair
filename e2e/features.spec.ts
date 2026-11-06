@@ -3229,6 +3229,46 @@ test.describe("uploads", () => {
     await expect(page.locator(".rme-editor .cm-line", { hasText: /\{F\d+\}/ })).toHaveCount(0);
   });
 
+  test("file cards on lines of their own are one below the other, on one line beside each other, also while edited", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Cards");
+    const upload = async (name: string) => {
+      const phid = await conduit(page, "file.upload", { name, data_base64: btoa(name) });
+      return `F${(await conduit(page, "file.info", { phid })).id}`;
+    };
+    const [a, b] = [await upload(`a-${Date.now()}.txt`), await upload(`b-${Date.now()}.txt`)];
+    await editor(page).click();
+    await page.keyboard.insertText(`{${a}}\n{${b}}\n\nBetween.\n\n{${a}} {${b}}`);
+    await blur(page);
+    await settled(page);
+    const cards = page.locator(".rme-editor .phabricator-remarkup-embed-layout-link");
+    await expect(cards).toHaveCount(4);
+    // The second card below the first, or beside it, in the rendered text.
+    const layout = async () => {
+      const boxes = await cards.evaluateAll((els) => els.map((el) => el.getBoundingClientRect()));
+      return [
+        boxes[1]!.top >= boxes[0]!.bottom && boxes[1]!.left === boxes[0]!.left,
+        boxes[3]!.top < boxes[2]!.bottom && boxes[3]!.left >= boxes[2]!.right,
+      ];
+    };
+    expect(await layout()).toEqual([true, true]);
+    // The same while their blocks are edited.
+    await editor(page).click();
+    // A reference shows on the line of the cursor.
+    const reference = page.locator(".cm-line", { hasText: /\{F\d+\}/ });
+    await page.keyboard.press("Control+Home");
+    await expect(reference).toHaveCount(1);
+    expect(await layout()).toEqual([true, true]);
+    await page.keyboard.press("Control+End");
+    await expect(reference).toContainText(`{${b}}`);
+    expect(await layout()).toEqual([true, true]); // A click on a card (on its download link too) edits its embed.
+    await blur(page);
+    await cards.nth(0).locator("a", { hasText: "Download" }).click();
+    await expect.poll(() => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart)).toBe(a.length + 2);
+    expect(page.url()).toMatch(/\/phriction\/edit\//);
+  });
+
   test("a file over 4 MB is uploaded in chunks, with its progress shown", async ({ page }) => {
     await openNewWikiPage(page, "Chunks");
     await editor(page).click();
@@ -4424,5 +4464,85 @@ test.describe("leaving a table cell", () => {
     for (const text of shown) {
       expect(text).not.toContain("**");
     }
+  });
+});
+
+test.describe("images by their lines", () => {
+  const top = (page: Page, text: string) =>
+    page.locator(".cm-line", { hasText: text }).evaluate((line) => line.getBoundingClientRect().top);
+  const boxes = (page: Page) =>
+    page.locator(".rme-image-preview img").evaluateAll((imgs) => imgs.map((img) => img.getBoundingClientRect()));
+  const cursor = (page: Page) => textarea(page).evaluate((t: HTMLTextAreaElement) => t.selectionStart);
+
+  test("each image shows by the line of its embed, also while edited", async ({ page }) => {
+    await startWith(page, "Intro line.\n{F1}\nMiddle line.\nrmecat\nLast line.\n{F1}\n\nSee this: {F1}");
+    await expect(page.locator(".rme-image-preview img")).toHaveCount(4);
+    const [image, macro, again, after] = await boxes(page);
+    // Above the line of its embed, between the text around it, like in the rendered text.
+    expect(image!.top).toBeGreaterThan(await top(page, "Intro line."));
+    expect(image!.bottom).toBeLessThan(await top(page, "Middle line."));
+    expect(macro!.top).toBeGreaterThan(await top(page, "Middle line."));
+    expect(macro!.bottom).toBeLessThan(await top(page, "Last line."));
+    expect(again!.top).toBeGreaterThan(await top(page, "Last line."));
+    // Below a line with text before the embed.
+    expect(after!.top).toBeGreaterThan(await top(page, "See this:"));
+    // Nothing moves while the block is edited; the reference shows on its line, below its image.
+    await page.locator(".cm-line", { hasText: "Middle line." }).click();
+    await page.keyboard.press("ArrowUp");
+    await expect(page.locator(".cm-line", { hasText: "{F1}" })).toHaveCount(1);
+    expect(await top(page, "{F1}")).toBeGreaterThan(image!.bottom);
+    const edited = await boxes(page);
+    expect(edited.map((b) => Math.round(b.top))).toEqual([image, macro, again, after].map((b) => Math.round(b!.top)));
+  });
+
+  test("a click on an image puts the cursor after its embed; Shift+click selects, Ctrl+click opens it", async ({
+    page,
+    context,
+  }) => {
+    const text = "{F1} first.\nText.\n{F1} second.\n\n> Quoted:\n> {F1}";
+    await startWith(page, text);
+    const images = page.locator(".rme-image-preview img");
+    await expect(images).toHaveCount(3);
+    // The n-th image of the file is its n-th embed, in the block and in the quote after it.
+    await images.nth(1).click();
+    await expect.poll(() => cursor(page)).toBe(text.indexOf("{F1} second.") + 4);
+    await images.nth(2).click();
+    await expect.poll(() => cursor(page)).toBe(text.length);
+    await expect(page.locator(".cm-line", { hasText: "{F1}" })).toHaveCount(1);
+    await images.nth(0).click({ modifiers: ["Shift"] });
+    await expect.poll(() => selected(page)).toBe(text.slice(4));
+    const opened = context.waitForEvent("page");
+    await images.nth(0).click({ modifiers: ["Control"] });
+    expect((await opened).url()).toMatch(new RegExp(`^${FILES_URL}/file/data/.*demo\\.png$`));
+    await expect.poll(() => selected(page)).toBe(text.slice(4));
+  });
+
+  test("a floating image floats from the line of its embed on, within its block", async ({ page }) => {
+    await startWith(page, "Intro line.\n{F1, float}\nBeside the image.\n\nNext paragraph.");
+    const [image] = await boxes(page);
+    expect(image!.top).toBeGreaterThan(await top(page, "Intro line."));
+    expect(image!.right).toBeLessThan(
+      await page.locator(".cm-line", { hasText: "Beside the image." }).evaluate((line) => {
+        const range = document.createRange();
+        range.selectNodeContents(line);
+        return range.getClientRects()[0]!.left;
+      }),
+    );
+    await expect.poll(() => top(page, "Next paragraph.")).toBeGreaterThan(image!.bottom);
+  });
+
+  test("a long press on an image opens its menu without moving the cursor", async ({ page, browserName }) => {
+    test.skip(browserName === "firefox", "Touch input through CDP");
+    await startWith(page, "Before.\n\n{F1}");
+    await page.locator(".cm-line", { hasText: "Before." }).click();
+    const box = (await page.locator(".rme-image-preview img").boundingBox())!;
+    const cdp = await page.context().newCDPSession(page);
+    const point = { x: box.x + 20, y: box.y + 20 };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    await expect(page.locator(".rme-image-menu")).toBeVisible();
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForTimeout(300);
+    expect(await cursor(page)).toBe("Before.".length);
+    await expect(page.locator(".rme-image-menu")).toBeVisible();
   });
 });

@@ -11,7 +11,18 @@ import { type Block, type BlockKind, splitBlocks } from "../blocks";
 import type { BlockRenderer, RenderItem } from "../renderer";
 import { blockEdges, clearGaps, gapKey, gapMeasurer, gapsField, setGaps } from "./gaps";
 import { focusField, focusTracking, setFocused } from "./focus";
-import { floatPadMeasure, floatPadsField, ImagePreview, imagesOf, setFloatPads, splitImages } from "./imagePreview";
+import {
+  floatPadMeasure,
+  floatPadsField,
+  ImagePreview,
+  type ImageSource,
+  imagePositions,
+  imagesOf,
+  setFloatPads,
+  splitImages,
+} from "./imagePreview";
+import { blockTokens } from "./inlineTokens";
+import type { InlineToken } from "../inline";
 import { findEmbeds } from "../embed";
 import { focusedCellSource, refreshCellEditor, setTableMode, TableWidget, tableModeField } from "./tableEditor";
 import { setHtml } from "../html";
@@ -206,35 +217,19 @@ function buildDecorations(
     if (block.kind === "list") {
       listImages(state, block, ranges, previews, oldPreviews);
     } else if ((active.has(i) && !tableSelected(state, block)) || alwaysSource(state, block)) {
-      // A block with images keeps showing them below its source, so it does
-      // not collapse; until the edited text is rendered, the last images stay.
+      // A block with images keeps showing them by its source, so it does not
+      // collapse; until the edited text is rendered, the last images stay.
       const html = htmls[i];
       const images = (html !== undefined ? imagesOf(html) : undefined) ?? oldPreviews.get(block.from);
       if (images) {
         previews.set(block.from, images);
-        if (/phabricator-remarkup-embed-float/.test(images)) {
-          // Floating images float beside the source too, like in the rendered text.
-          ranges.push(
-            Decoration.widget({ widget: new ImagePreview(images, "float"), block: true, side: -1 }).range(block.from),
-          );
+        if (lineImages(state, block, block.from, block.contentTo, images, ranges, true)) {
+          // Floating images reach below the block like in the rendered text.
           const pad = state.field(floatPadsField, false)?.get(block.from);
           if (pad) {
             const last = state.doc.lineAt(block.contentTo);
             ranges.push(Decoration.line({ attributes: { style: `padding-bottom: ${pad}px` } }).range(last.from));
           }
-        } else if (block.kind === "quote") {
-          quoteImages(state, block, images, ranges);
-        } else if (/^\s*\{F\d+/.test(items[i]!.text)) {
-          // A block starting with an image: the image above its source, like in the rendered text.
-          ranges.push(
-            Decoration.widget({ widget: new ImagePreview(images, "above"), block: true, side: -1 }).range(block.from),
-          );
-        } else {
-          ranges.push(
-            Decoration.widget({ widget: new ImagePreview(images, "below"), block: true, side: 1 }).range(
-              block.contentTo,
-            ),
-          );
         }
       }
     } else if (block.kind === "table" && tableMode !== "text") {
@@ -269,7 +264,7 @@ function buildDecorations(
   };
 }
 
-/** The images of the items of a list, below each item, like in the rendered list. */
+/** The images of the items of a list, each item rendered on its own, by the lines of their embeds. */
 function listImages(
   state: EditorState,
   block: Block,
@@ -283,12 +278,7 @@ function listImages(
     const images = (html !== undefined ? imagesOf(html) : undefined) ?? oldPreviews.get(unit.from);
     if (images) {
       previews.set(unit.from, images);
-      const before = findEmbeds(state.doc.sliceString(block.from, unit.from)).length;
-      ranges.push(
-        Decoration.widget({ widget: new ImagePreview(images, "below", "", before), block: true, side: 1 }).range(
-          unit.to,
-        ),
-      );
+      lineImages(state, block, unit.from, unit.to, images, ranges, false);
     }
   }
 }
@@ -298,83 +288,100 @@ function quoteContent(text: string): string {
   return text.replace(/^\s*(?:>+!?\s?)+/, "");
 }
 
+/** The images, macros and memes of a block from `from` to `to`, in their order. */
+function imageSources(state: EditorState, block: Block, from: number, to: number): ImageSource[] {
+  const sources: ImageSource[] = [];
+  const visit = (tokens: InlineToken[]) => {
+    for (const token of tokens) {
+      if (token.from >= from && token.to <= to) {
+        const text = state.doc.sliceString(token.from, token.to);
+        const file = token.kind === "embed" ? /^\{(F\d+)/.exec(text)?.[1] : undefined;
+        if (file) {
+          sources.push({ pos: token.from, file });
+        } else if (token.kind === "macro") {
+          sources.push({ pos: token.from, macro: text.trim() });
+        } else if (token.kind === "meme") {
+          sources.push({ pos: token.from, meme: true });
+        }
+      }
+      visit(token.children ?? []);
+    }
+  };
+  visit(blockTokens(state.doc, block));
+  return sources;
+}
+
 /**
- * The images of a quote, inside it like in the rendered quote: each below the
- * paragraph of the quote that embeds it, or above it if the paragraph starts
- * with an image.
+ * Shows the images of a block from `from` to `to` (a list item's) by the lines
+ * of their embeds, like in the rendered text: above the line, or below it
+ * when text comes before them on the line (a list item's marker too; in the
+ * rendered text, they are in or after that text). Floating images (if
+ * `float`) float beside the lines from theirs on. In a quote, on its border.
+ * Returns whether some float.
  */
-function quoteImages(state: EditorState, block: Block, images: string, ranges: Range<Decoration>[]): void {
+function lineImages(
+  state: EditorState,
+  block: Block,
+  from: number,
+  to: number,
+  images: string,
+  ranges: Range<Decoration>[],
+  float: boolean,
+): boolean {
   const { doc } = state;
-  // The paragraphs of the quote, between its blank lines (">" alone).
-  const paragraphs: { first: Line; last: Line }[] = [];
-  let open = false;
-  for (let n = doc.lineAt(block.from).number; n <= doc.lineAt(block.contentTo).number; n++) {
-    const line = doc.line(n);
-    if (!quoteContent(line.text).trim()) {
-      open = false;
-    } else if (open) {
-      paragraphs[paragraphs.length - 1]!.last = line;
-    } else {
-      paragraphs.push({ first: line, last: line });
-      open = true;
-    }
-  }
-  if (!paragraphs.length) {
-    return;
-  }
-  // Each image belongs to the paragraph of its embed, the n-th of a file to its
-  // n-th embed. Macros and memes (and images of embeds not found) go with the
-  // image before them, or else the one after them.
-  const embeds = findEmbeds(blockText(state, block));
-  const paragraphAt = (pos: number) => paragraphs.findIndex((p) => pos >= p.first.from && pos <= p.last.to);
-  let next = 0;
-  const parts = splitImages(images).map((part) => {
-    const embed = part.file ? embeds.findIndex((e, k) => k >= next && e.monogram === part.file) : -1;
-    if (embed >= 0) {
-      next = embed + 1;
-    }
-    return { ...part, embed, paragraph: embed >= 0 ? paragraphAt(block.from + embeds[embed]!.from) : -1 };
-  });
+  const parts = splitImages(images);
+  const positions = imagePositions(parts, imageSources(state, block, from, to), from);
+  // The images of each line, from the position of the first.
+  const lines = new Map<number, { line: Line; at: number; html: string }>();
   parts.forEach((part, k) => {
-    if (part.paragraph < 0) {
-      part.paragraph = parts[k - 1]?.paragraph ?? -1;
+    const line = doc.lineAt(positions[k]!);
+    const group = lines.get(line.number);
+    if (group) {
+      group.html += part.html;
+    } else {
+      lines.set(line.number, { line, at: positions[k]!, html: part.html });
     }
   });
-  const after = parts.find((p) => p.paragraph >= 0)?.paragraph ?? paragraphs.length - 1;
-  // The images of each paragraph, in one preview.
-  const groups = new Map<number, typeof parts>();
-  for (const part of parts) {
-    const paragraph = part.paragraph < 0 ? after : part.paragraph;
-    groups.set(paragraph, [...(groups.get(paragraph) ?? []), part]);
-  }
-  groups.forEach((group, index) => {
-    const { first, last } = paragraphs[index]!;
-    const above = /^\s*\{F\d+/.test(quoteContent(first.text));
-    // At an end of the quote, the preview has the quote's padding there instead of the line.
-    const edge = above
-      ? index === 0
-        ? "rme-quote-first"
-        : ""
-      : index === paragraphs.length - 1
-        ? "rme-quote-last"
-        : "";
-    const widget = new ImagePreview(
-      group.map((p) => p.html).join(""),
-      above ? "above" : "below",
-      `rme-preview-quote ${edge}`.trim(),
-      group.find((p) => p.embed >= 0)?.embed ?? 0,
-    );
+  const first = doc.lineAt(block.from).number;
+  const last = doc.lineAt(block.contentTo).number;
+  let floats = false;
+  for (const { line, at, html } of lines.values()) {
+    // See ImagePreview.firstEmbed.
+    const embedsBefore = findEmbeds(doc.sliceString(block.from, line.from)).length;
+    if (float && /phabricator-remarkup-embed-float/.test(html)) {
+      floats = true;
+      ranges.push(
+        Decoration.widget({ widget: new ImagePreview(html, "float", "", embedsBefore), block: true, side: -1 }).range(
+          line.from,
+        ),
+      );
+      continue;
+    }
+    const before = doc.sliceString(line.from, at);
+    const above = !(block.kind === "quote" ? quoteContent(before) : before).trim();
+    let classes = "";
+    if (block.kind === "quote") {
+      // At an end of the quote, the preview has the quote's padding there instead of the line.
+      const edge = above
+        ? line.number === first
+          ? "rme-quote-first"
+          : ""
+        : line.number === last
+          ? "rme-quote-last"
+          : "";
+      classes = `rme-preview-quote ${edge}`.trim();
+      if (edge) {
+        ranges.push(Decoration.line({ class: above ? "rme-image-above" : "rme-image-below" }).range(line.from));
+      }
+    }
+    const widget = new ImagePreview(html, above ? "above" : "below", classes, embedsBefore);
     ranges.push(
       above
-        ? Decoration.widget({ widget, block: true, side: -1 }).range(first.from)
-        : Decoration.widget({ widget, block: true, side: 1 }).range(last.to),
+        ? Decoration.widget({ widget, block: true, side: -1 }).range(line.from)
+        : Decoration.widget({ widget, block: true, side: 1 }).range(line.to),
     );
-    if (edge) {
-      ranges.push(
-        Decoration.line({ class: above ? "rme-image-above" : "rme-image-below" }).range(above ? first.from : last.from),
-      );
-    }
-  });
+  }
+  return floats;
 }
 
 /** Starts and ends a selection with the mouse; see PreviewState.frozen. */
