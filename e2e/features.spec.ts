@@ -3996,7 +3996,11 @@ test.describe("checkboxes in rendered text", () => {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await dialog.accept();
     });
-    await boxes(page, ".phui-property-list-text-content").first().click();
+    const box = boxes(page, ".phui-property-list-text-content").first();
+    await box.click();
+    // The click is taken a task later (after the browser put the box back):
+    // leaving before that, there would be nothing to save yet.
+    await expect(box).toHaveClass(/rme-pending/);
     await page.goto("/maniphest/");
     expect(asked).toBe(true);
     await page.unroute(/\/api\/maniphest\.search/);
