@@ -415,12 +415,16 @@ class Picker {
     }
     current = null;
     clearTimeout(this.timer);
+    // The focus back first: an update while it is nowhere, before CodeMirror
+    // noticed it leaving (it looks 10 ms after a blur), would note the editor
+    // as unfocused after it is back (focus.ts), so blocks show rendered under
+    // the cursor until the focus leaves and comes back.
+    if (refocus) {
+      this.view.focus();
+    }
     this.popup.remove();
     if (this.view.dom.isConnected) {
       this.view.dispatch({ effects: setPicking.of(null) });
-    }
-    if (refocus) {
-      this.view.focus();
     }
   }
 }

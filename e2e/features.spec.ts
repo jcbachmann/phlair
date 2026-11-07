@@ -574,6 +574,30 @@ test.describe("reported issues", () => {
     expect(text.y).toBeGreaterThanOrEqual(bar.y + bar.height - 1);
   });
 
+  test("Escape right after Ctrl+K: the editor still counts as focused, the block at the cursor shows its source", async ({
+    page,
+  }) => {
+    // Found on CI: closed before CodeMirror noticed the focus leaving, the
+    // editor counted as unfocused with the focus back in it.
+    await openNewWikiPage(page, "Picker closed at once");
+    await editor(page).click();
+    await page.keyboard.insertText("| a | b |\n| 1 | 2 |\n\nText");
+    // Both keys in one task, so CodeMirror's check 10 ms after the blur can not come between.
+    await page.evaluate(() => {
+      const press = (key: string, ctrlKey = false) =>
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent("keydown", { key, ctrlKey, bubbles: true, cancelable: true }),
+        );
+      press("k", true);
+      if (!document.activeElement?.closest(".rme-picker")) {
+        throw new Error("Ctrl+K opened no picker");
+      }
+      press("Escape");
+    });
+    await page.keyboard.press("Control+Home");
+    await expect(page.locator(".rme-table-bar")).toBeVisible();
+  });
+
   test("the link button and shortcuts open the search without scrolling", async ({ page }) => {
     await openNewWikiPage(page, "Link button");
     await editor(page).click();
