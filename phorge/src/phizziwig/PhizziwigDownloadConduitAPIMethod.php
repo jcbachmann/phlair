@@ -48,9 +48,12 @@ final class PhizziwigDownloadConduitAPIMethod extends ConduitAPIMethod {
       throw new ConduitException('ERR-DISABLED');
     }
 
+    // Like Phorge's own drop uploads: visible to the uploader only, and to
+    // those who see the object the editor attaches it to on saving.
     $params = array(
       'authorPHID' => $viewer->getPHID(),
       'isExplicitUpload' => true,
+      'viewPolicy' => $viewer->getPHID(),
     );
     $name = $request->getValue('name');
     if (phutil_nonempty_string($name)) {

@@ -28,7 +28,8 @@ import { focusedCellSource, refreshCellEditor, setTableMode, TableWidget, tableM
 import { setHtml } from "../html";
 import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { type ListItem, parseList } from "../list";
-import { LIST_ITEM, QUOTE_LINE, quoteDepth } from "../syntax";
+import { LIST_ITEM, QUOTE_LINE, QUOTE_MARKERS, quoteDepth } from "../syntax";
+import { type BlockLine, blockLines, blockOfLine, lineOf, type TextBlock } from "./lines";
 
 /** The deepest nested quote that style.css draws; deeper ones look like it. */
 export const MAX_QUOTE_DEPTH = 4;
@@ -98,6 +99,21 @@ export function blockAtCursor(state: EditorState, kind?: BlockKind): Block | und
     ?.blocks.find((b) => (!kind || b.kind === kind) && !b.empty && head >= b.from && head <= b.contentTo);
 }
 
+/** The block a line is in, also inside a quote (lines.ts). */
+export function blockAtLine(state: EditorState, number: number): TextBlock | undefined {
+  const preview = state.field(previewField, false);
+  return preview ? blockOfLine(state.doc, preview.blocks, number) : undefined;
+}
+
+/** The markers a line of a quote starts with ("" for other lines): where blocks inside the quote start. */
+export function quotePrefix(state: EditorState, number: number): string {
+  const line = state.doc.line(number);
+  const quoted = state
+    .field(previewField, false)
+    ?.blocks.some((b) => b.kind === "quote" && b.from <= line.from && line.from <= b.contentTo);
+  return quoted ? QUOTE_MARKERS.exec(line.text)![0] : "";
+}
+
 /** What the renderer needs to render a block: its text and whether it ends the text. */
 function renderItem(state: EditorState, block: Block, lastBlock: Block | undefined): RenderItem {
   return { text: blockText(state, block), last: block === lastBlock };
@@ -117,10 +133,11 @@ interface SourceItem {
 
 /** The items of a list block. */
 export function listItems(state: EditorState, block: Block): SourceItem[] {
-  const lines: Line[] = [];
-  for (let n = state.doc.lineAt(block.from).number; n <= state.doc.lineAt(block.contentTo).number; n++) {
-    lines.push(state.doc.line(n));
-  }
+  return lineItems(blockLines(state.doc, block));
+}
+
+/** The items of a list by its lines, also of a list in a quote (lines.ts). */
+export function lineItems(lines: BlockLine[]): SourceItem[] {
   return parseList(lines.map((line) => line.text)).map((item) => ({
     from: lines[item.first].from,
     to: lines[item.last].to,
@@ -630,10 +647,7 @@ class Spacer extends WidgetType {
         pos = above ? line.to : line.from;
       }
       // On a list item, in its text.
-      const item = inListBlock(view.state, line.from) ? LIST_ITEM.exec(line.text) : null;
-      if (item) {
-        pos = Math.max(pos, line.to - item[5].length);
-      }
+      pos = Math.max(pos, itemTextFrom(view.state, line) ?? pos);
       view.dispatch({ selection: { anchor: pos }, effects: setFocused.of(true), userEvent: "select.pointer" });
     });
     return dom;
@@ -653,9 +667,17 @@ class Spacer extends WidgetType {
   }
 }
 
-/** Whether a position is in a list block. */
-export function inListBlock(state: EditorState, pos: number): boolean {
-  return state.field(previewField).blocks.some((b) => b.kind === "list" && b.from <= pos && pos <= b.contentTo);
+/** Where the text of a list item starts on a line (after its marker and checkbox, also in a quote); null if it is none. */
+export function itemTextFrom(state: EditorState, line: Line): number | null {
+  const block = blockAtLine(state, line.number);
+  const own = block?.kind === "list" ? lineOf(block, line.number) : undefined;
+  const item = own && LIST_ITEM.exec(own.text);
+  return item ? line.to - item[5].length : null;
+}
+
+/** Where a line starts for what is in it: in a quote, after the quote's markers. */
+export function lineStart(state: EditorState, line: Line): number {
+  return line.from + quotePrefix(state, line.number).length;
 }
 
 /** The live preview; see above. With mouseSelection.ts and verticalMotion.ts for moving in it. */

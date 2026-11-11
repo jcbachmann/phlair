@@ -1,15 +1,16 @@
 // The inline markup of the blocks of the text, as Phorge's inline rules find
 // it (inline.ts), with positions in the document. Phorge applies the rules to
 // the text of a block without its block markup: a paragraph whole, a header
-// without its "=", a note without "NOTE:", a quote without its ">", each
-// list item without its marker, each table cell. That text is put together
+// without its "=", a note without "NOTE:", each list item without its marker,
+// each table cell; a quote's text (without its ">") as blocks again. That text is put together
 // from the parts of the source, so the tokens can be mapped back.
 
 import type { Text } from "@codemirror/state";
 import type { Block } from "../blocks";
 import { type InlineToken, tokenizeInline } from "../inline";
 import { parseList } from "../list";
-import { LIST_ITEM, NOTE_PREFIX, QUOTE_MARKERS } from "../syntax";
+import { LIST_ITEM, NOTE_PREFIX } from "../syntax";
+import { type BlockLine, blockLines, quotedBlocks } from "./lines";
 
 /** Ranges of the document whose texts, joined with newlines, are one text for the inline rules. */
 type Parts = { from: number; to: number }[];
@@ -22,7 +23,11 @@ const cache = new Map<string, InlineToken[]>();
 /** The tokens of a text, cached: the blocks of the text are tokenized again on each change. */
 function tokensOf(text: string): InlineToken[] {
   let tokens = cache.get(text);
-  if (!tokens) {
+  if (tokens) {
+    // The texts in use stay: the oldest unused one goes first.
+    cache.delete(text);
+    cache.set(text, tokens);
+  } else {
     tokens = tokenizeInline(text);
     cache.set(text, tokens);
     if (cache.size > 1000) {
@@ -42,7 +47,13 @@ export function blockTokens(doc: Text, block: Block): InlineToken[] {
   if (block.empty || LITERAL.has(block.kind)) {
     return [];
   }
-  return inlineParts(doc, block).flatMap((parts) => {
+  const parts =
+    block.kind === "quote"
+      ? quotedBlocks(doc, block).flatMap((inner) =>
+          LITERAL.has(inner.kind) ? [] : inlineParts(inner.kind, inner.lines),
+        )
+      : inlineParts(block.kind, blockLines(doc, block));
+  return parts.flatMap((parts) => {
     const texts = parts.map((part) => doc.sliceString(part.from, part.to));
     // Where each part starts in the joined text.
     const starts: number[] = [];
@@ -74,14 +85,12 @@ function moved(token: InlineToken, position: (i: number) => number): InlineToken
   };
 }
 
-/** The texts of a block for the inline rules: see above. */
-function inlineParts(doc: Text, block: Block): Parts[] {
-  const first = doc.lineAt(block.from);
-  const last = doc.lineAt(block.contentTo);
-  const lines = Array.from({ length: last.number - first.number + 1 }, (_, i) => doc.line(first.number + i));
+/** The texts of a block for the inline rules, by its lines (in a quote, without its markers): see above. */
+function inlineParts(kind: Block["kind"], lines: BlockLine[]): Parts[] {
+  const first = lines[0];
   const strip = (pattern: RegExp) =>
     lines.map((line) => ({ from: line.from + (pattern.exec(line.text)?.[0].length ?? 0), to: line.to }));
-  switch (block.kind) {
+  switch (kind) {
     case "header": {
       // "== A ==" or "A" underlined: its text.
       const open = /^(=+|#+)\s*/.exec(first.text)?.[0].length ?? 0;
@@ -92,9 +101,6 @@ function inlineParts(doc: Text, block: Block): Parts[] {
       return [
         [{ from: first.from + (NOTE_PREFIX.exec(first.text)?.[0].length ?? 0), to: first.to }, ...strip(/^/).slice(1)],
       ];
-    case "quote":
-      // Also the text of a reply's header (">>! In T1, @alice wrote:").
-      return [strip(QUOTE_MARKERS)];
     case "list":
       return parseList(lines.map((line) => line.text)).map((item) =>
         lines.slice(item.first, item.last + 1).map((line, i) => {
@@ -108,7 +114,7 @@ function inlineParts(doc: Text, block: Block): Parts[] {
         tableCells(line.text).map(([from, to]) => [{ from: line.from + from, to: line.from + to }]),
       );
     default:
-      return [[{ from: block.from, to: block.contentTo }]];
+      return [strip(/^/)];
   }
 }
 

@@ -28,7 +28,9 @@ import { LIST_ITEM, outerQuote, QUOTE_LINE, quoteDepth, quoteMarkers, tidyQuoteM
 import { toolbarButton } from "../toolbar";
 import { hostTextarea } from "./host";
 import { focusField } from "./focus";
-import { blockAtCursor, clicked, inListBlock, previewField } from "./livePreview";
+import { blockAtCursor, blockAtLine, clicked, itemTextFrom, lineStart, previewField, quotePrefix } from "./livePreview";
+import { insertBlock } from "./formatting";
+import { lineOf, rangeLines } from "./lines";
 import { switchTableMode, tableModeField } from "./tableEditor";
 import { focusCell, focusedCell, focusedCellSource, runOnFocusedCell } from "./tableEditor";
 
@@ -112,6 +114,10 @@ export function insertTable(view: EditorView, columns: number, rows: number): bo
   const text = formatTable(table).text;
   const { state } = view;
   const line = state.doc.lineAt(state.selection.main.head);
+  if (quotePrefix(state, line.number)) {
+    // In a quote, in the quote, as its text: tables in quotes are edited there.
+    return insertBlock(view, text, [2, 2 + "Column 1".length]);
+  }
   const empty = !line.text.trim();
   const from = empty ? line.from : line.to;
   const before = empty ? "" : "\n\n";
@@ -156,9 +162,11 @@ function tableEnter(view: EditorView): boolean {
 }
 
 /**
- * Enter continues lists and quotes; on an empty item it ends them. At the
- * start of the text of a block's first line (a list, quote or header, whose
- * marker shows rendered), it makes room above the block, without a marker.
+ * Enter continues lists and quotes, also lists in quotes; on an empty item it
+ * ends them (a list in a quote, not the quote). At the start of the text of a
+ * block's first line (a list, quote or header, whose marker shows rendered),
+ * it makes room above the block, without a marker. In the marker of a list
+ * item (e.g. at the start of its line), as at the start of its text.
  */
 function continueMarkup(view: EditorView): boolean {
   const { state } = view;
@@ -168,11 +176,13 @@ function continueMarkup(view: EditorView): boolean {
   }
   const line = state.doc.lineAt(range.head);
   const block = blockAtCursor(state);
-  const inList = block?.kind === "list";
-  const item = inList ? LIST_ITEM.exec(line.text) : null;
-  const quote = !item && block?.kind === "quote" ? QUOTE_LINE.exec(line.text) : null;
+  const inner = blockAtLine(state, line.number);
+  const own = inner && lineOf(inner, line.number);
+  const item = inner?.kind === "list" && own ? LIST_ITEM.exec(own.text) : null;
+  const quote = block?.kind === "quote" ? QUOTE_LINE.exec(line.text) : null;
   const header = block?.kind === "header" ? /^(=+|#+)\s*/.exec(line.text) : null;
-  const marker = item ? line.text.length - item[5].length : quote ? quote[1].length : header ? header[0].length : null;
+  // Where the text starts after the markers.
+  const marker = item ? line.length - item[5].length : quote ? quote[1].length : header ? header[0].length : null;
   if (
     marker !== null &&
     block &&
@@ -191,10 +201,12 @@ function continueMarkup(view: EditorView): boolean {
   if (!item && !quote) {
     return false;
   }
+  const head = item ? Math.max(range.head, line.from + marker!) : range.head;
+  const markers = quote ? quote[1] : "";
   const content = item ? item[5] : quote![2];
-  if (quote && quoteDepth(quote[1]) > 1 && content.trim() === "" && range.head === line.to) {
+  if (!item && quoteDepth(markers) > 1 && content.trim() === "" && head === line.to) {
     // An empty line of a nested quote ends that quote: the line continues the one around it.
-    const insert = outerQuote(quote[1]);
+    const insert = outerQuote(markers);
     view.dispatch({
       changes: { from: line.from, to: line.to, insert },
       selection: { anchor: line.from + insert.length },
@@ -202,11 +214,20 @@ function continueMarkup(view: EditorView): boolean {
     });
     return true;
   }
-  if (content.trim() === "" && range.head === line.to) {
-    // An empty item ends the list or quote: its line stays, empty, with the
-    // cursor on it. At the end of the text, the cursor goes to a new line
-    // after it, so what is typed next is not part of the last item.
-    const insert = line.number === state.doc.lines ? "\n" : "";
+  if (content.trim() === "" && head === line.to) {
+    // An empty item ends the list or quote: its line stays, empty (in a
+    // quote, a line of the quote), with the cursor on it. At the end of the
+    // text (of the quote), the cursor goes to a new line after it, so what is
+    // typed next is not part of the last item.
+    const depth = quoteDepth(markers);
+    const insert =
+      item && quote
+        ? line.to >= block!.contentTo
+          ? `${">".repeat(depth)}\n${quoteMarkers(depth)}`
+          : quoteMarkers(depth)
+        : line.number === state.doc.lines
+          ? "\n"
+          : "";
     view.dispatch({
       changes: { from: line.from, to: line.to, insert },
       selection: { anchor: line.from + insert.length },
@@ -214,16 +235,19 @@ function continueMarkup(view: EditorView): boolean {
     });
     return true;
   }
-  let prefix: string;
+  // A reply's header (">>! In T1, @alice wrote:") continues as its quote.
+  let prefix = quote ? quoteMarkers(quoteDepth(markers)) : "";
   if (item) {
     const number = /^(\d+)([.)])$/.exec(item[2]);
     const marker = number ? `${Number(number[1]) + 1}${number[2]}` : item[2];
-    prefix = item[1] + marker + item[3] + (item[4] ? "[ ] " : "");
-  } else {
-    // A reply's header (">>! In T1, @alice wrote:") continues as its quote.
-    prefix = quoteMarkers(quoteDepth(quote![1]));
+    prefix += item[1] + marker + item[3] + (item[4] ? "[ ] " : "");
   }
-  view.dispatch(state.replaceSelection("\n" + prefix), { scrollIntoView: true, userEvent: "input" });
+  view.dispatch({
+    changes: { from: head, insert: "\n" + prefix },
+    selection: { anchor: head + 1 + prefix.length },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
   return true;
 }
 
@@ -331,26 +355,32 @@ function quoteLineIn(doc: Text, from: number, to: number): boolean {
 const repeatedMarker = (item: RegExpExecArray): boolean => /^(-{2,}|\*{2,}|#{2,})$/.test(item[2]);
 
 /**
- * Tab and Shift+Tab indent and outdent list items: by two spaces, or in a
- * list nested by repeating markers ("- item", "-- nested"), by one marker.
+ * Tab and Shift+Tab indent and outdent list items, also in quotes: by two
+ * spaces, or in a list nested by repeating markers ("- item", "-- nested"),
+ * by one marker.
  */
 function indentListItem(view: EditorView, outdent: boolean): boolean {
-  const { doc } = view.state;
-  const list = blockAtCursor(view.state, "list");
-  if (!list) {
-    return false;
-  }
-  let repeated = false;
-  for (let n = doc.lineAt(list.from).number; n <= doc.lineAt(list.contentTo).number; n++) {
-    const item = LIST_ITEM.exec(doc.line(n).text);
-    repeated ||= !!item && repeatedMarker(item);
-  }
+  const { state } = view;
   const changes = [];
-  for (const range of view.state.selection.ranges) {
-    for (let n = doc.lineAt(range.from).number; n <= doc.lineAt(range.to).number; n++) {
-      const line = doc.line(n);
+  let inList = false;
+  for (const range of state.selection.ranges) {
+    // The list of each cursor.
+    const list = blockAtLine(state, state.doc.lineAt(range.head).number);
+    if (list?.kind !== "list") {
+      continue;
+    }
+    inList = true;
+    const repeated = list.lines.some((line) => {
       const item = LIST_ITEM.exec(line.text);
-      if (!item) {
+      return !!item && repeatedMarker(item);
+    });
+    // Not further out than the list's first item: "# item" at the start of a line is a header.
+    const least = /^ */.exec(list.lines[0].text)![0].length;
+    const [first, last] = rangeLines(state.doc, range);
+    for (let n = first; n <= last; n++) {
+      const line = lineOf(list, n);
+      const item = line && LIST_ITEM.exec(line.text);
+      if (!line || !item) {
         continue;
       }
       if (repeated && /^([-*]+|#+)$/.test(item[2])) {
@@ -363,8 +393,6 @@ function indentListItem(view: EditorView, outdent: boolean): boolean {
       } else if (!outdent) {
         changes.push({ from: line.from, insert: "  " });
       } else {
-        // Not further out than the list's first item: "# item" at the start of a line is a header.
-        const least = /^ */.exec(view.state.doc.lineAt(list.from).text)![0].length;
         const spaces = Math.min(2, /^ */.exec(line.text)![0].length - least);
         if (spaces > 0) {
           changes.push({ from: line.from, to: line.from + spaces });
@@ -372,7 +400,16 @@ function indentListItem(view: EditorView, outdent: boolean): boolean {
       }
     }
   }
-  view.dispatch({ changes, userEvent: outdent ? "delete.dedent" : "input.indent" });
+  if (!inList) {
+    return false;
+  }
+  // Two cursors on one line change it once.
+  const seen = new Set<string>();
+  const unique = changes.filter((change) => {
+    const key = `${change.from}:${change.to ?? ""}`;
+    return !seen.has(key) && !!seen.add(key);
+  });
+  view.dispatch({ changes: unique, userEvent: outdent ? "delete.dedent" : "input.indent" });
   return true;
 }
 
@@ -388,8 +425,7 @@ function lineBoundary(forward: boolean, extend: boolean) {
     const selection = EditorSelection.create(
       state.selection.ranges.map((range) => {
         const line = state.doc.lineAt(range.head);
-        const item = !forward && inListBlock(state, range.head) ? LIST_ITEM.exec(line.text) : null;
-        const text = item ? line.from + line.text.length - item[5].length : null;
+        const text = forward ? null : itemTextFrom(state, line);
         // At the end of a wrapped row, the cursor keeps belonging to that row (its assoc).
         let target = view.moveToLineBoundary(range, forward, true);
         // Outside of hidden markers, like a click.
@@ -402,7 +438,11 @@ function lineBoundary(forward: boolean, extend: boolean) {
           target = EditorSelection.cursor(text);
         }
         if (target.head === range.head) {
-          target = EditorSelection.cursor(forward ? line.to : text !== null && target.head !== text ? text : line.from);
+          // In a quote, after its markers: before them, typing would end the quote.
+          const start = lineStart(state, line);
+          target = EditorSelection.cursor(
+            forward ? line.to : text !== null && target.head !== text ? text : target.head > start ? start : line.from,
+          );
         }
         return extend ? EditorSelection.range(range.anchor, target.head) : target;
       }),

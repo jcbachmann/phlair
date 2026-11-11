@@ -285,6 +285,8 @@
 }
 
 .rme-editor .cm-line.rme-src-quote {
+  /* Where its text starts; lists in it are indented from there. */
+  --rme-quote-pad: 12px;
   padding: 0 12px;
   border-left: 3px solid var(--rme-quote-border-color, #a7b5bf);
   background: var(--rme-quote-background, #f8f9fc);
@@ -355,6 +357,7 @@
 
 .rme-editor .rme-src-quote.rme-quote-depth-2,
 .rme-editor .rme-preview-quote.rme-quote-depth-2 {
+  --rme-quote-pad: 27px;
   padding-left: 27px;
   padding-right: 24px;
   background-image: var(--rme-inner-quote-bar), var(--rme-inner-quote-tint);
@@ -366,6 +369,7 @@
 
 .rme-editor .rme-src-quote.rme-quote-depth-3,
 .rme-editor .rme-preview-quote.rme-quote-depth-3 {
+  --rme-quote-pad: 42px;
   padding-left: 42px;
   padding-right: 36px;
   background-image:
@@ -384,6 +388,7 @@
 
 .rme-editor .rme-src-quote.rme-quote-depth-4,
 .rme-editor .rme-preview-quote.rme-quote-depth-4 {
+  --rme-quote-pad: 57px;
   padding-left: 57px;
   padding-right: 48px;
   background-image:
@@ -438,7 +443,8 @@
 /*
  * List lines are indented like Phorge's lists (30px, nested lists 24px
  * more, checklist items 6px more), and the marker hangs into the indent, so
- * the item text starts where the rendered item text starts.
+ * the item text starts where the rendered item text starts. In a quote, from
+ * where the quote's text starts.
  */
 .rme-editor .cm-line.rme-src-list {
   --rme-depth: 0;
@@ -446,7 +452,7 @@
   position: relative;
   /* An item without text keeps its height; its marker is out of the flow. */
   min-height: 1.7em;
-  --rme-indent: calc(30px + var(--rme-depth) * 24px + var(--rme-check));
+  --rme-indent: calc(var(--rme-quote-pad, 0px) + 30px + var(--rme-depth) * 24px + var(--rme-check));
   padding-left: var(--rme-indent);
 }
 
@@ -543,6 +549,11 @@
   cursor: text;
   font-weight: normal;
   color: var(--rme-color, inherit);
+}
+
+/* In a quote, in the quote's color, as Phorge draws it. */
+.rme-editor .rme-src-quote.rme-src-list .rme-list-marker .rme-item-marker {
+  color: inherit;
 }
 
 .rme-editor .rme-src-list .rme-item-marker :is(ul, ol).remarkup-list,

@@ -10,7 +10,7 @@ import { keyLabel } from "../keys";
 import { type Action, ACTIONS, GROUPS } from "./actions";
 import { inMonospace, LITERAL_BLOCKS } from "../syntax";
 import { blockAtCursor } from "./livePreview";
-import { Popup } from "./popup";
+import { leftEditor, Popup } from "./popup";
 
 /** The insert menu of the text, or of a table cell's editor (only what fits in a cell), by its items. */
 function insertMenu(items: Action[]) {
@@ -29,6 +29,10 @@ function insertMenu(items: Action[]) {
     }
 
     update(update: ViewUpdate): void {
+      if (this.slash !== null && leftEditor(update)) {
+        this.close();
+        return;
+      }
       if (this.slash !== null && update.docChanged) {
         this.slash = update.changes.mapPos(this.slash, 1);
       }

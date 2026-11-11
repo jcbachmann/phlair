@@ -335,7 +335,7 @@ class LiveEditor {
         extensions: [
           hostTextarea.of(textarea),
           // Not while Phorge submits the form, which disables the textarea.
-          this.editable.of(EditorView.editable.of(!textarea.disabled)),
+          this.editable.of(EditorView.editable.of(!locked(textarea))),
           history(),
           // Not drawSelection(), only its cursor: the browser's own selection is
           // drawn over the backgrounds of notes and quotes, and in the same color in cells.
@@ -517,8 +517,8 @@ class LiveEditor {
       this.destroy(true);
       return;
     }
-    if (this.view.state.facet(EditorView.editable) === this.textarea.disabled) {
-      this.view.dispatch({ effects: this.editable.reconfigure(EditorView.editable.of(!this.textarea.disabled)) });
+    if (this.view.state.facet(EditorView.editable) === locked(this.textarea)) {
+      this.view.dispatch({ effects: this.editable.reconfigure(EditorView.editable.of(!locked(this.textarea))) });
     }
     const value = this.textarea.value;
     if (value === this.lastValue) {
@@ -595,6 +595,9 @@ class LiveEditor {
   }
 }
 
+/** Whether a textarea can not be edited now. */
+const locked = (textarea: HTMLTextAreaElement) => textarea.disabled || textarea.readOnly;
+
 /** Adds the editor and its toggle button to a remarkup control. */
 export function enhance(textarea: HTMLTextAreaElement): void {
   if (textarea.dataset.rmeEnhanced) {
@@ -602,7 +605,7 @@ export function enhance(textarea: HTMLTextAreaElement): void {
   }
   const root = textarea.closest<HTMLElement>(CONTROL);
   const bar = root?.querySelector(TOOLBAR);
-  if (!root || !bar || textarea.disabled || root.classList.contains("disabled-control")) {
+  if (!root || !bar || locked(textarea) || root.classList.contains("disabled-control")) {
     return;
   }
   textarea.dataset.rmeEnhanced = "1";

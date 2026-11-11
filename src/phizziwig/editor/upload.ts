@@ -89,7 +89,12 @@ async function sendWhenUploaded(textareas: HTMLTextAreaElement[], send: () => vo
     state.waiting = true;
     state.changed();
   });
-  await Promise.all(states.map((state) => state.done()));
+  // Also a task later: right after an upload ends, its placeholder is
+  // replaced and the next file of the same paste or drop starts.
+  do {
+    await Promise.all(states.map((state) => state.done()));
+    await new Promise((resolve) => setTimeout(resolve));
+  } while (states.some((state) => state.running.size));
   const sendNow = states.every((state, i) => state.waiting && state.failed.length === failures[i]);
   states.forEach((state) => {
     state.waiting = false;
@@ -191,25 +196,42 @@ export const uploadPanel = showPanel.of((view): Panel => {
   };
 });
 
+/** What the placeholders of uploads that ended outside the text became, for a redo that brings them back. */
+const ended = new Map<string, string>();
+
 /**
- * Replaces the placeholder of an upload. When the editor was turned off
- * meanwhile, the placeholder is in the textarea (or in a new editor that
- * follows the textarea).
+ * Replaces the placeholder of an upload; where its replacement ends in the
+ * editor, if there. When the editor was turned off meanwhile, the
+ * placeholder is in the textarea (or in a new editor that follows the
+ * textarea).
  */
-function replacePlaceholder(view: EditorView, textarea: HTMLTextAreaElement, placeholder: string, text: string) {
+function replacePlaceholder(
+  view: EditorView,
+  textarea: HTMLTextAreaElement,
+  placeholder: string,
+  text: string,
+): number | null {
   if (view.dom.isConnected) {
     const at = view.state.doc.toString().indexOf(placeholder);
-    if (at >= 0) {
-      view.dispatch({ changes: { from: at, to: at + placeholder.length, insert: text }, userEvent: "input.upload" });
+    if (at < 0) {
+      // Undone (or deleted) while it uploaded.
+      ended.set(placeholder, text);
+      return null;
     }
-    return at;
+    const replaced = view.state.update({
+      changes: { from: at, to: at + placeholder.length, insert: text },
+      userEvent: "input.upload",
+    });
+    view.dispatch(replaced);
+    // Mapped: quote markers around it may have been tidied (tidyQuotes).
+    return replaced.changes.mapPos(at + placeholder.length, 1);
   }
   const at = textarea.value.indexOf(placeholder);
   if (at >= 0) {
     textarea.value = textarea.value.slice(0, at) + text + textarea.value.slice(at + placeholder.length);
     notifyChange(textarea);
   }
-  return -1;
+  return null;
 }
 
 /** Numbers the placeholders. */
@@ -242,25 +264,36 @@ export async function uploadInPlace(
   fallback: string,
   /** Options of the embed, e.g. ", size=full". */
   options = "",
+  /**
+   * Whether a failure is shown (and a form waiting for it not sent): for an
+   * image without a link to keep (pasted files, inline images). Images of
+   * other sites that can not be had keep their link, no failure to show.
+   */
+  report = false,
 ): Promise<void> {
   const textarea = view.state.facet(hostTextarea);
   let replacement = fallback;
+  const failure = (error: unknown) => `Uploading ${name} failed (${error instanceof Error ? error.message : error}).`;
   try {
-    // Images of other sites that can not be had keep their link: no failure to show.
-    const uploaded = await track(textarea, name, async (progress) => {
-      const blob = await file();
-      // A file the server stored already, or the image to upload.
-      return blob instanceof Blob
-        ? uploadFile(
-            blob instanceof File
-              ? blob
-              : new File([blob], `${name}.${blob.type.split("/")[1]?.replace(/\W.*$/, "") || "png"}`, {
-                  type: blob.type,
-                }),
-            progress,
-          )
-        : blob;
-    });
+    const uploaded = await track(
+      textarea,
+      name,
+      async (progress) => {
+        const blob = await file();
+        // A file the server stored already, or the image to upload.
+        return blob instanceof Blob
+          ? uploadFile(
+              blob instanceof File
+                ? blob
+                : new File([blob], `${name}.${blob.type.split("/")[1]?.replace(/\W.*$/, "") || "png"}`, {
+                    type: blob.type,
+                  }),
+              progress,
+            )
+          : blob;
+      },
+      report ? failure : undefined,
+    );
     if (textarea && !uploaded.existing) {
       addAttachedFile(textarea, uploaded.phid);
     }
@@ -310,8 +343,7 @@ export async function uploadFiles(
     } catch (error) {
       console.warn("Phizziwig: upload failed", error);
     }
-    const at = textarea ? replacePlaceholder(view, textarea, placeholder, replacement) : -1;
-    after = at >= 0 ? at + replacement.length : null;
+    after = textarea ? replacePlaceholder(view, textarea, placeholder, replacement) : null;
   }
 }
 
@@ -349,7 +381,7 @@ function upload(view: EditorView, files: File[], pos: number): Promise<void> {
 /** Uploads files dropped at a point of the editor, at the nearest place in the text. */
 function dropFiles(view: EditorView, event: DragEvent, files: File[]): void {
   event.preventDefault();
-  if (view.state.readOnly) {
+  if (!view.state.facet(EditorView.editable)) {
     return;
   }
   const point = { x: event.clientX, y: event.clientY };
@@ -369,7 +401,33 @@ export function hasText(data: DataTransfer): boolean {
   return !!html && /\S/.test(parseHtml(html).textContent ?? "");
 }
 
-export const fileUpload = EditorView.domEventHandlers({
+/**
+ * Placeholders of ended uploads that a redo brought back get what the upload
+ * became, as a step of their own after the redo (inside it, the further
+ * redos would be off by the difference in length), which undo takes back
+ * like the replacement of any upload.
+ */
+const redoneUploads = EditorView.updateListener.of((update) => {
+  if (!ended.size || !update.transactions.some((tr) => tr.isUserEvent("redo"))) {
+    return;
+  }
+  setTimeout(() => {
+    const text = update.view.state.doc.toString();
+    const changes = [];
+    for (const [placeholder, insert] of ended) {
+      const from = text.indexOf(placeholder);
+      if (from >= 0) {
+        changes.push({ from, to: from + placeholder.length, insert });
+        ended.delete(placeholder);
+      }
+    }
+    if (changes.length) {
+      update.view.dispatch({ changes, userEvent: "input.upload" });
+    }
+  });
+});
+
+const fileHandlers = EditorView.domEventHandlers({
   paste(event, view) {
     const files = Array.from(event.clipboardData?.files ?? []);
     if (!files.length || !view.state.facet(hostTextarea) || hasText(event.clipboardData!)) {
@@ -420,3 +478,5 @@ export const fileDropTarget = ViewPlugin.define((view) => {
     },
   };
 });
+
+export const fileUpload = [fileHandlers, redoneUploads];

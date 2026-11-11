@@ -2,11 +2,12 @@
 // do not need to know the syntax: headers, strikethrough, underline,
 // highlight, checklists, note boxes and horizontal rules.
 
-import { EditorSelection, type EditorState, type Line, type SelectionRange } from "@codemirror/state";
+import { EditorSelection, type EditorState, type SelectionRange } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { INLINE_FORMATS, LIST_ITEM, NOTE_PREFIX, NOTE_WORDS } from "../syntax";
+import { INLINE_FORMATS, LIST_ITEM, NOTE_PREFIX, NOTE_WORDS, quoteDepth, quoteMarkers } from "../syntax";
 import { toolbarButton } from "../toolbar";
-import { blockAtCursor } from "./livePreview";
+import { blockAtLine, quotePrefix } from "./livePreview";
+import { type BlockLine, rangeLines } from "./lines";
 
 type Command = (view: EditorView) => boolean;
 
@@ -44,23 +45,41 @@ function toggleInline(marker: string, placeholder: string): Command {
 function selectedLines(state: EditorState): number[] {
   const numbers = [];
   for (const range of state.selection.ranges) {
-    for (let n = state.doc.lineAt(range.from).number; n <= state.doc.lineAt(range.to).number; n++) {
+    const [first, last] = rangeLines(state.doc, range);
+    for (let n = first; n <= last; n++) {
       numbers.push(n);
     }
   }
   return numbers;
 }
 
-/** Applies a change to each line of the selection, or to the lines given by number. */
+/** A line as blocks see it: in a quote, after the quote's markers (lines.ts). */
+function bodyOf(state: EditorState, number: number): BlockLine {
+  const line = state.doc.line(number);
+  const prefix = quotePrefix(state, number).length;
+  return { number, from: line.from + prefix, to: line.to, text: line.text.slice(prefix) };
+}
+
+/** The line of the cursor, as blocks see it. */
+function cursorBody(state: EditorState): BlockLine {
+  return bodyOf(state, state.doc.lineAt(state.selection.main.head).number);
+}
+
+/**
+ * Applies a change to each line of the selection, or to the lines given by
+ * number: to their text after the quote's markers in a quote, unless
+ * `whole` (the quote button changes the markers).
+ */
 function changeLines(
   view: EditorView,
   change: (text: string, number: number) => string,
   numbers = selectedLines(view.state),
+  whole = false,
 ): void {
   const { state } = view;
   const changes = [];
   for (const n of new Set(numbers)) {
-    const line = state.doc.line(n);
+    const line = whole ? state.doc.line(n) : bodyOf(state, n);
     const text = change(line.text, n);
     if (text !== line.text) {
       changes.push({ from: line.from, to: line.to, insert: text });
@@ -78,7 +97,7 @@ function changeLines(
 
 /** "Heading" → "= Heading" → "== Heading" → "=== Heading" → "Heading". */
 export const cycleHeader: Command = (view) => {
-  const line = view.state.doc.lineAt(view.state.selection.main.head);
+  const line = cursorBody(view.state);
   if (!line.text.trim()) {
     const text = "= Heading";
     view.dispatch({
@@ -100,8 +119,7 @@ export const cycleHeader: Command = (view) => {
 /** Makes the lines headings of a level (1 to 5), or text again if they are headings of that level. */
 export function setHeading(level: number): Command {
   return (view) => {
-    const line = view.state.doc.lineAt(view.state.selection.main.head);
-    const current = /^(=+)\s/.exec(line.text)?.[1].length ?? 0;
+    const current = /^(=+)\s/.exec(cursorBody(view.state).text)?.[1].length ?? 0;
     changeLines(view, (text) => {
       if (!text.trim()) {
         return text;
@@ -113,10 +131,16 @@ export function setHeading(level: number): Command {
   };
 }
 
+/** The first line of the cursor's block (also of one inside a quote), or the cursor's line. */
+function blockStart(state: EditorState): BlockLine {
+  const line = cursorBody(state);
+  return blockAtLine(state, line.number)?.lines[0] ?? line;
+}
+
 /** Text → "NOTE: Text" → "IMPORTANT: Text" → "WARNING: Text" → "Text". */
 export const cycleNote: Command = (view) => {
   const { state } = view;
-  const line = state.doc.lineAt(blockAtCursor(state)?.from ?? state.selection.main.head);
+  const line = blockStart(state);
   if (!line.text.trim() && state.selection.main.empty) {
     const text = "NOTE: Note text";
     view.dispatch({
@@ -144,7 +168,7 @@ export const cycleNote: Command = (view) => {
 export function setNote(word: (typeof NOTE_WORDS)[number]): Command {
   return (view) => {
     const { state } = view;
-    const line = state.doc.lineAt(blockAtCursor(state)?.from ?? state.selection.main.head);
+    const line = blockStart(state);
     if (!line.text.trim() && state.selection.main.empty) {
       const text = `${word}: Note text`;
       view.dispatch({
@@ -196,33 +220,32 @@ export const insertAnchor: Command = (view) => {
 /** Inserts "---" as a block of its own after the current line. */
 export const insertRule: Command = (view) => {
   const { state } = view;
-  const line = state.doc.lineAt(state.selection.main.head);
-  const empty = !line.text.trim();
-  const from = empty ? line.from : line.to;
-  const before = empty ? "" : "\n\n";
-  const next = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
-  const after = next && !next.text.trim() ? "\n" : "\n\n";
-  const insert = `${before}---${after}`;
-  view.dispatch({
-    changes: { from, to: empty ? line.to : from, insert },
-    selection: { anchor: from + insert.length },
-    userEvent: "input.format",
-    scrollIntoView: true,
-  });
-  return true;
+  const line = cursorBody(state);
+  const next = line.number < state.doc.lines ? bodyOf(state, line.number + 1) : null;
+  const after = next && !next.text.trim() ? "" : "\n";
+  // After it, on a line of its own; the cursor is there.
+  return insertBlock(view, `---\n${after}`, [4 + after.length, 4 + after.length]);
 };
 
-/** Inserts text on an empty line, or after the current line as a block of its own. */
-/** Inserts a block on the line of the cursor, if empty, else after it, and selects part of it. */
+/**
+ * Inserts a block on the line of the cursor, if empty, else after it, and
+ * selects part of it. In a quote, in the quote: its lines get the quote's
+ * markers, as Phorge quotes ("> ", never a reply's ">>!").
+ */
 export function insertBlock(view: EditorView, text: string, select: [number, number]): boolean {
   const { state } = view;
   const line = state.doc.lineAt(state.selection.main.head);
-  const empty = !line.text.trim();
-  const before = empty ? "" : "\n\n";
+  const raw = quotePrefix(state, line.number);
+  const prefix = raw ? quoteMarkers(quoteDepth(raw)) : "";
+  const empty = !line.text.slice(raw.length).trim();
+  // On an empty line, in its place (with its markers written anew); else after it, a blank line between.
   const from = empty ? line.from : line.to;
+  const head = empty ? prefix : `\n${prefix.trimEnd()}\n${prefix}`;
+  const quoted = (part: string) => part.replace(/\n/g, `\n${prefix}`);
+  const at = (offset: number) => from + head.length + quoted(text.slice(0, offset)).length;
   view.dispatch({
-    changes: { from, to: empty ? line.to : from, insert: before + text },
-    selection: EditorSelection.range(from + before.length + select[0], from + before.length + select[1]),
+    changes: { from, to: empty ? line.to : from, insert: head + quoted(text) },
+    selection: EditorSelection.range(at(select[0]), at(select[1])),
     userEvent: "input.format",
     scrollIntoView: true,
   });
@@ -252,20 +275,19 @@ function itemMarker(kind: ListKind, repeat: number): string {
  * those of nested lists, up to blank lines), or the cursor's line if it is no
  * list item.
  */
-function listLevel(state: EditorState, line: Line): number[] {
-  const block = blockAtCursor(state, "list");
+function listLevel(state: EditorState, line: BlockLine): number[] {
+  const block = blockAtLine(state, line.number);
   const item = LIST_ITEM.exec(line.text);
-  if (!block || !item) {
+  if (block?.kind !== "list" || !item) {
     return [line.number];
   }
   const depth = (other: RegExpExecArray) => other[1].length + 2 * (markerRepeat(other) - 1);
   const own = depth(item);
-  const first = state.doc.lineAt(block.from).number;
-  const last = state.doc.lineAt(block.contentTo).number;
+  const at = block.lines.findIndex((other) => other.number === line.number);
   const numbers = [line.number];
   for (const step of [-1, 1]) {
-    for (let n = line.number + step; n >= first && n <= last; n += step) {
-      const text = state.doc.line(n).text;
+    for (let i = at + step; i >= 0 && i < block.lines.length; i += step) {
+      const text = block.lines[i].text;
       const other = LIST_ITEM.exec(text);
       // Continued paragraphs of items belong to the list. Phorge also
       // continues a list after a blank line, but it looks like another one.
@@ -273,7 +295,7 @@ function listLevel(state: EditorState, line: Line): number[] {
         break;
       }
       if (other && depth(other) === own) {
-        numbers.push(n);
+        numbers.push(block.lines[i].number);
       }
     }
   }
@@ -295,12 +317,13 @@ const LIST_INDENT = "  ";
 export function toggleList(kind: ListKind): Command {
   return (view) => {
     const { state } = view;
-    const line = state.doc.lineAt(state.selection.main.head);
+    const line = cursorBody(state);
     if (state.selection.main.empty && !line.text.trim()) {
       const marker = LIST_INDENT + itemMarker(kind, 1);
       return insertBlock(view, marker, [marker.length, marker.length]);
     }
-    const list = blockAtCursor(state, "list");
+    const block = blockAtLine(state, line.number);
+    const list = block?.kind === "list" ? block : null;
     const remove = !!list && listKind(line.text) === kind;
     const targets = new Set(state.selection.main.empty ? listLevel(state, line) : selectedLines(state));
     const convert = (text: string): string => {
@@ -318,12 +341,8 @@ export function toggleList(kind: ListKind): Command {
         : text.replace(/^(\s*)/, `$1${itemMarker(kind, 1)}`);
     };
     const region = new Set(targets);
-    if (list) {
-      for (let n = state.doc.lineAt(list.from).number; n <= state.doc.lineAt(list.contentTo).number; n++) {
-        region.add(n);
-      }
-    }
-    const converted = new Map([...region].map((n) => [n, (targets.has(n) ? convert : String)(state.doc.line(n).text)]));
+    list?.lines.forEach((other) => region.add(other.number));
+    const converted = new Map([...region].map((n) => [n, (targets.has(n) ? convert : String)(bodyOf(state, n).text)]));
     const shift = !remove && [...converted.values()].some((text) => /^\S/.test(text) && LIST_ITEM.test(text));
     changeLines(view, (_, n) => (shift && converted.get(n)!.trim() ? LIST_INDENT : "") + converted.get(n)!, [
       ...region,
@@ -340,7 +359,7 @@ export function toggleList(kind: ListKind): Command {
  */
 export const toggleChecklist: Command = (view) => {
   const { state } = view;
-  const line = state.doc.lineAt(state.selection.main.head);
+  const line = cursorBody(state);
   if (state.selection.main.empty && !line.text.trim()) {
     const marker = `${LIST_INDENT}- [ ] `;
     return insertBlock(view, marker, [marker.length, marker.length]);
@@ -378,7 +397,8 @@ export const toggleQuote: Command = (view) => {
   }
   const filledLines = (range: SelectionRange): number[] => {
     const numbers = [];
-    for (let n = state.doc.lineAt(range.from).number; n <= state.doc.lineAt(range.to).number; n++) {
+    const [first, last] = rangeLines(state.doc, range);
+    for (let n = first; n <= last; n++) {
       if (state.doc.line(n).text.trim()) {
         numbers.push(n);
       }
@@ -388,7 +408,7 @@ export const toggleQuote: Command = (view) => {
   const decisive = line.text.trim() ? line : state.doc.line(filledLines(main)[0] ?? line.number);
   if (/^>/.test(decisive.text)) {
     // One level: a nested quote stays quoted; a reply's header loses its ">>!".
-    changeLines(view, (text) => text.replace(/^(?:>>!|>) ?/, ""));
+    changeLines(view, (text) => text.replace(/^(?:>>!|>) ?/, ""), undefined, true);
     return true;
   }
   const inside = new Set<number>();
@@ -398,22 +418,33 @@ export const toggleQuote: Command = (view) => {
       inside.add(n);
     }
   }
-  changeLines(view, (text, n) => (text.trim() ? `> ${text}` : inside.has(n) ? ">" : text));
+  changeLines(view, (text, n) => (text.trim() ? `> ${text}` : inside.has(n) ? ">" : text), undefined, true);
   return true;
 };
 
-/** Puts the selected lines into a code block, or inserts an empty one. */
+/**
+ * Puts the selected lines into a code block, or inserts an empty one. Lines
+ * of one quote, quoted equally deep, go in a code block in the quote; others
+ * whole, with their markers.
+ */
 export const insertCodeBlock: Command = (view) => {
   const { state } = view;
   const range = state.selection.main;
   if (range.empty) {
     return insertBlock(view, "```\n\n```", [4, 4]);
   }
-  const from = state.doc.lineAt(range.from).from;
-  const to = state.doc.lineAt(range.to).to;
-  const insert = `\`\`\`\n${state.sliceDoc(from, to)}\n\`\`\``;
+  const [first, last] = rangeLines(state.doc, range);
+  const raws: string[] = [];
+  for (let n = first; n <= last; n++) {
+    raws.push(quotePrefix(state, n));
+  }
+  const inQuote = raws.every((raw) => raw && !raw.includes(">>!") && quoteDepth(raw) === quoteDepth(raws[0]));
+  const prefix = inQuote ? quoteMarkers(quoteDepth(raws[0])) : "";
+  const lines = raws.map((raw, i) => state.doc.line(first + i).text.slice(inQuote ? raw.length : 0));
+  const from = state.doc.line(first).from;
+  const insert = ["```", ...lines, "```"].map((text) => prefix + text).join("\n");
   view.dispatch({
-    changes: { from, to, insert },
+    changes: { from, to: state.doc.line(last).to, insert },
     selection: { anchor: from + insert.length },
     userEvent: "input.format",
     scrollIntoView: true,

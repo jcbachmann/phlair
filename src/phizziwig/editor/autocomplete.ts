@@ -10,7 +10,7 @@
 import { Prec } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { typeahead, type TypeaheadResult } from "../phorge";
-import { Popup } from "./popup";
+import { leftEditor, Popup } from "./popup";
 
 /** Where the completed text is (the text of an editor, of the text or a table cell). Positions are offsets in it. */
 interface Host {
@@ -394,6 +394,10 @@ class TextAutocomplete {
   }
 
   update(update: ViewUpdate): void {
+    if (this.menu.active && leftEditor(update)) {
+      this.menu.deactivate();
+      return;
+    }
     if (update.docChanged) {
       // The "]]" that closes a link typed in a table cell comes after what is typed.
       const closing = update.transactions.some((tr) => tr.isUserEvent("input.close"));
@@ -447,9 +451,12 @@ function completionKey(menu: Autocomplete, key: string): boolean {
     case "Enter":
     case "Tab":
       return menu.accept();
-    case "Escape":
+    case "Escape": {
+      // Taken only from a menu shown: else Escape does what it does (e.g. leaves fullscreen).
+      const shown = menu.visible;
       menu.deactivate();
-      return true;
+      return shown;
+    }
     default:
       return false;
   }

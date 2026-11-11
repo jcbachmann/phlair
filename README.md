@@ -26,6 +26,7 @@ nothing moves when the cursor moves.
   - bold, italic, monospaced, struck through, highlighted and underlined text hides its markers;
   - headers hide their markers unless the cursor is on their line; quotes (also the `>>!` of replies), the word of
     `(NOTE)` notes and rules hide theirs; list items show their bullet, number or checkbox (a click on a bullet or number edits it, on a checkbox checks it, left of them goes to the start of the line);
+  - in quotes, headers and lists look like themselves too, as Phorge renders them there;
   - icons, keys and navigation paths (`{icon camera color=red}`, `{key Ctrl K}`, `{nav Home > Settings}`) show as
     Phorge draws them;
   - images, image macros and memes show as rendered, their `{F123}` or `{meme, …}` hidden;
@@ -139,7 +140,9 @@ nothing moves when the cursor moves.
   take it away, whatever kind of list it is in. List
   items are indented by two spaces, like Phorge's buttons write them (` -`, ` #`, ` - [ ]`): `# item` at the
   start of a line is a header. A list starting at the start of the line moves in as a whole.
-- **Lists and quotes** continue on `Enter`; `Enter` on an empty item ends them, leaving its line empty. `Backspace` at
+- **Lists and quotes** continue on `Enter`; `Enter` on an empty item ends them, leaving its line empty (a list in a
+  quote ends, the quote goes on). Everything for lists and headers works in quotes too, the buttons change the text
+  after the `>`. `Enter` in the marker of a list item is `Enter` at the start of its text. `Backspace` at
   the start of the text of a quote line removes its `>`. `Enter` at the
   start of the text of a list, quote or header makes room above it. `Tab`/`Shift+Tab` indent list items:
   by two spaces, or in a list nested by repeating markers (`- item`, `-- nested`), by one marker.
@@ -211,13 +214,12 @@ and people lists, commits (audits). Lists of choices, like "Choose Subtype" when
   until that day begins in your time zone, also on a page that stays open over midnight.
 - **Undo:** a note after snoozing (or waking up) an item undoes it.
 - **Below a list** with snoozed items, a line says how many are hidden and shows them (or hides them again).
-- **The clock in the main menu** counts the hidden snoozed items of the page, lists all snoozes (the next to wake up
-  first) and shows the snoozed items again (_Show snoozed items_): dimmed, with the days until they wake up on their
+- **The clock in the main menu** counts the hidden snoozed items of the page, lists the snoozes (the 15 next to wake
+  up) and shows the snoozed items again (_Show snoozed items_): dimmed, with the days until they wake up on their
   clock (red tomorrow, blue in two weeks or later). Their clock menu says until when they sleep and wakes them up now.
 - **Bulk edits** leave hidden snoozed tasks out: Maniphest's _Select All_ selects only the tasks shown.
 - **Kept in the browser:** snoozes belong to the browser they were made in. _Export snoozes_ and _Import snoozes…_ in
-  the main menu's clock take them to another browser. The snoozes of the old "JCB Phabricator Snooze" plugin are
-  taken over on the first visit, and its exports can be imported.
+  the main menu's clock take them to another browser.
 
 ![Snoozed tasks shown, and the snooze menu of a task](docs/screenshots/phuture.png)
 
@@ -316,8 +318,7 @@ shared.
   the page. `phorge.ts` holds everything that talks to the server or knows its page structure.
 
 **Phuture** (`src/phuture/`): `days.ts` counts in days (`YYYY-MM-DD` of the browser's time zone, compared as text, so
-no time zone or clock change moves a snooze), `snoozes.ts` keeps them (and takes over the old plugin's), `index.ts`
-adds the buttons and menus.
+no time zone or clock change moves a snooze), `snoozes.ts` keeps them, `index.ts` adds the buttons and menus.
 
 `phorge/` is the library installed in Phorge (PHP): a setting per tool (`PhlairToolSetting`), the loader and
 `phizziwig.download`, see [docs/PHORGE.md](docs/PHORGE.md). Its script is the same as the extension's, built for

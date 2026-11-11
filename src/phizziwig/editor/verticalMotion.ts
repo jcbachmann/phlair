@@ -2,8 +2,8 @@
 
 import { EditorSelection, Prec } from "@codemirror/state";
 import { type EditorView, keymap } from "@codemirror/view";
-import { LIST_ITEM } from "../syntax";
-import { inListBlock, previewField } from "./livePreview";
+
+import { itemTextFrom, lineStart, previewField } from "./livePreview";
 import { enterTable, TableWidget } from "./tableEditor";
 
 /**
@@ -69,12 +69,11 @@ function moveLine(view: EditorView, forward: boolean, extend = false): boolean {
   }
   // On a list item, in its text, not in its marker (see above).
   const target = state.doc.lineAt(head);
-  const item = inListBlock(state, target.from) ? LIST_ITEM.exec(target.text) : null;
-  const text = item ? target.to - item[5].length : null;
-  const beforeMarker = range.head === line.from && inListBlock(state, line.from) && LIST_ITEM.test(line.text);
+  const text = itemTextFrom(state, target);
+  const beforeMarker = range.head === lineStart(state, line) && itemTextFrom(state, line) !== null;
   if (text !== null && head < text) {
     if (beforeMarker) {
-      head = target.from;
+      head = lineStart(state, target);
     } else if (!extend || head > target.from) {
       head = text;
     }

@@ -249,6 +249,25 @@ describe("htmlToRemarkup: blocks", () => {
     );
   });
 
+  it("keeps the columns of cells below merged ones", () => {
+    const html =
+      "<table><tr><th>Department</th><th>Name</th><th>Room</th></tr>" +
+      '<tr><td rowspan="2">Lab</td><td>Alice</td><td>1</td></tr>' +
+      "<tr><td>Bob</td><td>2</td></tr>" +
+      '<tr><td>Office</td><td colspan="2" rowspan="2">Carol, Dave</td></tr>' +
+      "<tr><td>Office</td></tr></table>";
+    expect(htmlToRemarkup(html)).toBe(
+      lines(
+        "| Department | Name        | Room |",
+        "| ---------- | ----------- | ---- |",
+        "| Lab        | Alice       | 1    |",
+        "|            | Bob         | 2    |",
+        "| Office     | Carol, Dave |      |",
+        "| Office     |             |      |",
+      ),
+    );
+  });
+
   it("keeps bold th cells outside of header rows", () => {
     const html = "<table><tr><th>Fe</th><td>12.5</td></tr><tr><th>Cu</th><td>0.03</td></tr></table>";
     expect(htmlToRemarkup(html)).toBe(lines("| **Fe** | 12.5 |", "| **Cu** | 0.03 |"));

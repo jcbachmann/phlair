@@ -4,12 +4,15 @@
 // clicked are saved in the text's source, one edit per text, the way the page
 // does it (Conduit, or the comment's "Edit Comment"): only their marks change.
 // The source is read fresh before saving, and nothing is saved unless its
-// checkboxes are those shown (checkmarks.ts finds them as Phorge does), e.g.
-// when someone else changed the text meanwhile. Leaving the page saves
-// what waits (with the source read at the first click), the tab going to
-// the background too.
+// checkboxes are those shown, with the same texts (checkmarks.ts finds them as
+// Phorge does), e.g. when someone else changed the text meanwhile. Leaving the
+// page saves what waits at once, the tab going to the background too: in one
+// request, which the browser finishes after the page is gone, with the source
+// read (and checked the same way) at the first click; there is no time to read
+// it again, so an edit of someone else in those seconds would be lost.
 
 import { setCheckmark, checkmarks } from "./checkmarks";
+import { parseHtml } from "./html";
 import { conduit, editComment } from "./phorge";
 
 /** A text of the page whose checkboxes can be saved. */
@@ -18,6 +21,10 @@ interface Entry {
   root: Element;
   /** What it is, for messages: "the description", "the comment", … */
   name: string;
+  /** The context of remarkup.process that renders it. */
+  context: "maniphest" | "differential" | "phriction";
+  /** The slug of a wiki page, which its relative links ("[[ ./child ]]") start from. */
+  slug?: string;
   load(): Promise<string>;
   /** Saves the text; with keepalive, also when the page is being left. */
   save(text: string, keepalive: boolean): Promise<void>;
@@ -30,11 +37,20 @@ function pageObject(): { type: string; id: number } | null {
 }
 
 /** The text an editable field of an object: its source and how to save it, by Conduit. */
-function fieldEntry(root: Element, name: string, search: string, edit: string, field: string, monogram: string): Entry {
+function fieldEntry(
+  root: Element,
+  name: string,
+  context: Entry["context"],
+  search: string,
+  edit: string,
+  field: string,
+  monogram: string,
+): Entry {
   const id = Number(monogram.slice(1));
   return {
     root,
     name,
+    context,
     load: async () => {
       const result = (await conduit(search, { constraints: { ids: [id] } })) as {
         data: { fields: Record<string, { raw: string } | string> }[];
@@ -108,6 +124,7 @@ function entryOf(box: Element): Entry | null {
     return {
       root: comment,
       name: "the comment",
+      context: object.type === "D" ? "differential" : "maniphest",
       load: async () => {
         const transaction = await commentAt(monogram, anchor);
         phid = transaction.phid;
@@ -124,12 +141,21 @@ function entryOf(box: Element): Entry | null {
       : null;
     const monogram = `${object.type}${object.id}`;
     if (object.type === "T" && (!heading || heading === "Description")) {
-      return fieldEntry(section, "the description", "maniphest.search", "maniphest.edit", "description", monogram);
+      return fieldEntry(
+        section,
+        "the description",
+        "maniphest",
+        "maniphest.search",
+        "maniphest.edit",
+        "description",
+        monogram,
+      );
     }
     if (object.type === "D" && heading === "Summary") {
       return fieldEntry(
         section,
         "the summary",
+        "differential",
         "differential.revision.search",
         "differential.revision.edit",
         "summary",
@@ -140,6 +166,7 @@ function entryOf(box: Element): Entry | null {
       return fieldEntry(
         section,
         "the test plan",
+        "differential",
         "differential.revision.search",
         "differential.revision.edit",
         "testPlan",
@@ -154,6 +181,8 @@ function entryOf(box: Element): Entry | null {
     return {
       root: page,
       name: "the page",
+      context: "phriction",
+      slug,
       load: async () => {
         const result = (await conduit("phriction.document.search", {
           constraints: { paths: [slug] },
@@ -206,16 +235,20 @@ interface Pending {
   entry: Entry;
   /** How each box clicked was, by its index in the text. */
   changes: Map<number, boolean>;
-  /** The source, read at the first click: for saving on leaving the page. */
-  loaded: string | null;
-  /** Until the source is read (null if it could not be). */
-  loading: Promise<string | null>;
+  /** The source read at the first click, for leaving the page; null if it did not have the boxes shown. */
+  read: Promise<string | null>;
+  /** The same, once read. */
+  loaded?: string | null;
 }
 
 /** The texts with boxes clicked, by their rendered text. */
 const pending = new Map<Element, Pending>();
 let timer: ReturnType<typeof setTimeout> | undefined;
 let watchingLeave = false;
+/** How many saveAll() run. */
+let saving = 0;
+/** The save running of each text, by its rendered text: a text is read for new clicks only after it. */
+const running = new Map<Element, Promise<void>>();
 
 function boxesOf(entry: Entry): HTMLInputElement[] {
   return Array.from(entry.root.querySelectorAll<HTMLInputElement>(CHECKBOX));
@@ -240,12 +273,10 @@ function toggle(box: HTMLInputElement, checked: boolean): void {
     const created: Pending = {
       entry,
       changes: new Map(),
-      loaded: null,
-      loading: entry.load().then(
-        (source) => (created.loaded = source),
-        () => null,
-      ),
+      // Not before the save of earlier clicks is done: else leaving would save the text without them.
+      read: (running.get(entry.root) ?? Promise.resolve()).then(() => checkedSource(entry)).catch(() => null),
     };
+    void created.read.then((source) => (created.loaded = source));
     waiting = created;
     pending.set(entry.root, created);
   }
@@ -271,7 +302,20 @@ async function saveAll(leaving = false): Promise<void> {
   clearTimeout(timer);
   const all = Array.from(pending.values());
   pending.clear();
-  await Promise.all(all.map((waiting) => save(waiting, leaving)));
+  saving++;
+  try {
+    await Promise.all(
+      all.map((waiting) => {
+        const root = waiting.entry.root;
+        // After the one running for the same text, if any.
+        const saved = (running.get(root) ?? Promise.resolve()).then(() => save(waiting, leaving));
+        running.set(root, saved);
+        return saved.finally(() => running.get(root) === saved && running.delete(root));
+      }),
+    );
+  } finally {
+    saving--;
+  }
 }
 
 /**
@@ -279,21 +323,18 @@ async function saveAll(leaving = false): Promise<void> {
  * the boxes shown (else they show as they were again); boxes that are so
  * already need nothing (e.g. saved by a page left before this one loaded).
  * Then all boxes show as the source has them. Leaving the page, with the
- * source read at the first click (there is no time to read it again), in one
- * request that the browser finishes after the page is gone (keepalive).
+ * source read at the first click, in one request that the browser finishes
+ * after the page is gone (keepalive).
  */
-async function save({ entry, changes, loaded, loading }: Pending, leaving: boolean): Promise<void> {
+async function save({ entry, changes, read, loaded }: Pending, leaving: boolean): Promise<void> {
   const boxes = boxesOf(entry);
   const clicked = Array.from(changes, ([index, checked]) => ({ box: boxes[index], index, checked }));
   const undo = () => clicked.forEach(({ box, checked }) => box && show(box, checked));
   clicked.forEach(({ box }) => box?.classList.add("rme-saving"));
   try {
-    const source = leaving ? (loaded ?? (await loading)) : await entry.load();
-    if (source === null) {
-      return;
-    }
+    const source = leaving ? (loaded !== undefined ? loaded : await read) : await checkedSource(entry);
     // The boxes as the page shows them: else a click would change another box.
-    if (checkmarks(source).length !== boxes.length) {
+    if (source === null) {
       undo();
       note(clicked[0].box, `${capitalized(entry.name)} changed meanwhile: reload the page to check its boxes.`);
       return;
@@ -316,6 +357,32 @@ async function save({ entry, changes, loaded, loading }: Pending, leaving: boole
   } finally {
     clicked.forEach(({ box }) => box?.classList.remove("rme-saving", "rme-pending"));
   }
+}
+
+/** The text of a checkbox's item, as rendered. */
+function itemText(box: Element): string {
+  const item = box.closest("li")?.cloneNode(true) as Element | undefined;
+  item?.querySelectorAll(".rme-check-note").forEach((note) => note.remove());
+  return (item?.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The source of a text, if it has the boxes shown: as many, and each with the
+ * same text, as Phorge renders it; else null.
+ */
+async function checkedSource(entry: Entry): Promise<string | null> {
+  const source = await entry.load();
+  const boxes = boxesOf(entry);
+  if (checkmarks(source).length !== boxes.length) {
+    return null;
+  }
+  // remarkup.process knows no page: its relative links made absolute, they render as on the page.
+  const text = entry.slug === undefined ? source : absoluteWikiLinks(source, entry.slug);
+  const [rendered] = (await conduit("remarkup.process", { context: entry.context, contents: [text] })) as {
+    content: string;
+  }[];
+  const items = Array.from(parseHtml(rendered.content).querySelectorAll(CHECKBOX), itemText);
+  return items.length === boxes.length && items.every((text, i) => text === itemText(boxes[i])) ? source : null;
 }
 
 /**
@@ -365,7 +432,7 @@ function watchLeave(): void {
   );
   // Reloading, closing, another address: the browser asks, which gives the time to save.
   window.addEventListener("beforeunload", (event) => {
-    if (pending.size) {
+    if (pending.size || saving) {
       event.preventDefault();
       void saveAll(true);
     }
@@ -382,4 +449,23 @@ function note(box: HTMLInputElement, text: string): void {
   shown.textContent = text;
   box.closest("li")?.append(shown);
   setTimeout(() => shown.remove(), 8000);
+}
+
+/**
+ * The relative links of a wiki page's text ("[[ ./child ]]", "[[ ../ ]]")
+ * made absolute, as Phorge resolves them for the page
+ * (PhrictionRemarkupRule).
+ */
+export function absoluteWikiLinks(text: string, slug: string): string {
+  return text.replace(/(\[\[\s*)(\.\.?\/[^|#\]]*)/g, (_, open: string, link: string) => {
+    const parts = slug.split("/").filter(Boolean);
+    for (const part of link.trimEnd().replace(/\/+$/, "").split("/")) {
+      if (part === "..") {
+        parts.pop();
+      } else if (part !== ".") {
+        parts.push(part);
+      }
+    }
+    return `${open}${parts.join("/")}/${link.slice(link.trimEnd().length)}`;
+  });
 }

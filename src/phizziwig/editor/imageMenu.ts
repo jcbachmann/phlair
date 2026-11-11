@@ -215,8 +215,8 @@ export const imageMenu = ViewPlugin.define((view) => {
   view.dom.addEventListener("mouseout", onMouseOut);
   return {
     update(update) {
-      // The menu acts on the text it was opened for.
-      if (update.docChanged) {
+      // The menu acts on the text it was opened for (not another one, e.g. the shortcuts).
+      if (update.docChanged && document.querySelector(".rme-image-menu")) {
         closeDropdown();
       }
       if (update.docChanged || update.viewportChanged || update.geometryChanged) {

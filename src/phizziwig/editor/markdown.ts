@@ -55,10 +55,16 @@ export const markdownHabits = EditorView.inputHandler.of((view, from, to, text) 
   }
   // The "*" as typed, then the conversion as an undo step of its own, so undo
   // gives back "*italic*".
-  view.dispatch({ changes: { from, to, insert: "*" }, selection: { anchor: from + 1 }, userEvent: "input.type" });
-  const at = line.from + start;
+  const typed = state.update({
+    changes: { from, to, insert: "*" },
+    selection: { anchor: from + 1 },
+    userEvent: "input.type",
+  });
+  view.dispatch(typed);
+  // Where the text is now: the quote markers it is in may have been tidied (tidyQuotes).
+  const at = typed.changes.mapPos(line.from + start);
   view.dispatch({
-    changes: { from: at, to: from + 1, insert: `//${match[2]}//` },
+    changes: { from: at, to: typed.changes.mapPos(to, 1), insert: `//${match[2]}//` },
     selection: { anchor: at + match[2].length + 4 },
     userEvent: "input.type",
     annotations: isolateHistory.of("before"),

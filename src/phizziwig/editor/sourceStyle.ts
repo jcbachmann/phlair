@@ -2,15 +2,16 @@
 // large, notes and quotes look like notes and quotes, markup characters are
 // dimmed (and hidden by inlinePreview.ts except where the cursor is).
 
-import type { Line, Range } from "@codemirror/state";
+import type { Range, Text } from "@codemirror/state";
 import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
-import type { Block } from "../blocks";
+import type { Block, BlockKind } from "../blocks";
 import { parseList } from "../list";
 import { LIST_ITEM, QUOTE_LINE, quoteDepth } from "../syntax";
 import { wideRanges } from "../table";
 import type { InlineKind, InlineToken } from "../inline";
 import { blockTokens } from "./inlineTokens";
 import { MAX_QUOTE_DEPTH, previewField } from "./livePreview";
+import { type BlockLine, blockLines, quotedBlocks, type TextBlock } from "./lines";
 
 // Monospaced and highlighted text use Phorge's own element and classes,
 // so its CSS styles them like in the rendered text (the editor content has
@@ -89,7 +90,9 @@ function decorateBlock(view: EditorView, block: Block, ranges: Range<Decoration>
   } else if (block.kind === "rule") {
     lineClass = "rme-src-rule";
   } else if (block.kind === "list") {
-    return decorateList(view, block, ranges);
+    decorateList(doc, blockLines(doc, block), ranges);
+    styleTokens(blockTokens(doc, block), ranges);
+    return;
   }
 
   const quoteLine = (n: number) =>
@@ -126,22 +129,33 @@ function decorateBlock(view: EditorView, block: Block, ranges: Range<Decoration>
     }
     decorateLine(block, line.from, line.text, n === first.number, ranges);
   }
+  if (block.kind === "quote") {
+    quotedBlocks(doc, block).forEach((inner) => decorateQuoted(doc, inner, ranges));
+  }
   styleTokens(blockTokens(doc, block), ranges);
+}
+
+/** The blocks inside a quote that look like themselves there: headers and lists, as Phorge renders them in quotes. */
+function decorateQuoted(doc: Text, block: TextBlock, ranges: Range<Decoration>[]): void {
+  if (block.kind === "list") {
+    decorateList(doc, block.lines, ranges);
+  } else if (block.kind === "header") {
+    const [first, second] = block.lines;
+    const level = second ? (/^=/.test(second.text) ? 1 : 2) : headerLevel(first.text);
+    block.lines.forEach((line, i) => {
+      ranges.push(Decoration.line({ class: `rme-src-h rme-src-h${level}` }).range(doc.line(line.number).from));
+      decorateLine(block, line.from, line.text, i === 0, ranges);
+    });
+  }
 }
 
 /**
  * List lines are indented like the rendered list: the text starts where the
  * rendered item text starts, nested lists 24px further in, and checklist items
- * 6px further. A nested list ends with the 4px margin of the rendered one.
+ * 6px further. A nested list ends with the 4px margin of the rendered one. In
+ * a quote, inside the quote (style.css).
  */
-function decorateList(view: EditorView, block: Block, ranges: Range<Decoration>[]): void {
-  const doc = view.state.doc;
-  const first = doc.lineAt(block.from).number;
-  const last = doc.lineAt(block.contentTo).number;
-  const lines: Line[] = [];
-  for (let n = first; n <= last; n++) {
-    lines.push(doc.line(n));
-  }
+function decorateList(doc: Text, lines: BlockLine[], ranges: Range<Decoration>[]): void {
   // The level of each line: that of its item, as Phorge nests the list.
   const items = parseList(lines.map((line) => line.text));
   const classes = lines.map(() => ["rme-src-list", "rme-list-depth-0"]);
@@ -170,16 +184,17 @@ function decorateList(view: EditorView, block: Block, ranges: Range<Decoration>[
       classes[end].push("rme-list-nest-end");
     }
   });
+  const list = { kind: "list" as const };
   lines.forEach((line, i) => {
+    const start = doc.line(line.number).from;
     if (line.text.trim()) {
-      ranges.push(Decoration.line({ class: classes[i].join(" ") }).range(line.from));
+      ranges.push(Decoration.line({ class: classes[i].join(" ") }).range(start));
       if (joined.has(i)) {
-        ranges.push(JOINED.range(line.from));
+        ranges.push(JOINED.range(start));
       }
     }
-    decorateLine(block, line.from, line.text, i === 0, ranges);
+    decorateLine(list, line.from, line.text, i === 0, ranges);
   });
-  styleTokens(blockTokens(doc, block), ranges);
 }
 
 function mark(ranges: Range<Decoration>[], from: number, to: number, cls: string): void {
@@ -190,7 +205,7 @@ function mark(ranges: Range<Decoration>[], from: number, to: number, cls: string
 
 /** The styling of the block markup of a line of a block's source; also of a table cell's editor (inlinePreview.ts). */
 export function decorateLine(
-  block: Block,
+  block: { kind: BlockKind },
   from: number,
   text: string,
   isFirst: boolean,

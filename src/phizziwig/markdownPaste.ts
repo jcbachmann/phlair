@@ -5,7 +5,7 @@
 // @lezer/markdown (CommonMark and GitHub's extensions), so code, escapes and
 // nesting are what Markdown makes of them.
 
-import type { SyntaxNode } from "@lezer/common";
+import type { SyntaxNode, Tree } from "@lezer/common";
 import { GFM, parser } from "@lezer/markdown";
 
 const markdown = parser.configure(GFM);
@@ -54,7 +54,7 @@ export function markdownToRemarkup(input: string): string | null {
   if (kinds.size < 2) {
     return null;
   }
-  const references = linkReferences(tree.topNode, text);
+  const references = linkReferences(tree, text);
   const edits: Edit[] = [];
   convert(tree.topNode, text, references, edits);
   edits.sort((a, b) => b.from - a.from);
@@ -66,18 +66,22 @@ export function markdownToRemarkup(input: string): string | null {
   return out.replace(/\n+$/, text.endsWith("\n") ? "\n" : "");
 }
 
-/** The targets of reference links ("[label]: url"), by their label. */
-function linkReferences(top: SyntaxNode, text: string): Map<string, string> {
+/** The targets of reference links ("[label]: url"), by their label; also of those in quotes and lists. */
+function linkReferences(tree: Tree, text: string): Map<string, string> {
   const found = new Map<string, string>();
-  for (let node = top.firstChild; node; node = node.nextSibling) {
-    if (node.name === "LinkReference") {
-      const label = node.getChild("LinkLabel");
-      const url = node.getChild("URL");
-      if (label && url) {
-        found.set(normalizeLabel(text.slice(label.from, label.to)), text.slice(url.from, url.to));
+  tree.iterate({
+    enter: ({ name, node }) => {
+      if (name === "LinkReference") {
+        const label = node.getChild("LinkLabel");
+        const url = node.getChild("URL");
+        if (label && url) {
+          found.set(normalizeLabel(text.slice(label.from, label.to)), text.slice(url.from, url.to));
+        }
       }
-    }
-  }
+      // Code has none; blocks may.
+      return name !== "FencedCode" && name !== "CodeBlock";
+    },
+  });
   return found;
 }
 
@@ -127,8 +131,11 @@ function convert(node: SyntaxNode, text: string, references: Map<string, string>
     case "CommentBlock":
     case "LinkReference":
       if (node.name === "LinkReference") {
-        // Used by the links, which get their targets: the definition goes, with its line.
-        replace(node.from, text[node.to] === "\n" ? node.to + 1 : node.to, "");
+        // Used by the links, which get their targets: the definition goes, with
+        // its line (and the line's quote markers).
+        const start = text.lastIndexOf("\n", node.from - 1) + 1;
+        const from = /^[>\s]*$/.test(text.slice(start, node.from)) ? start : node.from;
+        replace(from, text[node.to] === "\n" ? node.to + 1 : node.to, "");
       }
       return;
     case "HorizontalRule":

@@ -178,6 +178,10 @@ function editCell(
   cell: HTMLElement,
   where: "start" | "end" | "all" | { x: number; y: number },
 ): void {
+  // Not while the editor is locked (e.g. while Phorge sends the form).
+  if (!view.state.facet(EditorView.editable)) {
+    return;
+  }
   // One cell at a time: the one edited before ends now, not when it notices losing the focus.
   if (editedCell && editedCell.cell !== cell) {
     stopEditing(editedCell.dom, editedCell.cell);
@@ -468,7 +472,7 @@ function leave(view: EditorView, dom: TableDom, down: boolean): void {
 
 /** Applies a table operation and focuses the cell the cursor of the edit is in. */
 function apply(view: EditorView, dom: TableDom, edit: Edit | null, original: Table): void {
-  if (!edit) {
+  if (!edit || !view.state.facet(EditorView.editable)) {
     return;
   }
   const from = view.posAtDOM(dom);
@@ -802,7 +806,7 @@ export class TableWidget extends WidgetType {
       }
       event.preventDefault();
       const cell = cellOf(event) ?? nearestCell(dom, event);
-      if (cell) {
+      if (cell && view.state.facet(EditorView.editable)) {
         focusCell(view, view.posAtDOM(dom), positionOf(cell).row, positionOf(cell).col, "end");
         void uploadToCell(view, cell, files);
       }

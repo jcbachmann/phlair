@@ -2,7 +2,7 @@
 // prompt and a list of results. Its markup lets Phorge's CSS style it.
 // Used by the autocomplete, the insert menu and the pickers.
 
-import type { EditorView } from "@codemirror/view";
+import type { EditorView, ViewUpdate } from "@codemirror/view";
 
 export interface PopupItem {
   label: string;
@@ -30,6 +30,11 @@ function icon(classes: string): HTMLElement {
 }
 
 let popups = 0;
+
+/** Whether the editor lost the focus to somewhere else than a popup (whose input may take it): its popups close. */
+export function leftEditor(update: ViewUpdate): boolean {
+  return update.focusChanged && !update.view.hasFocus && !document.activeElement?.closest(".rme-autocomplete");
+}
 
 export class Popup {
   readonly node: HTMLElement;

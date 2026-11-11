@@ -727,20 +727,33 @@ function convertTable(table: HTMLTableElement, style: Style, out: string[]): voi
     return;
   }
   const result: TableRow[] = [];
+  // Remarkup has no merged cells; empty ones keep the columns in place. For
+  // each column: how many rows more a cell above takes (rowspan).
+  const below: number[] = [];
   for (const row of rows) {
     const cells = [...row.cells].filter((cell) => !isSkipped(cell));
     if (!cells.length) {
+      // All taken by cells above, or none.
+      below.forEach((left, col) => (below[col] = Math.max(0, left - 1)));
       continue;
     }
     const header = row.parentElement?.localName === "thead" || cells.every((cell) => cell.localName === "th");
     const texts: string[] = [];
-    for (const cell of cells) {
-      texts.push(cellText(cell, style, header));
-      // Remarkup has no merged cells; empty ones keep the columns in place.
-      for (let i = 1; i < Math.min(cell.colSpan, 100); i++) {
+    // The columns taken by cells above, from the next one on.
+    const skipTaken = (all = false) => {
+      while (below[texts.length] > 0 || (all && texts.length < below.length)) {
+        below[texts.length] = Math.max(0, (below[texts.length] ?? 0) - 1);
         texts.push("");
       }
+    };
+    for (const cell of cells) {
+      skipTaken();
+      for (let i = 0; i < Math.min(cell.colSpan, 100); i++) {
+        below[texts.length] = Math.min(cell.rowSpan, 100) - 1;
+        texts.push(i ? "" : cellText(cell, style, header));
+      }
     }
+    skipTaken(true);
     result.push({ cells: texts, separator: false });
     if (header) {
       result.push({ cells: texts.map(() => "---"), separator: true });

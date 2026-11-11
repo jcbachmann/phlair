@@ -31,11 +31,13 @@ import {
   appendInLists,
   clicked,
   clickPosition,
+  lineItems,
   listItems,
   previewField,
   rendererOf,
   STYLED_BLOCKS,
 } from "./livePreview";
+import { type BlockLine, blockOfLine, lineOf, quotedBlocks, type TextBlock } from "./lines";
 import { editing } from "./focus";
 import { openLinkOnModClick } from "./openLink";
 
@@ -139,7 +141,7 @@ class ItemMarker extends WidgetType {
       dom.addEventListener("mousedown", (event) => {
         if (event.button === 0 && !event.shiftKey) {
           event.preventDefault();
-          editMarker(view, view.state.doc.lineAt(view.posAtDOM(dom)));
+          editMarker(view, view.posAtDOM(dom));
         }
       });
       return dom;
@@ -212,7 +214,11 @@ function revealed(state: EditorState, piece: Piece): boolean {
 }
 
 /** The pieces of the block markup of a line of a block being edited. */
-function linePieces(block: Block, line: Line, items: Map<number, ListItem>): Piece[] {
+function linePieces(
+  block: { kind: Block["kind"]; from: number },
+  line: { from: number; to: number; text: string },
+  items: Map<number, ListItem>,
+): Piece[] {
   const pieces: Piece[] = [];
   const text = line.text;
   const at = (i: number) => line.from + i;
@@ -408,8 +414,10 @@ function build(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   const missing: RenderItem[] = [];
   const render = tokenRenderer(renderer, missing);
+  const visible = (from: number, to: number) => view.visibleRanges.some((r) => from <= r.to && to >= r.from);
   for (const block of blocks) {
-    if (!STYLED_BLOCKS.has(block.kind)) {
+    // Only what is in view: this runs on every key and cursor move.
+    if (!STYLED_BLOCKS.has(block.kind) || !visible(block.from, block.contentTo)) {
       continue;
     }
     // The images shown of the block (of its list items), by their files.
@@ -423,7 +431,16 @@ function build(view: EditorView): DecorationSet {
         items.set(unit.from, unit.item);
       }
     }
-    const visible = (from: number, to: number) => view.visibleRanges.some((r) => from <= r.to && to >= r.from);
+    // In a quote, the blocks of its text by their lines, with their own markers (lines.ts).
+    const quoted = new Map<number, { block: TextBlock; line: BlockLine }>();
+    if (block.kind === "quote") {
+      for (const inner of quotedBlocks(state.doc, block)) {
+        inner.lines.forEach((line) => quoted.set(line.number, { block: inner, line }));
+        if (inner.kind === "list") {
+          lineItems(inner.lines).forEach((unit) => items.set(unit.from, unit.item));
+        }
+      }
+    }
     const asSource = (from: number, to: number) =>
       focused && revealed(state, { from, to, side: "token", decorations: [] });
     const pieces = tokenPieces(
@@ -441,6 +458,10 @@ function build(view: EditorView): DecorationSet {
         const line = state.doc.lineAt(pos);
         pos = line.to + 1;
         pieces.push(...linePieces(block, line, items));
+        const inner = quoted.get(line.number);
+        if (inner) {
+          pieces.push(...linePieces({ kind: inner.block.kind, from: inner.block.lines[0].from }, inner.line, items));
+        }
       }
     }
     for (const piece of pieces) {
@@ -457,7 +478,10 @@ function build(view: EditorView): DecorationSet {
 }
 
 /** The list item line of a click left of its text, on its first row: its line and marker; null elsewhere. */
-function markerArea(view: EditorView, event: MouseEvent): { line: Line; match: RegExpExecArray; pos: number } | null {
+function markerArea(
+  view: EditorView,
+  event: MouseEvent,
+): { line: Line; own: BlockLine; match: RegExpExecArray; pos: number } | null {
   if (
     event.button !== 0 ||
     event.shiftKey ||
@@ -472,15 +496,14 @@ function markerArea(view: EditorView, event: MouseEvent): { line: Line; match: R
     return null;
   }
   const line = view.state.doc.lineAt(pos);
-  const block = view.state
-    .field(previewField)
-    .blocks.find((b) => b.kind === "list" && b.from <= pos && pos <= b.contentTo);
-  const match = block ? LIST_ITEM.exec(line.text) : null;
+  const block = blockOfLine(view.state.doc, view.state.field(previewField).blocks, line.number);
+  const own = block?.kind === "list" ? lineOf(block, line.number) : undefined;
+  const match = own ? LIST_ITEM.exec(own.text) : null;
   const textAt = match ? view.coordsAtPos(line.to - match[5].length, 1) : null;
-  if (!match || !textAt || event.clientX >= textAt.left || event.clientY >= textAt.bottom) {
+  if (!own || !match || !textAt || event.clientX >= textAt.left || event.clientY >= textAt.bottom) {
     return null;
   }
-  return { line, match, pos };
+  return { line, own, match, pos };
 }
 
 /**
@@ -495,19 +518,20 @@ const markerClick = EditorView.domEventHandlers({
     if (!area) {
       return false;
     }
-    const { line, match, pos } = area;
+    const { line, own, match, pos } = area;
+    const markerFrom = own.from + match[1].length;
     // Where the marker starts: drawn, or its source while the cursor is on it.
-    const left = markerLeft(view, line) ?? view.coordsAtPos(line.from + match[1].length, 1)?.left;
+    const left = markerLeft(view, line) ?? view.coordsAtPos(markerFrom, 1)?.left;
     if (left === undefined) {
       return false;
     }
     event.preventDefault();
     if (event.clientX < left) {
-      // Left of the marker: the start of the line, before it and the indentation.
+      // Left of the marker: the start of the line (in a quote, of its text), before it and the indentation.
       view.focus();
-      view.dispatch({ selection: { anchor: line.from }, userEvent: "select.pointer" });
+      view.dispatch({ selection: { anchor: own.from }, userEvent: "select.pointer" });
     } else if (markerLeft(view, line) !== null) {
-      editMarker(view, line);
+      editMarker(view, markerFrom);
     } else {
       // On the source of the marker: where the click is in it.
       view.focus();
@@ -561,15 +585,12 @@ function outsideMarkers(view: EditorView, pos: number): number {
   return result;
 }
 
-/** Puts the cursor after the bullet or number of a list item, which then shows its source. */
-function editMarker(view: EditorView, line: Line): void {
-  const match = LIST_ITEM.exec(line.text);
-  if (match) {
+/** Puts the cursor after the bullet or number of a list item, by where it starts; it then shows its source. */
+function editMarker(view: EditorView, from: number): void {
+  const marker = /^(?:[-*]+|#+|\d+[.)])/.exec(view.state.sliceDoc(from, view.state.doc.lineAt(from).to));
+  if (marker) {
     view.focus();
-    view.dispatch({
-      selection: { anchor: line.from + match[1].length + match[2].length },
-      userEvent: "select.pointer",
-    });
+    view.dispatch({ selection: { anchor: from + marker[0].length }, userEvent: "select.pointer" });
   }
 }
 

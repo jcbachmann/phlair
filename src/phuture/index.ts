@@ -16,7 +16,6 @@ import {
   saveSnoozes,
   setSnooze,
   type Snoozes,
-  takeOverOldSnoozes,
 } from "./snoozes";
 import css from "./style.css";
 
@@ -38,10 +37,6 @@ export function startPhuture(): void {
     return;
   }
   addStyle(css);
-  const oldShow = takeOverOldSnoozes();
-  if (oldShow !== null) {
-    showChoice.set(oldShow ? "1" : "0");
-  }
   menuButton = addMenuButton(alerts);
   addButtons(document);
   update();
@@ -317,6 +312,13 @@ function snooze(key: string, day: Day | null, undoable = false): void {
   update();
   if (undoable) {
     showNote(day ? `Snoozed until ${formatDay(day, today())}.` : "Woken up.", () => snooze(key, before));
+    // The item and its button hide: the keyboard's focus goes to the note's Undo, not to the page's start.
+    setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (!active || active === document.body || !active.checkVisibility()) {
+        note?.querySelector("a")?.focus();
+      }
+    });
   }
 }
 

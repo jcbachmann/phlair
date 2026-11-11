@@ -62,6 +62,12 @@ describe("markdownToRemarkup", () => {
 });
 
 describe("markdownToRemarkup, as Markdown parses the text", () => {
+  it("resolves reference links defined in a quote", () => {
+    expect(
+      markdownToRemarkup(lines("> See the **[docs]**.", ">", "> [docs]: https://example.com/docs", "> More.")),
+    ).toBe(lines("> See the **[[ https://example.com/docs | docs ]]**.", ">", "> More."));
+  });
+
   it("converts what a line-by-line reading misses", () => {
     expect(
       markdownToRemarkup(

@@ -5,7 +5,7 @@
 
 import { expect, type Page, test } from "@playwright/test";
 import { authFile, phabricatorExec } from "./env";
-import { editor, imageSite, textarea } from "./helpers";
+import { conduit, editor, imageSite, textarea } from "./helpers";
 
 // The tests change alice's setting and the instance's configuration: one at a time, in one browser.
 test.describe.configure({ mode: "serial" });
@@ -95,7 +95,10 @@ test("users turn on Phuture for themselves; it runs without Phizziwig too", asyn
   }
 });
 
-test("images of pasted text from other sites are downloaded by the server", async ({ page }) => {
+test("images of pasted text from other sites are downloaded by the server, for the user only", async ({
+  page,
+  browser,
+}) => {
   // An address of the host that the container and the browser both reach.
   const host = phabricatorExec(["getent", "hosts", "host.docker.internal"]).split(/\s+/)[0];
   // Without CORS: the browser could not read it, past the page's CSP or not.
@@ -110,6 +113,17 @@ test("images of pasted text from other sites are downloaded by the server", asyn
       node.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
     }, `${site.url}/image.png`);
     await expect(textarea(page)).toHaveValue(/^Pasted \{F\d+\}$/);
+    // Like a file dropped on the text: only its uploader sees it, until it is attached to what is saved.
+    const id = Number(/\{F(\d+)\}/.exec(await textarea(page).inputValue())![1]);
+    const search = (on: Page) => conduit(on, "file.search", { constraints: { ids: [id] } });
+    expect((await search(page)).data).toHaveLength(1);
+    const other = await browser.newPage({ storageState: authFile("admin") });
+    try {
+      await other.goto("/");
+      expect((await search(other)).data).toHaveLength(0);
+    } finally {
+      await other.close();
+    }
   } finally {
     site.close();
   }

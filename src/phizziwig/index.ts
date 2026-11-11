@@ -44,6 +44,7 @@ export function startPhizziwig(): void {
       const content = target?.closest<HTMLElement>(".rme-editor .cm-content");
       if (
         !content ||
+        composing(event) ||
         (event.key !== "ArrowLeft" && event.key !== "ArrowRight") ||
         event.ctrlKey ||
         event.metaKey ||
@@ -67,7 +68,7 @@ export function startPhizziwig(): void {
   window.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "Escape" || !(event.target instanceof Element)) {
+      if (event.key !== "Escape" || composing(event) || !(event.target instanceof Element)) {
         return;
       }
       const content = event.target.closest<HTMLElement>(".rme-editor .cm-content");
@@ -94,4 +95,9 @@ export function startPhizziwig(): void {
       });
     }
   }).observe(document.body, { childList: true, subtree: true });
+}
+
+/** Whether a key is for an input method composing text (Chinese, Japanese, …): it is the input method's. */
+function composing(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229;
 }

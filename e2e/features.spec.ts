@@ -1429,6 +1429,26 @@ test.describe("third test round", () => {
     expect(JSON.parse(metadata).attachedFilePHIDs).toHaveLength(1);
   });
 
+  test("an inline image of pasted text that fails to upload is said, and the form waiting for it is not sent", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Email paste fails");
+    await editor(page).click();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(/\/file\/dropupload\//, async (route) => {
+      await held;
+      await route.fulfill({ status: 500, body: "Broken" });
+    });
+    await paste(page, { html: `<p>Hello,</p><p><img src="${PNG}" alt="Logo"></p>` });
+    await page.keyboard.press("Control+Enter");
+    await expect(page.locator(".rme-upload-status")).toContainText("The form is sent when done.");
+    release();
+    // It has no link to keep: the failure shows, and the page is not saved without it.
+    await expect(page.locator(".rme-upload-status")).toContainText(/Uploading Logo failed/);
+    await expect(page).toHaveURL(/\/phriction\/edit\//);
+  });
+
   test("{ and [ typed over selected text put it in braces or brackets", async ({ page }) => {
     await openNewWikiPage(page, "Braces");
     await editor(page).click();
@@ -3100,6 +3120,106 @@ test.describe("twenty-first test round", () => {
   });
 });
 
+test.describe("feedback of T30666", () => {
+  const button = (page: Page, icon: string) =>
+    page.locator(`.remarkup-assist-bar .remarkup-assist-button:has(.${icon})`).first();
+
+  test("a triple-clicked line is the only line a line format changes", async ({ page }) => {
+    await startWith(page, "first line\nsecond line\n\nthird");
+    // A triple click selects the line with its line break.
+    await page.locator(".cm-line", { hasText: "first line" }).click({ clickCount: 3 });
+    expect(await selected(page)).toBe("first line\n");
+    await button(page, "fa-header").click();
+    await expect.poll(() => source(page)).toBe("= first line\nsecond line\n\nthird");
+    await page.locator(".cm-line", { hasText: "second line" }).click({ clickCount: 3 });
+    await button(page, "fa-list-ul").click();
+    await expect.poll(() => source(page)).toBe("= first line\n  - second line\n\nthird");
+  });
+
+  test("Enter in the marker of a list item is Enter at the start of its text", async ({ page }) => {
+    await startWith(page, "  - item\n  - [ ] task\n  - [ ] more");
+    // At the start of the line, before the hidden marker.
+    await page.locator(".cm-line", { hasText: "item" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe("  - item\n  - [ ] \n  - [ ] xtask\n  - [ ] more");
+    // In the marker.
+    await page.locator(".cm-line", { hasText: "more" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("  - item\n  - [ ] \n  - [ ] xtask\n  - [ ] \n  - [ ] more");
+  });
+
+  test("lists in quotes show their markers, continue, end and indent like other lists", async ({ page }) => {
+    await startWith(page, "> Quoted:\n>\n>   - [ ] box\n>   - item");
+    const line = (text: string) => page.locator(".cm-line.rme-src-quote.rme-src-list", { hasText: text });
+    await expect(line("box").locator(".rme-item-check")).toHaveCount(1);
+    await expect(line("item").locator(".rme-item-marker")).toHaveCount(1);
+    // The checkbox can be clicked.
+    await line("box").locator(".rme-item-check").click();
+    await expect.poll(() => source(page)).toBe("> Quoted:\n>\n>   - [X] box\n>   - item");
+    // Home goes to the start of the item's text.
+    await line("box").click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Home");
+    await page.keyboard.type("a ");
+    await expect.poll(() => source(page)).toBe("> Quoted:\n>\n>   - [X] a box\n>   - item");
+    await line("item").click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("new");
+    await page.keyboard.press("Tab");
+    await expect.poll(() => source(page)).toBe("> Quoted:\n>\n>   - [X] a box\n>   - item\n>     - new");
+    await page.keyboard.press("Shift+Tab");
+    // An empty item ends the list, not the quote; at its end, with a blank line.
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("after");
+    await expect.poll(() => source(page)).toBe("> Quoted:\n>\n>   - [X] a box\n>   - item\n>   - new\n>\n> after");
+  });
+
+  test("a code block keeps the quotes of its lines; in a reply, new lines are no reply headers", async ({ page }) => {
+    await startWith(page, "> a\n> b");
+    await editor(page).click();
+    await page.keyboard.press("Control+a");
+    await button(page, "fa-code").click();
+    await expect.poll(() => source(page)).toBe("> ```\n> a\n> b\n> ```");
+    // Lines quoted differently: whole, with their markers.
+    await page.keyboard.press("Control+a");
+    await page.keyboard.insertText("> a\n>> b\nc");
+    await page.keyboard.press("Control+a");
+    await button(page, "fa-code").click();
+    await expect.poll(() => source(page)).toBe("```\n> a\n>> b\nc\n```");
+    // After a reply's header: the reply's quote.
+    await page.keyboard.press("Control+a");
+    await page.keyboard.insertText(">>! In T1, @alice wrote:\n> body");
+    await page.locator(".cm-line", { hasText: "body" }).click();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("End");
+    await button(page, "fa-code").click();
+    await expect.poll(async () => (await source(page)).match(/>>!/g)?.length).toBe(1);
+    expect(await source(page)).toMatch(/^>>! In T1, @alice wrote:\n>\n> ```\n> ?\n> ```\n> body$/);
+  });
+
+  test("the list, checklist and heading buttons change the text of a quote, not its markers", async ({ page }) => {
+    await startWith(page, "> one\n> two\n>> deeper");
+    await page.locator(".cm-line", { hasText: "one" }).click();
+    await button(page, "fa-list-ul").click();
+    await expect.poll(() => source(page)).toBe(">   - one\n> two\n>> deeper");
+    await button(page, "fa-check-square-o").click();
+    await expect.poll(() => source(page)).toBe(">   - [ ] one\n> two\n>> deeper");
+    await page.locator(".cm-line", { hasText: "deeper" }).click();
+    await button(page, "fa-header").click();
+    await expect.poll(() => source(page)).toBe(">   - [ ] one\n> two\n>> = deeper");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe(">   - [ ] one\n> two\n>> = deeper\n>> ");
+  });
+});
+
 test.describe("fixes of the review", () => {
   test("a new inline comment can be typed in right away: the editor takes the focus Phorge gives the textarea", async ({
     page,
@@ -3118,12 +3238,21 @@ test.describe("fixes of the review", () => {
     await expect(inline.locator(".rme-editor .cm-content")).toBeFocused();
   });
 
-  test("the editor is read-only while Phorge submits the form", async ({ page }) => {
-    await startWith(page, "Text.");
+  test("the editor is read-only while Phorge submits the form, its table cells too, and for a read-only textarea", async ({
+    page,
+  }) => {
+    const text = "Text.\n\n| a | b |\n| - | - |\n| 1 | 2 |";
+    await startWith(page, text);
     await textarea(page).evaluate((t: HTMLTextAreaElement) => (t.disabled = true));
     await expect(editor(page)).toHaveAttribute("contenteditable", "false");
+    await page.locator(".rme-table-editor td").first().click();
+    await page.keyboard.type("x");
+    await expect(page.locator(".rme-cell-editor")).toHaveCount(0);
+    expect(await source(page)).toBe(text);
     await textarea(page).evaluate((t: HTMLTextAreaElement) => (t.disabled = false));
     await expect(editor(page)).toHaveAttribute("contenteditable", "true");
+    await textarea(page).evaluate((t: HTMLTextAreaElement) => (t.readOnly = true));
+    await expect(editor(page)).toHaveAttribute("contenteditable", "false");
   });
 
   test("a search picks for the text it was opened on, also when the text before it changed meanwhile", async ({
@@ -3499,6 +3628,48 @@ test.describe("uploads", () => {
     await expect(page.locator(".phui-timeline-view .phabricator-remarkup", { hasText: "See the note." })).toContainText(
       "note.txt",
     );
+  });
+
+  test("a comment submitted with Ctrl+Enter while several files upload is sent when all are in the text", async ({
+    page,
+  }) => {
+    await createTask(page, "Upload two, then submit");
+    await addPhlair(page);
+    await editor(page).click();
+    await page.keyboard.type("Two notes.");
+    const release = await hold(page, /\/file\/dropupload\//);
+    const file = (name: string) => ({ name, type: "text/plain", base64: btoa(name) });
+    await dragFiles(editor(page), [file("first.txt"), file("second.txt")], "end");
+    await page.keyboard.press("Control+Enter");
+    await expect(panel(page)).toContainText("Uploading first.txt… The form is sent when done.");
+    release();
+    await expect(textarea(page)).toHaveValue("");
+    await page.reload();
+    const comment = page.locator(".phui-timeline-view .phabricator-remarkup", { hasText: "Two notes." });
+    await expect(comment).toContainText("first.txt");
+    await expect(comment).toContainText("second.txt");
+    await expect(comment).not.toContainText("Uploading");
+  });
+
+  test("a file undone while it uploads and redone afterwards is its reference", async ({ page }) => {
+    await openNewWikiPage(page, "Undo an upload");
+    await editor(page).click();
+    await page.keyboard.type("Notes.");
+    // Not one step with the typing.
+    await page.waitForTimeout(600);
+    const release = await hold(page, /\/file\/dropupload\//);
+    await drop(page, "redo.txt");
+    await expect.poll(() => source(page)).toMatch(/\{Uploading redo\.txt \d+…\}/);
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe("Notes.");
+    release();
+    await expect(panel(page)).toBeHidden();
+    await page.keyboard.press("Control+y");
+    await expect.poll(() => source(page)).toMatch(/^Notes\.\s*\{F\d+\}$/);
+    // Undone again like any upload: the reference, then the file's place.
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe("Notes.");
   });
 
   test("a page saved with its button while a file uploads is saved when the upload is done; or not, if cancelled", async ({
@@ -4215,6 +4386,30 @@ test.describe("checkboxes in rendered text", () => {
     await expect.poll(raw).toBe(content.replace("  - [ ] nested", "  - [x] nested"));
   });
 
+  test("on a wiki page, boxes of items with relative links are saved", async ({ page }) => {
+    await page.goto("/");
+    const slug = `e2e-relative-${Date.now()}/`;
+    const content = "- [ ] see [[ ./child ]]\n- [ ] back [[ ../ ]]";
+    await conduit(page, "phriction.create", { slug, title: "Relative", content: "First." });
+    await conduit(page, "phriction.create", { slug: `${slug}child/`, title: "The Child", content: "Child." });
+    await conduit(page, "phriction.edit", { slug, content });
+    await page.goto(`/w/${slug}`);
+    await addPhlair(page);
+    const wiki = boxes(page, ".phui-document-content-view");
+    // The links show the titles of their pages, which the check must see the same.
+    await expect(page.locator(".phui-document-content-view li").first()).toContainText("The Child");
+    await wiki.first().click();
+    await saveNow(page);
+    const raw = async () =>
+      (
+        await conduit(page, "phriction.document.search", {
+          constraints: { paths: [slug] },
+          attachments: { content: true },
+        })
+      ).data[0].attachments.content.content.raw;
+    await expect.poll(raw).toBe(content.replace("- [ ] see", "- [x] see"));
+  });
+
   test("a save that fails is said, and the checkbox stays as it was", async ({ page }) => {
     await page.goto("/maniphest/");
     const task = await conduit(page, "maniphest.edit", {
@@ -4245,11 +4440,17 @@ test.describe("checkboxes in rendered text", () => {
     });
     await page.goto(`/T${task.object.id}`);
     await addPhlair(page);
-    const loaded = page.waitForResponse((response) => response.url().includes("/api/maniphest.search"));
+    // Someone else edits the text before the click, not its checkboxes: that stays.
+    await conduit(page, "maniphest.edit", {
+      objectIdentifier: `T${task.object.id}`,
+      transactions: [{ type: "description", value: "- [ ] one\n- [ ] two\n\nAdded meanwhile." }],
+    });
+    // Read and checked at the click.
+    const checked = page.waitForResponse((response) => response.url().includes("/api/remarkup.process"));
     await boxes(page, ".phui-property-list-text-content").first().click();
-    await loaded;
+    await checked;
     let reads = 0;
-    page.on("request", (request) => request.url().includes("/api/maniphest.search") && reads++);
+    page.on("request", (request) => /\/api\/(maniphest\.search|remarkup\.process)/.test(request.url()) && reads++);
     // Another tab, the tab closing, the screen locking: the page is hidden.
     const saved = page.waitForRequest((request) => request.url().includes("/api/maniphest.edit"));
     await page.evaluate(() => {
@@ -4262,7 +4463,113 @@ test.describe("checkboxes in rendered text", () => {
     const source = async () =>
       (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
         .raw;
-    await expect.poll(source).toBe("- [x] one\n- [ ] two");
+    await expect.poll(source).toBe("- [x] one\n- [ ] two\n\nAdded meanwhile.");
+  });
+
+  for (const leaving of [false, true]) {
+    test(`boxes are not saved when the text has other items at their place, as many as before${leaving ? ", also when the page is hidden" : ""}`, async ({
+      page,
+    }) => {
+      await page.goto("/maniphest/");
+      const task = await conduit(page, "maniphest.edit", {
+        transactions: [
+          { type: "title", value: "Reordered checkboxes" },
+          { type: "description", value: "- [ ] one\n- [ ] two" },
+        ],
+      });
+      await page.goto(`/T${task.object.id}`);
+      await addPhlair(page);
+      const reordered = "- [ ] two\n- [ ] **one**";
+      await conduit(page, "maniphest.edit", {
+        objectIdentifier: `T${task.object.id}`,
+        transactions: [{ type: "description", value: reordered }],
+      });
+      const shown = boxes(page, ".phui-property-list-text-content");
+      await shown.first().click();
+      // The click is taken a task later (after the browser put the box back).
+      await expect(shown.first()).toHaveClass(/rme-pending/);
+      if (leaving) {
+        await page.evaluate(() => {
+          Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+      } else {
+        await saveNow(page);
+      }
+      await expect(page.locator(".rme-check-note")).toContainText("changed meanwhile");
+      await expect(shown.first()).not.toBeChecked();
+      const source = async () =>
+        (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
+          .raw;
+      expect(await source()).toBe(reordered);
+    });
+  }
+
+  test("a box clicked while the boxes clicked before are saved keeps both when the page is hidden", async ({
+    page,
+  }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Two saves" },
+        { type: "description", value: "- [ ] one\n- [ ] two" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    const shown = boxes(page, ".phui-property-list-text-content");
+    // The first save is slow.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let edits = 0;
+    await page.route(/\/api\/maniphest\.edit/, async (route) => {
+      if (++edits === 1) {
+        await held;
+      }
+      await route.continue();
+    });
+    await shown.nth(0).click();
+    await saveNow(page);
+    await expect.poll(() => edits).toBe(1);
+    await shown.nth(1).click();
+    await expect(shown.nth(1)).toHaveClass(/rme-pending/);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    release();
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
+        .raw;
+    await expect.poll(source).toBe("- [x] one\n- [x] two");
+  });
+
+  test("boxes clicked are saved when the page is left before they would be", async ({ page }) => {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "Leave with a checkbox" },
+        { type: "description", value: "- [ ] one\n- [ ] two" },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    await addPhlair(page);
+    // The source is read and checked at the first click.
+    const checked = page.waitForResponse((response) => response.url().includes("/api/remarkup.process"));
+    await boxes(page, ".phui-property-list-text-content").nth(1).click();
+    await checked;
+    // The browser asks before leaving; leaving, it is saved.
+    let asked = false;
+    page.on("dialog", (dialog) => {
+      asked = dialog.type() === "beforeunload";
+      void dialog.accept();
+    });
+    await page.goto("/maniphest/");
+    expect(asked).toBe(true);
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
+        .raw;
+    await expect.poll(source).toBe("- [ ] one\n- [x] two");
   });
 
   test("leaving before the source is read: the browser asks, and meanwhile it is saved", async ({ page }) => {
@@ -4299,34 +4606,6 @@ test.describe("checkboxes in rendered text", () => {
       (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
         .raw;
     await expect.poll(source).toBe("- [x] one");
-  });
-
-  test("boxes clicked are saved when the page is left before they would be", async ({ page }) => {
-    await page.goto("/maniphest/");
-    const task = await conduit(page, "maniphest.edit", {
-      transactions: [
-        { type: "title", value: "Leave with a checkbox" },
-        { type: "description", value: "- [ ] one\n- [ ] two" },
-      ],
-    });
-    await page.goto(`/T${task.object.id}`);
-    await addPhlair(page);
-    // The source is read at the first click.
-    const loaded = page.waitForResponse((response) => response.url().includes("/api/maniphest.search"));
-    await boxes(page, ".phui-property-list-text-content").nth(1).click();
-    await loaded;
-    // The browser asks before leaving; leaving, it is saved.
-    let asked = false;
-    page.on("dialog", (dialog) => {
-      asked = dialog.type() === "beforeunload";
-      void dialog.accept();
-    });
-    await page.goto("/maniphest/");
-    expect(asked).toBe(true);
-    const source = async () =>
-      (await conduit(page, "maniphest.search", { constraints: { ids: [task.object.id] } })).data[0].fields.description
-        .raw;
-    await expect.poll(source).toBe("- [ ] one\n- [x] two");
   });
 
   test("a link followed (to the same page) saves first: the page it opens shows the boxes saved", async ({ page }) => {

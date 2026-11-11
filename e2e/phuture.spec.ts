@@ -109,8 +109,8 @@ test("snoozing until a picked day", async ({ page }) => {
   await expect(picker).toHaveCount(0);
 });
 
-// The old plugin woke items up an hour late east of UTC (and a day early
-// west of it): it took the UTC midnight of the day for its local one.
+// Days begin at the local midnight, east and west of UTC (taking the UTC
+// midnight would wake items up an hour late or a day early).
 // 23:30 on 4 November in each zone.
 const LATE_EVENING = {
   "Europe/Berlin": "2026-11-04T23:30:00+01:00",
@@ -136,33 +136,6 @@ for (const [timezoneId, lateEvening] of Object.entries(LATE_EVENING)) {
     });
   });
 }
-
-test("the snoozes of the old plugin are taken over", async ({ page }) => {
-  const [id, other] = await createTasks(page, "Snoozed by the old plugin", "Not snoozed");
-  await page.goto("/maniphest/");
-  await page.evaluate(
-    ([id, other]) => {
-      const inThreeDays = new Date();
-      inThreeDays.setDate(inThreeDays.getDate() + 3);
-      inThreeDays.setHours(0, 0, 0, 0);
-      localStorage.setItem(`T${id}`, inThreeDays.toISOString());
-      const yesterday = new Date(Date.now() - 86_400_000);
-      localStorage.setItem(`T${other}`, yesterday.toISOString());
-      localStorage.setItem("snooze override show", "false");
-    },
-    [id, other],
-  );
-  await openList(page, [id, other]);
-  await expect(item(page, id)).toBeHidden();
-  await expect(item(page, other)).toBeVisible();
-  await mainMenu(page, "Show snoozed items");
-  await expect(await snoozeButton(page, id)).toHaveText("+3");
-  expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([
-    "phuture-show-snoozed",
-    "phuture-snoozes",
-    "phuture-took-over-old-snoozes",
-  ]);
-});
 
 test("snoozes go to another browser by export and import", async ({ page, browser }) => {
   const [id] = await createTasks(page, "Snoozed elsewhere");
@@ -392,4 +365,9 @@ test("the menus work by keyboard: Enter or Space opens, the arrow keys move, Esc
   await page.keyboard.press(" ");
   await expect(item(page, id)).toBeHidden();
   await expect(count(page)).toHaveText("1");
+  // The item and its button are gone: the focus is on the note's Undo, which wakes it up again.
+  const undo = page.locator(".phuture-toast a", { hasText: "Undo" });
+  await expect(undo).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(item(page, id)).toBeVisible();
 });

@@ -72,14 +72,23 @@ function imagesToUpload(
         .trim()
         .slice(0, 40) || "pasted image";
     const placeholder = uploadPlaceholder(view, name);
-    const fallback = /^https?:/i.test(src) ? (alt ? `[[ ${src} | ${alt} ]]` : src) : alt;
+    const linked = /^https?:/i.test(src);
+    const fallback = linked ? (alt ? `[[ ${src} | ${alt} ]]` : src) : alt;
     if (existing?.phid) {
       const phid = existing.phid;
       // A PHID this Phorge does not have: an image of another Phorge, uploaded.
       const found = () => fileByPhid(phid).catch(() => fetchImage(src, name));
-      uploads.push([view, placeholder, found, name, fallback, existing.options]);
+      uploads.push([view, placeholder, found, name, fallback, existing.options, !linked]);
     } else {
-      uploads.push([view, placeholder, file ? async () => file : () => fetchImage(src, name), name, fallback]);
+      uploads.push([
+        view,
+        placeholder,
+        file ? async () => file : () => fetchImage(src, name),
+        name,
+        fallback,
+        "",
+        !linked,
+      ]);
     }
     return placeholder;
   };
@@ -140,10 +149,13 @@ export const pasting = EditorView.domEventHandlers({
     // Ctrl+Z after a paste gives the plain text.
     const raw = text.replace(/\r\n?/g, "\n");
     if (raw && raw !== insert) {
-      view.dispatch(state.replaceSelection(raw), { userEvent: "input.paste" });
+      const pasted = state.update(state.replaceSelection(raw), { userEvent: "input.paste" });
+      view.dispatch(pasted);
+      // Where the text went: the quote markers it is in may have been tidied (tidyQuotes).
+      const from = pasted.changes.mapPos(range.from, -1);
       view.dispatch({
-        changes: { from: range.from, to: range.from + raw.length, insert },
-        selection: { anchor: range.from + insert.length },
+        changes: { from, to: pasted.changes.mapPos(range.to, 1), insert },
+        selection: { anchor: from + insert.length },
         annotations: isolateHistory.of("before"),
         userEvent: "input.paste",
         scrollIntoView: true,

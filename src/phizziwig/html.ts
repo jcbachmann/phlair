@@ -13,9 +13,9 @@ export function parseHtml(html: string): DocumentFragment {
   return fragment;
 }
 
-/** Text as HTML. */
+/** Text as HTML, also for an attribute's value in double quotes. */
 export function escapeText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 /** Replaces the content of an element of the page with HTML of Phorge. */
