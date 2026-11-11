@@ -782,10 +782,16 @@ export class TableWidget extends WidgetType {
     wrap.append(table);
     dom.append(wrap);
 
-    // By the path of the event when it happened (see inCellEditor()).
+    // By the path of the event when it happened (see inCellEditor()). Only
+    // cells of this table: the path goes on to the page, whose layout may be
+    // a table too (Differential's), and a cell's editor empties its cell.
     const cellOf = (event: Event) =>
-      (event.composedPath().find((node) => node instanceof HTMLElement && /^T[DH]$/.test(node.tagName)) as
-        HTMLElement | undefined) ?? null;
+      event
+        .composedPath()
+        .find(
+          (node): node is HTMLTableCellElement =>
+            node instanceof HTMLTableCellElement && node.closest("table") === table,
+        ) ?? null;
     dom.addEventListener("focusin", (event) => {
       const cell = cellOf(event);
       // The cell itself, e.g. by the keyboard: its editor.

@@ -3220,6 +3220,66 @@ test.describe("feedback of T30666", () => {
   });
 });
 
+test.describe("feedback of T30675", () => {
+  /** Uploads a large image (a screenshot's size), whose cell is much taller than a line. */
+  async function largeImage(page: Page): Promise<number> {
+    const data = await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1200;
+      canvas.height = 900;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "#36c";
+      context.fillRect(0, 0, 1200, 900);
+      return canvas.toDataURL("image/png").split(",")[1];
+    });
+    const phid = await conduit(page, "file.upload", { name: `large-${Date.now()}.png`, data_base64: data });
+    return (await conduit(page, "file.info", { phid })).id;
+  }
+
+  test("a click beside a table edits the table, not the page's layout table around the editor", async ({ page }) => {
+    // Differential lays its page out in a table.
+    await createRevision(page, "Table with an image");
+    const id = await largeImage(page);
+    await addPhlair(page);
+    await editor(page).click();
+    await page.keyboard.insertText(`| {F${id}} |     |`);
+    await blur(page);
+    const form = page.locator(".phui-comment-form-view .rme-editor");
+    await form.scrollIntoViewIfNeeded();
+    const box = (await form.boundingBox())!;
+    // Below the table's row, beside its image.
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height - 15);
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toMatch(new RegExp(`^\\| \\{F${id}\\} \\| x +\\|$`));
+    await expect(page.locator(".phui-formation-view .rme-editor")).toHaveCount(1);
+    await expect(page.locator(".phui-header-header").first()).toBeVisible();
+  });
+
+  test("nothing of the editor shows over Phorge's image lightbox", async ({ page }) => {
+    // The whole page in the window: the editor is under the lightbox.
+    await page.setViewportSize({ width: 1280, height: 2000 });
+    await createRevision(page, "Lightbox over the editor");
+    const id = await largeImage(page);
+    const revision = /D(\d+)/.exec(page.url())![1];
+    await conduit(page, "differential.revision.edit", {
+      objectIdentifier: `D${revision}`,
+      transactions: [{ type: "comment", value: `Look:\n\n{F${id}}` }],
+    });
+    await page.reload();
+    await addPhlair(page);
+    await editor(page).click();
+    await page.keyboard.insertText("Text.");
+    await page.locator(".phui-timeline-view .phabricator-remarkup img").first().click();
+    await expect(page.locator(".lightbox-attachment")).toBeVisible();
+    // The editor's resize grip, at its bottom right corner, was drawn above it.
+    const covered = await page.locator(".phui-comment-form-view .rme-editor").evaluate((editor) => {
+      const box = editor.getBoundingClientRect();
+      return !!document.elementFromPoint(box.right - 3, box.bottom - 3)?.closest(".lightbox-attachment");
+    });
+    expect(covered).toBe(true);
+  });
+});
+
 test.describe("fixes of the review", () => {
   test("a new inline comment can be typed in right away: the editor takes the focus Phorge gives the textarea", async ({
     page,

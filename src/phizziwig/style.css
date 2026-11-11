@@ -50,6 +50,12 @@
   color: var(--rme-color, #000);
   resize: vertical;
   overflow: auto;
+  /*
+   * A stacking context of its own: browsers paint the resize grip and edge
+   * of a scrolling box above the page's overlays otherwise, e.g. Phorge's
+   * image lightbox.
+   */
+  isolation: isolate;
 }
 
 /*
