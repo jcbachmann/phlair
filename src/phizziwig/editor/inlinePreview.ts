@@ -31,6 +31,7 @@ import {
   appendInLists,
   clicked,
   clickPosition,
+  itemTextFrom,
   lineItems,
   listItems,
   previewField,
@@ -510,36 +511,75 @@ function markerArea(
  * A click on the bullet or number of a list item (left of its text, on its
  * first row) puts the cursor after it, where it shows its source for editing;
  * left of it, at the start of the line. A checkbox toggles instead
- * (ItemMarker).
+ * (ItemMarker). A tap right of the marker of an item without text: see
+ * tapEmptyItem().
  */
-const markerClick = EditorView.domEventHandlers({
-  mousedown(event, view) {
-    const area = markerArea(view, event);
-    if (!area) {
-      return false;
-    }
-    const { line, own, match, pos } = area;
-    const markerFrom = own.from + match[1].length;
-    // Where the marker starts: drawn, or its source while the cursor is on it.
-    const left = markerLeft(view, line) ?? view.coordsAtPos(markerFrom, 1)?.left;
-    if (left === undefined) {
-      return false;
-    }
-    event.preventDefault();
-    if (event.clientX < left) {
-      // Left of the marker: the start of the line (in a quote, of its text), before it and the indentation.
-      view.focus();
-      view.dispatch({ selection: { anchor: own.from }, userEvent: "select.pointer" });
-    } else if (markerLeft(view, line) !== null) {
-      editMarker(view, markerFrom);
-    } else {
-      // On the source of the marker: where the click is in it.
-      view.focus();
-      view.dispatch({ selection: { anchor: clicked(view, pos) }, userEvent: "select.pointer" });
-    }
-    return true;
+const markerClick = ViewPlugin.fromClass(
+  class {
+    /** Whether the last press was a touch: a tap's mousedown comes after its pointerdown. */
+    touched = false;
   },
-});
+  {
+    eventHandlers: {
+      pointerdown(event) {
+        this.touched = event.pointerType === "touch";
+        return false;
+      },
+      mousedown(event, view) {
+        return clickMarker(view, event, this.touched);
+      },
+    },
+  },
+);
+
+function clickMarker(view: EditorView, event: MouseEvent, touched: boolean): boolean {
+  const area = markerArea(view, event);
+  if (!area) {
+    return touched && tapEmptyItem(view, event);
+  }
+  const { line, own, match, pos } = area;
+  const markerFrom = own.from + match[1].length;
+  // Where the marker starts: drawn, or its source while the cursor is on it.
+  const left = markerLeft(view, line) ?? view.coordsAtPos(markerFrom, 1)?.left;
+  if (left === undefined) {
+    return false;
+  }
+  event.preventDefault();
+  if (event.clientX < left) {
+    // Left of the marker: the start of the line (in a quote, of its text), before it and the indentation.
+    view.focus();
+    view.dispatch({ selection: { anchor: own.from }, userEvent: "select.pointer" });
+  } else if (markerLeft(view, line) !== null) {
+    editMarker(view, markerFrom);
+  } else {
+    // On the source of the marker: where the click is in it.
+    view.focus();
+    view.dispatch({ selection: { anchor: clicked(view, pos) }, userEvent: "select.pointer" });
+  }
+  return true;
+}
+
+/**
+ * A tap right of the checkbox, bullet or number of an item without text puts
+ * the cursor where its text goes. On touch, the browser places the cursor,
+ * and Firefox puts it before them: the line has no text to put it in.
+ */
+function tapEmptyItem(view: EditorView, event: MouseEvent): boolean {
+  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (pos === null || event.button !== 0 || event.detail > 1) {
+    return false;
+  }
+  const line = view.state.doc.lineAt(pos);
+  const text = itemTextFrom(view.state, line);
+  const at = text === line.to ? view.coordsAtPos(text, 1) : null;
+  if (!at || event.clientX < at.left || event.clientY < at.top || event.clientY >= at.bottom) {
+    return false;
+  }
+  event.preventDefault();
+  view.focus();
+  view.dispatch({ selection: { anchor: text! }, userEvent: "select.pointer" });
+  return true;
+}
 
 /**
  * Where the bullet, number or checkbox of a list item starts on the screen;
