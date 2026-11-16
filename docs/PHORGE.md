@@ -3,15 +3,26 @@
 Phlair comes as a Phorge library (`phorge/` in this repository) that the server loads through
 `load-libraries`. It needs no patch: it only uses Phorge's extension points, so it survives Phorge upgrades.
 
-| Part                                    | Class                                | Does                                                                  |
-| --------------------------------------- | ------------------------------------ | --------------------------------------------------------------------- |
-| A setting per tool (On, Off)            | `PhizziwigSetting`, `PhutureSetting` | Per user; Phorge adds _Default_, which follows the default.           |
-| Settings panel, also in global defaults | `PhlairSettingsPanel`                | Users choose in _Settings → Phlair_.                                  |
-| Loads the tools                         | `PhlairMainMenuBarExtension`         | Starts `rsrc/phlair.js` on every page with the tools the user has on. |
-| The script                              | `PhlairCelerityResources`            | Serves `rsrc/phlair.js` through Celerity (cached, versioned URLs).    |
-| Images of pasted text from other sites  | `PhizziwigDownloadConduitAPIMethod`  | `phizziwig.download`: the server downloads and stores the image.      |
+| Part                                    | Class                                              | Does                                                                      |
+| --------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
+| A setting per tool (On, Off)            | `PhizziwigSetting`, `PhutureSetting`               | Per user; Phorge adds _Default_, which follows the default.               |
+| Settings panel, also in global defaults | `PhlairSettingsPanel`                              | Users choose in _Settings → Phlair_.                                      |
+| Loads the tools                         | `PhlairMainMenuBarExtension`                       | Starts `rsrc/phlair.js` on every page with the tools the user has on.     |
+| The script                              | `PhlairCelerityResources`                          | Serves `rsrc/phlair.js` through Celerity (cached, versioned URLs).        |
+| Images of pasted text from other sites  | `PhizziwigDownloadConduitAPIMethod`                | `phizziwig.download`: the server downloads and stores the image.          |
+| SharePoint's sharing links stay whole   | `PhizziwigSharePointRemarkupRule`                  | A remarkup rule: links them before `:x:` in them becomes an emoji.        |
+| SharePoint folders in Explorer (option) | `OneDripheSetting`                                 | Per user, off: "In Explorer" with OneDriphe, Phlair's helper for Windows. |
+| OneDriphe's installer and uninstaller   | `PhlairApplication`, `OneDripheDownloadController` | Downloads in `/phlair/onedriphe/`, linked from the setting.               |
 
-A new tool is a new subclass of `PhlairToolSetting`, whose key names the tool in the script (`src/tools.ts`).
+A new tool is a new subclass of `PhlairToolSetting`, whose key names the tool in the script (`src/tools.ts`). An
+option of a tool is a setting of the panel of its own, which `PhlairMainMenuBarExtension` passes to the script
+(`Option` in `src/tools.ts`).
+
+Opening links in Explorer only works on computers with [OneDriphe](../phorge/onedriphe/README.md), Phlair's helper for
+Windows (`phorge/onedriphe/`, part of the library). Users install it themselves with the steps and the download in the
+setting.
+Where IT installs it on every computer, the administrator can turn the option on for everyone in _Global Default
+Settings_.
 
 ## Build
 
@@ -39,7 +50,12 @@ load the new version right away.
 ## Who gets what
 
 - **Defaults:** every tool is off, so installing Phlair changes nothing until someone turns a tool on: testers for
-  themselves, then the administrator for everyone in _Settings → Global Default Settings → Phlair_.
+  themselves, then the administrator for everyone in _Settings → Global Default Settings → Phlair_. The one exception
+  is the remarkup rule for SharePoint's sharing links (e.g. `https://x.sharepoint.com/:x:/s/Site/Eab…`): Phorge turned
+  their `:x:`, `:b:`, `:v:` and `:o:` into emoji, which broke the links, and the rule keeps them whole for everyone,
+  rendered like any other link. Phorge renders a text for all viewers alike and caches it, so a rule can not depend
+  on a user's setting. Adding the rule (or a new `getRuleVersion()`) changes the key of Phorge's cache of rendered
+  text, so texts written before render again, with working links.
 - **Users** choose per tool in _Settings → Phlair_: _Default (On/Off)_ follows the default, _On_ and _Off_ are their
   own choice. Phizziwig's wand button in the remarkup toolbar switches to the plain text field for the page only.
 - **Nobody:** remove the library from `load-libraries`. The stored settings stay and apply again if it is added back.

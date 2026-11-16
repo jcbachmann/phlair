@@ -7,6 +7,7 @@
 
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { GFM, parser } from "@lezer/markdown";
+import { linkMarkup, linkTarget as markupTarget } from "./linkMarkup";
 
 const markdown = parser.configure(GFM);
 
@@ -177,7 +178,7 @@ function convert(node: SyntaxNode, text: string, references: Map<string, string>
       const alt = linkText(node, text);
       const url = linkTarget(node, text, references);
       if (url) {
-        replace(node.from, node.to, alt ? `[[ ${url} | ${alt} ]]` : url);
+        replace(node.from, node.to, alt ? linkMarkup(url, alt) : url);
       }
       return;
     }
@@ -188,12 +189,20 @@ function convert(node: SyntaxNode, text: string, references: Map<string, string>
       if (url && !simple) {
         const label = node.getChildren("LinkMark")[0];
         const close = node.getChildren("LinkMark")[1];
-        replace(node.from, label.to, `[[ ${url} | `);
-        replace(close?.from ?? node.to, node.to, " ]]");
-        // The link text keeps its own markup (converted below).
+        const end = close?.from ?? node.to;
+        replace(node.from, label.to, `[[ ${markupTarget(url)} | `);
+        replace(end, node.to, " ]]");
+        // The link text keeps its own markup (converted below). Its brackets
+        // can only be escaped ones ("\]", else it is no link), which would end
+        // Phorge's link: as parentheses (see linkMarkup.ts).
         for (let child = node.firstChild; child; child = child.nextSibling) {
-          if (child.from >= label.to && child.to <= (close?.from ?? node.to) && child.name !== "LinkMark") {
-            convert(child, text, references, edits);
+          if (child.from >= label.to && child.to <= end && child.name !== "LinkMark") {
+            const escaped = child.name === "Escape" ? text[child.from + 1] : "";
+            if (escaped === "[" || escaped === "]") {
+              replace(child.from, child.to, escaped === "[" ? "(" : ")");
+            } else {
+              convert(child, text, references, edits);
+            }
           }
         }
         return;

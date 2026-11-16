@@ -104,6 +104,12 @@ const CASES = [
   "{anchor\u00a0#x} {anchor #x}",
   "a\n\u00a0rmecat\nb",
   "~~\u00a0a~~ __\u00a0a__",
+  // SharePoint's sharing links, linked before ":x:" becomes an emoji (the Phlair library's rule).
+  "https://contoso.sharepoint.com/:x:/s/Projects/EaB3?e=Ab12. <https://contoso.sharepoint.com/:b:/r/sites/X/a.pdf>",
+  "{https://contoso.sharepoint.com/:v:/g/personal/a_b/Ex} https://example.com/:x:/y x:x: https://contoso.sharepoint.com",
+  "(https://contoso.sharepoint.com/:o:/s/A/B) [[ https://contoso.sharepoint.com/:x:/s/A/B | name ]] `https://contoso.sharepoint.com/:x:/s/A`",
+  "**https://contoso.sharepoint.com/:m:/s/A** xhttps://contoso.sharepoint.com/:x:/s/A https://contoso.sharepoint.com/sites/A/:x:/b",
+  "{image https://contoso.sharepoint.com/:i:/s/A/a.png} [n](https://contoso.sharepoint.com/:x:/s/A/B)",
   // Everything at once.
   "**T1 and @alice** //[[ /w/x | link ]]// ~~{F1}~~ __:smile:__ !!`mono`!!",
 ];
@@ -117,6 +123,7 @@ const PARTS = [
   "{src a.txt}", "{meme, src=rmecat, above=a}", "[[ /w/x | name ]]", "[[ nopage_xyz ]]", "[[ https://example.com ]]",
   "[n](https://example.com/z)", "http://example.com/x", "https://example.com/(a)", "<https://example.com/x>",
   "{https://example.com}", "${{{strings.platform.server.name}}}", "@{nope}", "{image https://example.com/a.png}",
+  "https://contoso.sharepoint.com/:x:/s/a/b", ":x:",
 ];
 // Formatting is rare in random combinations of everything: these make it
 // common, nested and crossed.
@@ -124,6 +131,7 @@ const PARTS = [
 const FORMATTING = [
   "**", "**", "//", "//", "~~", "~~", "__", "__", "!!", "!!", "`", "##", "a", "b c", "d", "\n", " ", " ", "!", "~",
   "_", "/", "*", ":", "T1", "@alice", "[[ /w/x | n ]]", ":smile:", "http://example.com/x", "{F1}",
+  "https://contoso.sharepoint.com/:x:/s/a",
 ];
 const SEPARATORS = ["", "", " ", " ", " ", "\n", ", ", ". ", "  "];
 

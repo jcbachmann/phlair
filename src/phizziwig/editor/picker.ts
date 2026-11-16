@@ -5,6 +5,7 @@
 
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, EditorView } from "@codemirror/view";
+import { linkMarkup } from "../linkMarkup";
 import { conduit, typeahead } from "../phorge";
 import { syncFocus } from "./focus";
 import { Popup, type PopupItem } from "./popup";
@@ -146,7 +147,7 @@ async function findObjects(query: string): Promise<Target[]> {
         label: r.displayName,
         icon: r.icon || "fa-file-o",
         closed: r.closed,
-        reference: r.autocomplete || monogram || `[[ ${r.uri} | ${r.displayName} ]]`,
+        reference: r.autocomplete || monogram || linkMarkup(r.uri, r.displayName),
         target: r.uri,
       };
     });

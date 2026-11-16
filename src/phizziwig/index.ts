@@ -8,12 +8,14 @@ import { enableCheckboxes } from "./checkboxes";
 import { watchCommentForms } from "./commentForm";
 import { closePicker } from "./editor/picker";
 import { TEXTAREA } from "./phorge";
+import { enhanceSharePointLinks } from "./sharePointLinks";
 import css from "./style.css";
 
 function enhanceAll(root: ParentNode): void {
   root.querySelectorAll<HTMLTextAreaElement>(TEXTAREA).forEach(enhance);
   watchCommentForms(root);
   enableCheckboxes(root);
+  enhanceSharePointLinks(root);
 }
 
 export function startPhizziwig(): void {

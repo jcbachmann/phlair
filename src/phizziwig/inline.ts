@@ -26,6 +26,7 @@
 // see licenses/Phabricator-LICENSE.txt and Phabricator-NOTICE.txt), changed.
 
 import { EMOJI } from "./emoji";
+import { SHARE_LINK } from "./sharepoint";
 
 export type InlineKind =
   /** "`x`" and "##x##": monospaced text, nothing in it is rendered. */
@@ -105,6 +106,12 @@ export interface InlineOptions {
    * not PHP 8's. The dev container runs PHP 7.4.
    */
   php7?: boolean;
+  /**
+   * Whether the server has the Phlair library's rule for SharePoint links
+   * (PhizziwigSharePointRemarkupRule). By default, when this is the library's
+   * build; the browser builds may run on a Phorge without it.
+   */
+  sharePoint?: boolean;
 }
 
 /** URI protocols Phorge links by default (its "uri.allowed-protocols"). */
@@ -468,7 +475,11 @@ const anchorRule = replace(new RegExp(`\\{anchor${S}+#([^ \\t\\n\\x0B\\f\\r}]+)\
 
 // Hyperlinks: "<uri>" (linked exactly), "{uri}" (rendered as text unless an
 // extension handles it) and bare URIs. A URI never includes a stored token.
-const URI = `\\w{3,32}://[^ \\t\\n\\x0B\\f\\r${MAGIC}]`;
+const URI_CHAR = `[^ \\t\\n\\x0B\\f\\r${MAGIC}]`;
+const URI = `\\w{3,32}://${URI_CHAR}`;
+const ANGLE_URI = new RegExp(`<(${URI}+?)>`, "dg");
+const CURLY_URI = new RegExp(`\\{(${URI}+?)\\}`, "dg");
+const BARE_URI = new RegExp(`(?<!\\w)${URI}+`, "dg");
 
 function hyperlink(text: Text, start: number, finish: number, content?: [number, number]): Edit[] | null {
   const uri = content ? text.w.slice(content[0], content[1]) : text.w.slice(start, finish);
@@ -479,22 +490,60 @@ function hyperlink(text: Text, start: number, finish: number, content?: [number,
   return [text.store("url", start, finish, content)];
 }
 
+/**
+ * The length of a bare URI: punctuation at the end is not part of it ("see
+ * https://x.y/."), and neither is a closing parenthesis without an opening one.
+ */
+function bareLength(uri: string): number {
+  let link = uri.replace(/[;,.:!?]+$/, "");
+  if (link.endsWith(")") && !link.includes("(")) {
+    link = link.slice(0, -1);
+  }
+  return link.length;
+}
+
 const hyperlinkRule = sequence(
-  replace(new RegExp(`<(${URI}+?)>`, "dg"), (match, text) =>
-    hyperlink(text, match.index, end(match), group(match, 1)!),
-  ),
-  replace(new RegExp(`\\{(${URI}+?)\\}`, "dg"), (match, text) =>
-    hyperlink(text, match.index, end(match), group(match, 1)!),
-  ),
-  replace(new RegExp(`(?<!\\w)${URI}+`, "dg"), (match, text) => {
-    // Punctuation at the end is not part of the URI ("see https://x.y/."),
-    // and neither is a closing parenthesis without an opening one.
-    let link = match[0].replace(/[;,.:!?]+$/, "");
-    if (link.endsWith(")") && !link.includes("(")) {
-      link = link.slice(0, -1);
+  replace(ANGLE_URI, (match, text) => hyperlink(text, match.index, end(match), group(match, 1)!)),
+  replace(CURLY_URI, (match, text) => hyperlink(text, match.index, end(match), group(match, 1)!)),
+  replace(BARE_URI, (match, text) => hyperlink(text, match.index, match.index + bareLength(match[0]))),
+);
+
+/**
+ * What the hyperlink rule does to a range of the text alone, as when the
+ * library's rule hands it a match: its patterns in its order, each on the
+ * text as the previous one left it ("https://x{https://y}" is two).
+ */
+function hyperlinksIn(text: Text, from: number, to: number): Edit[] {
+  // The range, with what is stored masked like a stored token (no URI goes
+  // into one, and its "Z" is a word character).
+  let range = text.w.slice(from, to);
+  const edits: Edit[] = [];
+  for (const pattern of [ANGLE_URI, CURLY_URI]) {
+    const stored: Edit[] = [];
+    for (const match of range.matchAll(pattern)) {
+      const [start, finish] = group(match, 1)!;
+      stored.push(...(hyperlink(text, from + match.index, from + end(match), [from + start, from + finish]) ?? []));
     }
-    return hyperlink(text, match.index, match.index + link.length);
-  }),
+    for (const edit of stored) {
+      const [start, finish] = [edit.start - from, edit.end - from];
+      range = range.slice(0, start) + MAGIC.repeat(finish - start - 1) + "Z" + range.slice(finish);
+    }
+    edits.push(...stored);
+  }
+  for (const match of range.matchAll(BARE_URI)) {
+    edits.push(...(hyperlink(text, from + match.index, from + match.index + bareLength(match[0])) ?? []));
+  }
+  return edits.sort((a, b) => a.start - b.start);
+}
+
+// The Phlair library's rule (PhizziwigSharePointRemarkupRule): SharePoint's
+// sharing links ("https://x.sharepoint.com/:x:/s/Site/Eab…") are handed to
+// the hyperlink rule before the emoji rule would turn ":x:" into an emoji.
+const SHARE_URI = SHARE_LINK.source + URI_CHAR;
+const sharePointRule = sequence(
+  ...[`<${SHARE_URI}+?>`, `\\{${SHARE_URI}+?\\}`, `(?<!\\w)${SHARE_URI}+`].map((pattern) =>
+    replace(new RegExp(pattern, "dg"), (match, text) => hyperlinksIn(text, match.index, end(match))),
+  ),
 );
 
 // The object rules (PhabricatorObjectRemarkupRule): "{T12, options}" embeds
@@ -661,17 +710,21 @@ const REGISTERED: [number, Rule][] = [
   [200, anchorRule],
   // The color rule again, as a custom rule (it is one).
   [1000, hexColorRule],
+  // The custom rule of the Phlair library, if it is installed (see InlineOptions.sharePoint).
+  [190, sharePointRule],
 ];
 
 // PHP 7's sort is not stable: it orders rules of equal priority differently,
-// here as PHP 7.4 does for the rules above (the dev container's order; by
-// index into them). It matters where such rules overlap: nested braces
-// ("{icon {key x}}", "@{nav x}"), and a reference right after an embed
+// here as PHP 7.4 does for the rules above (the dev container's order, with
+// the Phlair library's rule; by index into them). The order depends on the
+// number of rules: print the keys of a block rule's getMarkupRules() in the
+// container after adding one. It matters where such rules overlap: nested
+// braces ("{icon {key x}}", "@{nav x}"), and a reference right after an embed
 // ("{F1}T1": in PHP 8's order "T1" is stored first, so no word character
-// follows "{F1}" and it is an embed; in PHP 7's, it is "{", "F1" and "}").
+// follows "{F1}" and it is an embed; in PHP 7's, it may be "{", "F1" and "}").
 const PHP7_ORDER = [
-  0, 1, 2, 4, 17, 7, 45, 16, 31, 33, 39, 9, 8, 6, 5, 37, 35, 26, 32, 30, 29, 28, 27, 34, 18, 25, 24, 22, 21, 20, 19, 13,
-  12, 11, 36, 15, 14, 23, 38, 10, 40, 41, 42, 43, 44, 3, 46,
+  0, 1, 2, 4, 17, 47, 7, 16, 31, 33, 5, 6, 39, 45, 9, 8, 37, 36, 35, 26, 32, 30, 29, 28, 34, 27, 25, 19, 11, 13, 18, 12,
+  20, 21, 22, 24, 15, 14, 38, 23, 10, 3, 40, 41, 42, 43, 44, 46,
 ];
 
 const PHP7_RULES = PHP7_ORDER.map((index) => REGISTERED[index][1]);
@@ -769,8 +822,11 @@ function buildTree(pieces: Piece[], textEnd: number): InlineToken[] {
 export function tokenizeInline(text: string, options: InlineOptions = {}): InlineToken[] {
   const [from, to] = phpTrim(text);
   const working = new Text(text, from, to, options.isMacro ?? (() => true));
+  const sharePoint = options.sharePoint ?? __TARGET__ === "phorge";
   for (const rule of options.php7 ? PHP7_RULES : PHP8_RULES) {
-    rule(working);
+    if (sharePoint || rule !== sharePointRule) {
+      rule(working);
+    }
   }
   return buildTree(working.pieces, to);
 }

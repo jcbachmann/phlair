@@ -7,7 +7,16 @@
 import { isolateHistory } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { matchesKey } from "../keys";
-import { htmlToRemarkup, type ImageMarkup, markdownToRemarkup, shouldConvertHtml, tsvToRemarkup } from "../paste";
+import {
+  genericLinkName,
+  htmlToRemarkup,
+  type ImageMarkup,
+  markdownToRemarkup,
+  sharePointToRemarkup,
+  shouldConvertHtml,
+  tsvToRemarkup,
+} from "../paste";
+import { linkMarkup } from "../linkMarkup";
 import { embeddedFile, fetchImage, fileByPhid } from "../phorge";
 import { inMonospace, LITERAL_BLOCKS, QUOTE_LINE, quoteDepth, quoteMarkers } from "../syntax";
 import { blockAtCursor } from "./livePreview";
@@ -31,7 +40,7 @@ export function linkSelection(view: EditorView, text: string): boolean {
   ) {
     return false;
   }
-  const insert = `[[ ${text} | ${selected} ]]`;
+  const insert = linkMarkup(text, selected);
   view.dispatch({
     changes: { from: range.from, to: range.to, insert },
     selection: { anchor: range.from + insert.length },
@@ -73,7 +82,7 @@ function imagesToUpload(
         .slice(0, 40) || "pasted image";
     const placeholder = uploadPlaceholder(view, name);
     const linked = /^https?:/i.test(src);
-    const fallback = linked ? (alt ? `[[ ${src} | ${alt} ]]` : src) : alt;
+    const fallback = linked ? (alt ? linkMarkup(src, alt) : src) : alt;
     if (existing?.phid) {
       const phid = existing.phid;
       // A PHID this Phorge does not have: an image of another Phorge, uploaded.
@@ -123,11 +132,18 @@ export const pasting = EditorView.domEventHandlers({
     const uploads: Parameters<typeof uploadInPlace>[] = [];
     if (!plain && html && (shouldConvertHtml(html, text) || /<img\s/i.test(html))) {
       insert = htmlToRemarkup(html, imagesToUpload(view, data, uploads));
-    } else if (!plain && text) {
-      insert = tsvToRemarkup(text) ?? markdownToRemarkup(text);
     }
     const { state } = view;
     const range = state.selection.main;
+    if (!plain && text && insert === null) {
+      const line = state.doc.lineAt(range.from);
+      insert =
+        (inMonospace(state.sliceDoc(line.from, range.from)) ? null : sharePointToRemarkup(text)) ??
+        tsvToRemarkup(text) ??
+        markdownToRemarkup(text);
+    }
+    // A link's name that is only its kind of file, to be typed over.
+    const name = insert === null ? null : genericLinkName(insert);
     const markers = block?.kind === "quote" ? QUOTE_LINE.exec(state.doc.lineAt(range.from).text)?.[1] : undefined;
     const quote = markers && quoteMarkers(quoteDepth(markers));
     if (quote) {
@@ -155,7 +171,7 @@ export const pasting = EditorView.domEventHandlers({
       const from = pasted.changes.mapPos(range.from, -1);
       view.dispatch({
         changes: { from, to: pasted.changes.mapPos(range.to, 1), insert },
-        selection: { anchor: from + insert.length },
+        selection: name ? { anchor: from + name[0], head: from + name[1] } : { anchor: from + insert.length },
         annotations: isolateHistory.of("before"),
         userEvent: "input.paste",
         scrollIntoView: true,

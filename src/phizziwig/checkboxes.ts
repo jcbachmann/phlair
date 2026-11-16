@@ -14,6 +14,7 @@
 import { setCheckmark, checkmarks } from "./checkmarks";
 import { parseHtml } from "./html";
 import { conduit, editComment } from "./phorge";
+import { asRendered } from "./sharePointLinks";
 
 /** A text of the page whose checkboxes can be saved. */
 interface Entry {
@@ -359,10 +360,13 @@ async function save({ entry, changes, read, loaded }: Pending, leaving: boolean)
   }
 }
 
-/** The text of a checkbox's item, as rendered. */
+/** The text of a checkbox's item, as Phorge rendered it. */
 function itemText(box: Element): string {
   const item = box.closest("li")?.cloneNode(true) as Element | undefined;
   item?.querySelectorAll(".rme-check-note").forEach((note) => note.remove());
+  if (item) {
+    asRendered(item);
+  }
   return (item?.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 

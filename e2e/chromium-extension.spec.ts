@@ -61,6 +61,38 @@ test("the browser extension adds the editor in Chromium", async ({ browserName, 
     await expect(page.locator("html")).toHaveAttribute("data-phizziwig", "extension");
     await expect(page.locator("html")).not.toHaveAttribute("data-phuture");
     await expect(page.locator(".phuture-menu-button")).toHaveCount(0);
+
+    // The option for OneDriphe is off until it is chosen; its way to open a link shows on Windows only.
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setUserAgentOverride", {
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0",
+    });
+    const folder =
+      "https://contoso.sharepoint.com/sites/P/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FP%2FShared%20Documents%2FPlans";
+    const addFolderLink = () =>
+      page.evaluate((href) => {
+        document.body.insertAdjacentHTML(
+          "beforeend",
+          `<div class="phabricator-remarkup"><a href="${href}">Plans</a></div>`,
+        );
+      }, folder);
+    await page.reload();
+    await addFolderLink();
+    const plans = page.locator("a.phizziwig-sharepoint", { hasText: "Plans" });
+    await expect(plans).toBeVisible();
+    // Without the option, a folder opens in the browser only: a plain link.
+    await expect(plans).not.toHaveAttribute("aria-haspopup");
+    const explorer = options.getByRole("checkbox", { name: /^OneDriphe/ });
+    await expect(explorer).not.toBeChecked();
+    await explorer.check();
+    await page.reload();
+    await addFolderLink();
+    await plans.click();
+    await expect(page.locator(".phizziwig-sharepoint-menu .phabricator-action-view-item")).toHaveText([
+      "Open folder",
+      "In the browser",
+      "In Explorer",
+    ]);
   } finally {
     await context.close();
     rmSync(profile, { recursive: true, force: true });

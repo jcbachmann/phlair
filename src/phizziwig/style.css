@@ -1369,3 +1369,44 @@ body:has(.rme-active) .phui-remarkup-preview {
 .device-phone .rme-active > .remarkup-assist-bar .remarkup-assist-separator {
   display: none;
 }
+
+/* SharePoint and OneDrive links in rendered text (sharePointLinks.ts). */
+.phizziwig-sharepoint-icon {
+  margin-right: 4px;
+  color: inherit;
+}
+
+/* While an app opens a link: under the link, like Phorge's tooltips. */
+.phizziwig-sharepoint-note {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 6px 10px;
+  border-radius: 3px;
+  background: #222;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.phizziwig-sharepoint-note .phui-icon-view {
+  color: inherit;
+}
+
+.phizziwig-sharepoint-note a {
+  color: #a8d4ff;
+  text-decoration: underline;
+}
+
+.phizziwig-sharepoint-note-close {
+  margin-left: auto;
+  padding: 0 0 0 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}

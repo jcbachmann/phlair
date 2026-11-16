@@ -5074,3 +5074,172 @@ test.describe("images by their lines", () => {
     await expect(page.locator(".rme-image-menu")).toBeVisible();
   });
 });
+
+test.describe("SharePoint links", () => {
+  const SHARE = "https://contoso.sharepoint.com/:x:/s/Projects/EaB3c-Xy_Z?e=Ab12cd";
+  // A computer with Office's apps: the button for the desktop app shows (not on Linux).
+  test.use({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+  });
+
+  test("a link pasted alone gets a name to type over; Ctrl+Z gives the URL as pasted", async ({ page }) => {
+    await openNewWikiPage(page, "SharePoint paste");
+    await editor(page).click();
+    await page.keyboard.type("See ");
+    await paste(page, { text: SHARE });
+    await expect.poll(() => source(page)).toBe(`See [[ ${SHARE} | Excel workbook in Projects ]]`);
+    await page.keyboard.type("Budget 2027");
+    await expect.poll(() => source(page)).toBe(`See [[ ${SHARE} | Budget 2027 ]]`);
+
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await paste(page, { html: `<a href="${SHARE}">${SHARE}</a>` });
+    await expect.poll(() => source(page)).toBe(`[[ ${SHARE} | Excel workbook in Projects ]]`);
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe(SHARE);
+
+    // Not in code.
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("`curl `");
+    await page.keyboard.press("ArrowLeft");
+    await paste(page, { text: SHARE });
+    await expect.poll(() => source(page)).toBe(`\`curl ${SHARE}\``);
+  });
+
+  test("rendered links keep their text, tell about their file on hover, and offer the ways to open them", async ({
+    page,
+  }) => {
+    const spec = "https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Spec.docx";
+    const person = "https://contoso-my.sharepoint.com/person.aspx";
+    await page.clock.install();
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "SharePoint links" },
+        // Unique: Phorge caches the rendering of a text.
+        {
+          type: "description",
+          value: `Numbers ${Date.now()}: ${SHARE}.\n\nSpec: [[ ${spec} | the spec ]]\n\nProfile: ${person}`,
+        },
+      ],
+    });
+    await page.goto(`/T${task.object.id}`);
+    // Phorge with the Phlair library links it whole: ":x:" is no emoji.
+    const description = page.locator(".phabricator-remarkup").first();
+    await expect(description.locator("a").first()).toHaveAttribute("href", SHARE);
+    await expect(description.locator("a").first()).toHaveText(SHARE);
+    await expect(description).not.toContainText("❌");
+
+    await addPhlair(page);
+    const numbers = description.locator("a.phizziwig-sharepoint").first();
+    await expect(numbers.locator(".phui-icon-view")).toHaveClass(/fa-file-excel-o/);
+    await expect(numbers).toHaveText(SHARE);
+    await expect(numbers).toHaveAttribute("href", SHARE);
+    await expect(numbers).toHaveAttribute("title", "Excel workbook\nin Projects\nClick to choose how to open it");
+    const menu = page.locator(".phizziwig-sharepoint-menu");
+    // The headings and the items under them, and the items alone.
+    const items = menu.locator(".phabricator-action-view-item");
+    const choices = menu.getByRole("menuitem");
+    await numbers.click();
+    await expect(items).toHaveText(["Open file", "In the browser", "In Excel"]);
+    await expect(choices).toHaveText(["In the browser", "In Excel"]);
+    // The focus is on the first item, as in Phorge's menus.
+    await expect(choices.first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+
+    const named = description.locator("a.phizziwig-sharepoint", { hasText: "the spec" });
+    await expect(named.locator(".phui-icon-view")).toHaveClass(/fa-file-word-o/);
+    await expect(named).toHaveAttribute(
+      "title",
+      "Word document: Spec.docx\nin Projects › Shared Documents\nClick to choose how to open it",
+    );
+    // Nothing next to the links.
+    await expect(description.locator("a")).toHaveCount(3);
+    await named.click();
+    // The userscript has every option on, also OneDriphe's: links with a path have its way.
+    await expect(items).toHaveText([
+      "Open file",
+      "In the browser",
+      "In Word",
+      "Open file location",
+      "In the browser",
+      "In Explorer",
+    ]);
+    // A page opens as the link does: in a new tab (here without SharePoint). The third item: the location in the browser.
+    await page.context().route("https://contoso.sharepoint.com/**", (route) => route.fulfill({ body: "SharePoint" }));
+    const [folder] = await Promise.all([page.waitForEvent("popup"), choices.nth(2).click()]);
+    await folder.waitForLoadState();
+    expect(folder.url()).toBe("https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/");
+    await folder.close();
+
+    // An app: a note while it starts, which tells what to do when nothing happens.
+    await named.click();
+    await choices.getByText("In Explorer").click();
+    const note = page.locator(".phizziwig-sharepoint-note");
+    await expect(note).toHaveText("Opening in Explorer…");
+    await page.clock.runFor(5_000);
+    await expect(note).toContainText("Nothing happening? If the browser asks, allow it to open OneDriphe.");
+    await expect(note.getByRole("link", { name: "install it" })).toHaveAttribute("href", "/settings/panel/phlair/");
+    await note.getByRole("button", { name: "Close" }).click();
+    await expect(note).toHaveCount(0);
+
+    // Other pages of SharePoint are links like any other.
+    await expect(description.locator(`a[href="${person}"]`)).not.toHaveClass(/phizziwig-sharepoint/);
+    await expect(description.locator(".phizziwig-sharepoint")).toHaveCount(2);
+  });
+
+  test("the editor shows them as rendered text does", async ({ page }) => {
+    const spec = "https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Spec.docx";
+    await openNewWikiPage(page, "SharePoint in the editor");
+    await editor(page).click();
+    await page.keyboard.insertText(`Numbers: ${SHARE} and [[ ${spec} | the spec ]].\n\nThe end.`);
+    await settled(page);
+    const links = page.locator(".rme-editor a.phizziwig-sharepoint");
+    await expect(links).toHaveCount(2);
+    await expect(links.nth(0).locator(".phui-icon-view")).toHaveClass(/fa-file-excel-o/);
+    await expect(links.nth(0)).toHaveText(SHARE);
+    await expect(links.nth(0)).toHaveAttribute("title", "Excel workbook\nin Projects\nClick to choose how to open it");
+    await expect(links.nth(1)).toHaveText("the spec");
+    await expect(links.nth(1).locator(".phui-icon-view")).toHaveClass(/fa-file-word-o/);
+    // Ctrl+click, as for every link in the editor, shows the ways to open it.
+    await links.nth(1).click({ modifiers: ["ControlOrMeta"] });
+    await expect(page.locator(".phizziwig-sharepoint-menu .phabricator-action-view-item")).toHaveText([
+      "Open file",
+      "In the browser",
+      "In Word",
+      "Open file location",
+      "In the browser",
+      "In Explorer",
+    ]);
+    await page.keyboard.press("Escape");
+    // Only shown: the text is as typed.
+    expect(await source(page)).toBe(`Numbers: ${SHARE} and [[ ${spec} | the spec ]].\n\nThe end.`);
+  });
+
+  test("the checkbox of an item with such a link is saved", async ({ page }) => {
+    // A save compares the item's text with Phorge's rendering, which shows the URL.
+    await page.clock.install();
+    await page.goto("/maniphest/");
+    const text = `- [ ] check ${SHARE} (${Date.now()})`;
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "SharePoint checklist" },
+        { type: "description", value: text },
+      ],
+    });
+    const id = task.object.id;
+    await page.goto(`/T${id}`);
+    await addPhlair(page);
+    // Its icon is not Phorge's text.
+    await expect(page.locator("a.phizziwig-sharepoint .phizziwig-sharepoint-icon")).toBeVisible();
+    await page.locator(".phui-property-list-text-content ul.remarkup-list-with-checkmarks input").click();
+    await page.clock.runFor(5_000);
+    const source = async () =>
+      (await conduit(page, "maniphest.search", { constraints: { ids: [id] } })).data[0].fields.description.raw;
+    await expect.poll(source).toBe(text.replace("- [ ]", "- [x]"));
+    await expect(page.locator(".rme-check-note")).toHaveCount(0);
+  });
+});

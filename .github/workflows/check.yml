@@ -1,6 +1,6 @@
 # Formatting, types and unit tests, the extension against AMO's rules, the
-# library's PHP on old and new PHP, and the E2E tests against the Phorge of
-# dev/phorge, as they run locally (README.md).
+# library's PHP on old and new PHP, OneDriphe on Windows, and the E2E tests
+# against the Phorge of dev/phorge, as they run locally (README.md).
 name: Check
 
 on:
@@ -47,6 +47,22 @@ jobs:
           tools: none
       - name: Syntax of the library
         run: find phorge -name '*.php' -print0 | xargs -0 -n1 php -l
+
+  # OneDriphe (phorge/onedriphe) in Windows PowerShell 5.1 on Windows itself:
+  # its tests, and installing and removing it (as administrator).
+  onedriphe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tests
+        shell: powershell
+        run: ./phorge/onedriphe/onedriphe.tests.ps1
+      - name: Installing and removing
+        shell: powershell
+        run: ./phorge/onedriphe/windows.tests.ps1
+      - name: Compatible with Windows PowerShell 5.1
+        shell: pwsh
+        run: ./phorge/onedriphe/compatibility.ps1
 
   e2e:
     runs-on: ubuntu-latest

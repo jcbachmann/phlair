@@ -3,7 +3,7 @@
 
 import { startPhizziwig } from "./phizziwig";
 import { startPhuture } from "./phuture";
-import { enabledTools, type Tool } from "./tools";
+import { chooseOptions, chosenOptions, enabledTools, type Options, type Tool } from "./tools";
 
 const START: Record<Tool, () => void> = { phizziwig: startPhizziwig, phuture: startPhuture };
 
@@ -27,8 +27,14 @@ function start(tools: Tool[]): void {
 }
 
 if (__TARGET__ === "phorge") {
-  // The library's main menu extension starts it with the tools the user has on.
-  JX.behavior("phlair", (config: { tools: Tool[] }) => start(config.tools));
+  // The library's main menu extension starts it with the tools the user has on, and their options.
+  JX.behavior("phlair", (config: { tools: Tool[]; options?: Partial<Options> }) => {
+    chooseOptions(config.options ?? {});
+    start(config.tools);
+  });
 } else {
-  void enabledTools().then(start);
+  void Promise.all([enabledTools(), chosenOptions()]).then(([tools, chosen]) => {
+    chooseOptions(chosen);
+    start(tools);
+  });
 }

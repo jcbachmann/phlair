@@ -24,6 +24,7 @@ import { escapeText, parseHtml, setHtml } from "../html";
 import type { ListItem } from "../list";
 import type { BlockRenderer, RenderItem } from "../renderer";
 import { emojiOf, type InlineToken } from "../inline";
+import { enhanceSharePointLink } from "../sharePointLinks";
 import { blockTokens, textTokens } from "./inlineTokens";
 import { decorateLine, styleTokens } from "./sourceStyle";
 import { LIST_ITEM, QUOTE_LINE } from "../syntax";
@@ -84,8 +85,9 @@ class Rendered extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     const dom = document.createElement("span");
     dom.className = "rme-inline-ref";
-    // Server-rendered remarkup of the token alone.
+    // Server-rendered remarkup of the token alone; SharePoint's links as in rendered text.
     setHtml(dom, this.html);
+    dom.querySelectorAll<HTMLAnchorElement>("a[href]").forEach(enhanceSharePointLink);
     dom.addEventListener("mousedown", (event) => {
       if (event.button !== 0 || ((event.ctrlKey || event.metaKey) && (event.target as Element).closest("a[href]"))) {
         return;

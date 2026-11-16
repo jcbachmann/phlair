@@ -11,9 +11,17 @@ final class PhlairMainMenuBarExtension
   const MAINMENUBARKEY = 'phlair';
 
   public function buildMainMenus() {
-    $tools = PhlairToolSetting::getEnabledTools($this->getViewer());
+    $viewer = $this->getViewer();
+    $tools = PhlairToolSetting::getEnabledTools($viewer);
     if ($tools) {
-      Javelin::initBehavior('phlair', array('tools' => $tools), 'phlair');
+      // The options of the tools (Option in src/tools.ts).
+      $options = array(
+        'onedriphe' => OneDripheSetting::isEnabledFor($viewer),
+      );
+      Javelin::initBehavior(
+        'phlair',
+        array('tools' => $tools, 'options' => $options),
+        'phlair');
     }
     return array();
   }

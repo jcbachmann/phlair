@@ -9,8 +9,12 @@
 phutil_register_library_map(array(
   '__library_version__' => 2,
   'class' => array(
+    'OneDripheDownloadController' => 'onedriphe/OneDripheDownloadController.php',
+    'OneDripheSetting' => 'onedriphe/OneDripheSetting.php',
     'PhizziwigDownloadConduitAPIMethod' => 'phizziwig/PhizziwigDownloadConduitAPIMethod.php',
     'PhizziwigSetting' => 'phizziwig/PhizziwigSetting.php',
+    'PhizziwigSharePointRemarkupRule' => 'phizziwig/PhizziwigSharePointRemarkupRule.php',
+    'PhlairApplication' => 'phlair/PhlairApplication.php',
     'PhlairCelerityResources' => 'phlair/PhlairCelerityResources.php',
     'PhlairMainMenuBarExtension' => 'phlair/PhlairMainMenuBarExtension.php',
     'PhlairSettingsPanel' => 'phlair/PhlairSettingsPanel.php',
@@ -19,8 +23,12 @@ phutil_register_library_map(array(
   ),
   'function' => array(),
   'xmap' => array(
+    'OneDripheDownloadController' => 'PhabricatorController',
+    'OneDripheSetting' => 'PhabricatorSelectSetting',
     'PhizziwigDownloadConduitAPIMethod' => 'ConduitAPIMethod',
     'PhizziwigSetting' => 'PhlairToolSetting',
+    'PhizziwigSharePointRemarkupRule' => 'PhabricatorRemarkupCustomInlineRule',
+    'PhlairApplication' => 'PhabricatorApplication',
     'PhlairCelerityResources' => 'CelerityResourcesOnDisk',
     'PhlairMainMenuBarExtension' => 'PhabricatorMainMenuBarExtension',
     'PhlairSettingsPanel' => 'PhabricatorEditEngineSettingsPanel',

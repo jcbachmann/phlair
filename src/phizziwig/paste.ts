@@ -19,6 +19,8 @@
 
 import { formatTable, type TableRow } from "./table";
 import { parseHtml } from "./html";
+import { linkMarkup, linkName, linkTarget } from "./linkMarkup";
+import { sharePointLabel, sharePointLink } from "./sharepoint";
 
 interface Style {
   bold: boolean;
@@ -520,16 +522,19 @@ function linkRun(a: Element, style: Style, runs: Run[]): boolean {
   if (!href || href.startsWith("#") || /^(javascript|vbscript|data):/i.test(href)) {
     return false;
   }
-  const target = href.replace(/ /g, "%20");
+  const target = linkTarget(href);
   const text = plainText(a).replace(/\s+/g, " ").trim();
   let markup: string;
+  const sharePoint = text && text !== href ? null : sharePointLink(target);
   if (text && text !== href) {
-    markup = `[[ ${target} | ${text} ]]`;
+    markup = linkMarkup(target, text);
+  } else if (sharePoint) {
+    markup = linkMarkup(target, sharePointLabel(sharePoint));
   } else {
     // Phorge links bare URLs, but formatting markers right next to one
     // could be taken as part of it.
     const marked = MARKS.some(([mark]) => mark !== "code" && style[mark]);
-    markup = /^https?:\/\//i.test(target) && !marked ? target : `[[ ${target} ]]`;
+    markup = /^https?:\/\//i.test(target) && !marked ? target : linkMarkup(target);
   }
   runs.push({ text: markup, style, raw: true });
   return true;
@@ -835,3 +840,26 @@ function closingQuote(text: string, start: number): number {
 }
 
 export { markdownToRemarkup } from "./markdownPaste";
+
+/**
+ * A SharePoint or OneDrive URL pasted alone, as a link with a name: its long
+ * URL does not show, and a sharing link's ":x:" can not become an emoji.
+ * The name is the file's, if the URL has it, else its kind and site, which
+ * the user is meant to replace (see genericLinkName()).
+ */
+export function sharePointToRemarkup(text: string): string | null {
+  const url = text.trim();
+  const link = /^https?:\/\/\S+$/.test(url) ? sharePointLink(url) : null;
+  return link && linkMarkup(url, sharePointLabel(link));
+}
+
+/**
+ * Where the name of a pasted link is, if the link is all that was pasted and
+ * its name is no more than its kind and site: the editor selects it to be
+ * typed over.
+ */
+export function genericLinkName(markup: string): [number, number] | null {
+  const match = /^\[\[ (\S+) \| ([^\]|]+) \]\]$/d.exec(markup);
+  const link = match && sharePointLink(match[1]);
+  return link && !link.name && match[2] === linkName(sharePointLabel(link)) ? match.indices![2]! : null;
+}

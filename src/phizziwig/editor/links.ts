@@ -6,6 +6,7 @@
 
 import { type EditorState, StateField } from "@codemirror/state";
 import { type EditorView, showTooltip, type Tooltip } from "@codemirror/view";
+import { linkMarkup, linkName } from "../linkMarkup";
 import { openPicker, type Range, type Target } from "./picker";
 import { focusField } from "./focus";
 import { textTokens } from "./inlineTokens";
@@ -75,13 +76,13 @@ function linkResult(form: Link["form"], target: Target, text: string): string {
   if (!text) {
     return target.reference;
   }
-  return form === "markdown" ? `[${text}](${target.target})` : `[[ ${target.target} | ${text} ]]`;
+  return form === "markdown" ? `[${linkName(text)}](${target.target})` : linkMarkup(target.target, text);
 }
 
 /** What a link points to now, for the dialog: picked again when its link field is not changed. */
 function currentTarget(link: Link): Target {
   // Without its text: a URL bare, a page or path in brackets.
-  const reference = /^[a-z]+:/i.test(link.target) ? link.target : `[[ ${link.target} ]]`;
+  const reference = /^[a-z]+:/i.test(link.target) ? link.target : linkMarkup(link.target);
   return { label: link.target, icon: "fa-link", reference, target: link.target };
 }
 

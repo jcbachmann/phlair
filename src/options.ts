@@ -1,17 +1,19 @@
-// The extension's options page: which tools run.
+// The extension's options page: which tools run, and their options.
 
-import { extensionStorage, type Tool, toolDefaults, TOOLS } from "./tools";
+import { extensionStorage, type Option, optionDefaults, OPTIONS, type Tool, toolDefaults, TOOLS } from "./tools";
 
-async function showOptions(): Promise<void> {
-  const form = document.getElementById("tools")!;
-  const chosen = await extensionStorage().get(toolDefaults());
-  for (const [tool, { name, description }] of Object.entries(TOOLS) as [Tool, (typeof TOOLS)[Tool]][]) {
+type Choices = Record<string, { name: string; description: string }>;
+
+async function showChoices(formId: string, choices: Choices, defaults: Record<string, boolean>): Promise<void> {
+  const form = document.getElementById(formId)!;
+  const chosen = await extensionStorage().get(defaults);
+  for (const [key, { name, description }] of Object.entries(choices)) {
     const label = document.createElement("label");
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.name = tool;
-    box.checked = chosen[tool] === true;
-    box.addEventListener("change", () => void extensionStorage().set({ [tool]: box.checked }));
+    box.name = key;
+    box.checked = chosen[key] === true;
+    box.addEventListener("change", () => void extensionStorage().set({ [key]: box.checked }));
     const title = document.createElement("strong");
     title.textContent = name;
     const text = document.createElement("span");
@@ -21,4 +23,5 @@ async function showOptions(): Promise<void> {
   }
 }
 
-void showOptions();
+void showChoices("tools", TOOLS satisfies Record<Tool, unknown>, toolDefaults());
+void showChoices("options", OPTIONS satisfies Record<Option, unknown>, optionDefaults());

@@ -171,6 +171,9 @@ nothing moves when the cursor moves.
   of a desktop mail program) become a link or their alternative text.
 - **Markdown text** becomes remarkup (headings, emphasis, code blocks, images, tables, reference links), as a Markdown
   parser reads it (`@lezer/markdown`, with GitHub's extensions). Headings only get the leading `=`.
+- **SharePoint and OneDrive links to files and folders** pasted alone become a link with a name (`[[ https://… | … ]]`), so the long URL
+  does not show: the file's name where the URL has it (copied from the address bar), else its kind and site ("Excel
+  workbook in Projects"), selected to be typed over. Sharing links ("Copy link") only name the kind of file and the site.
 - `Ctrl+Shift+V` pastes plain text, and code blocks always get the plain text; undo right after a converted paste brings
   back the plain text.
 
@@ -199,6 +202,25 @@ nothing moves when the cursor moves.
   them first; when the page is hidden or left otherwise (another tab or app, closing, reloading, where the browser asks
   first), they are saved right away, in a request the browser finishes after the page is gone.
   Quitting the browser at once, or a text over 64 KB, can still lose them: browsers give a closing page no more time.
+- **SharePoint and OneDrive links to files and folders in rendered text** keep their text, and show an icon of the
+  kind of file and, on hover, what the URL tells about the file (its kind, name, site and folder). Where there is more
+  than one way to open one, a click shows them in a menu (Ctrl+click opens the link in a new tab), under two headings
+  named as in Explorer: _Open file_ (or _Open folder_) in the browser, or in Word, Excel or PowerPoint
+  (`ms-excel:ofe|u|…`; not on Linux, which has no Office); and _Open file location_, where the URL has the file's
+  path: its folder in the browser, or in Explorer (below). With one way, the link is a link as any. While an app
+  starts, a note under the link says so, and after a few seconds without the app what to do (allow the browser to open
+  it, or open the file in the browser instead). Links to other pages of SharePoint (a person, a site's page) are links
+  like any other. Phorge
+  turns the `:x:` (Excel), `:b:` (PDF), `:v:` (video) and `:o:` (OneNote) of sharing links into emoji, which breaks
+  them; the library's remarkup rule prevents that for everyone (see [docs/PHORGE.md](docs/PHORGE.md)), and the editor
+  repairs such links where Phorge has no library.
+- **SharePoint folders in Explorer** (an option, off by default): on Windows, links to folders and files that have
+  their path (copied from the address bar, not "Copy link") can be opened in Explorer too (_In Explorer_ in the menu).
+  [OneDriphe](phorge/onedriphe/README.md), Phlair's helper for Windows, opens the folder where the OneDrive app syncs
+  it, or a file's folder with the file selected, and opens the link in the browser where the folder is not synced. To
+  turn it on, follow the steps of _OneDriphe: SharePoint Links_ in Phorge's _Settings → Phlair_:
+  download and run the installer (no administrator rights needed), then choose _On_. With the extension, the option is
+  on its options page.
 
 ### Limitations
 
@@ -298,6 +320,11 @@ shared.
   the separators.
   Every block but the last one of the text is followed by a separator, because Phorge renders some blocks
   differently at the end of a text.
+- `sharepoint.ts` reads SharePoint and OneDrive URLs (kind of file, name, site, desktop app); `sharePointLinks.ts`
+  shows such links in rendered text, with a menu of the ways to open them, one of them OneDriphe's (`phorge/onedriphe/`, in PowerShell, whose tests
+  `npm run test:windows` runs in a PowerShell container, and GitHub Actions on Windows).
+- `tools.ts` lists the tools and their options; the Phorge library passes the user's settings, the extension its
+  options page.
 - `editor/` holds the CodeMirror 6 extensions:
   - `livePreview.ts`: which blocks show as source and which rendered; `imagePreview.ts`: images beside the text;
     `mouseSelection.ts`: clicking and selecting in rendered blocks; `verticalMotion.ts`: `↑`/`↓`; `focus.ts`: when

@@ -3,6 +3,7 @@
 // instance's Global Default Settings and on for alice, Phuture is off for
 // both (dev/phorge/seed.php).
 
+import { readFileSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
 import { authFile, phabricatorExec } from "./env";
 import { conduit, editor, imageSite, textarea } from "./helpers";
@@ -22,6 +23,7 @@ async function newWikiPage(page: Page): Promise<void> {
 
 const PHIZZIWIG = "Phizziwig: Remarkup Editor";
 const PHUTURE = "Phuture: Snooze";
+const ONEDRIPHE = "OneDriphe: SharePoint Links";
 
 /** Chooses a tool's setting in the user's settings, or in Global Default Settings. */
 async function chooseSetting(page: Page, setting: string, label: string, global = false): Promise<void> {
@@ -93,6 +95,80 @@ test("users turn on Phuture for themselves; it runs without Phizziwig too", asyn
     await chooseSetting(page, PHUTURE, "Default (Off)");
     await chooseSetting(page, PHIZZIWIG, "On");
   }
+});
+
+test("users who have OneDriphe turn on its way to open SharePoint folders in Explorer", async ({ browser }) => {
+  // Windows, which OneDriphe is for.
+  const page = await browser.newPage({
+    storageState: authFile("alice"),
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0",
+  });
+  const folder =
+    "https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FProjects%2FShared%20Documents%2FPlans";
+  try {
+    await page.goto("/maniphest/");
+    const task = await conduit(page, "maniphest.edit", {
+      transactions: [
+        { type: "title", value: "SharePoint folder" },
+        { type: "description", value: `The plans (${Date.now()}): [[ ${folder} | Plans ]]` },
+      ],
+    });
+    const link = page.locator(".phabricator-remarkup a.phizziwig-sharepoint", { hasText: "Plans" });
+    // As by default (alice may have it on from trying it out).
+    await chooseSetting(page, ONEDRIPHE, "Default (Off)");
+    await page.goto(`/T${task.object.id}`);
+    await expect(link).toBeVisible();
+    // A folder opens in the browser only: a plain link.
+    await expect(link).not.toHaveAttribute("aria-haspopup");
+
+    await chooseSetting(page, ONEDRIPHE, "On");
+    await page.goto(`/T${task.object.id}`);
+    await link.click();
+    await expect(page.locator(".phizziwig-sharepoint-menu .phabricator-action-view-item")).toHaveText([
+      "Open folder",
+      "In the browser",
+      "In Explorer",
+    ]);
+  } finally {
+    await chooseSetting(page, ONEDRIPHE, "Default (Off)");
+    await page.close();
+  }
+});
+
+test("the setting tells how to install and remove OneDriphe, with its scripts to download", async ({ page }) => {
+  /** A script of OneDriphe, with Windows' line breaks. */
+  const windows = (file: string) =>
+    readFileSync(new URL(`../phorge/onedriphe/${file}`, import.meta.url), "utf8").replace(/\r?\n/g, "\r\n");
+  const download = async (link: string, file: string) => {
+    const [started] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: link }).click(),
+    ]);
+    expect(started.suggestedFilename()).toBe(file);
+    const content = readFileSync(await started.path(), "utf8");
+    expect(content).not.toMatch(/(?<!\r)\n|[^\x00-\x7f]/);
+    return content;
+  };
+
+  await page.goto("/settings/panel/phlair/");
+  await expect(page.getByText("OneDriphe", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("no administrator rights")).toBeVisible();
+  await expect(page.getByText("-ExecutionPolicy Bypass").first()).toBeVisible();
+  await expect(page.getByText("Windows Settings → Apps → OneDriphe")).toBeVisible();
+
+  // One file: the installer with the helper and the uninstaller in it, in place of copies of the files next to it.
+  let installer = await download("Download the installer", "install-onedriphe.ps1");
+  for (const [variable, file] of [
+    ["helper", "onedriphe.ps1"],
+    ["uninstaller", "uninstall.ps1"],
+  ]) {
+    const embedded = `\r\n$${variable} = @'\r\n${windows(file).trimEnd()}\r\n'@\r\n`;
+    expect(installer).toContain(embedded);
+    installer = installer.replace(embedded, `\r\n$${variable} = $null # ONEDRIPHE-${variable.toUpperCase()}\r\n`);
+  }
+  expect(installer).toBe(windows("install.ps1"));
+
+  expect(await download("uninstaller", "uninstall-onedriphe.ps1")).toBe(windows("uninstall.ps1"));
 });
 
 test("images of pasted text from other sites are downloaded by the server, for the user only", async ({
