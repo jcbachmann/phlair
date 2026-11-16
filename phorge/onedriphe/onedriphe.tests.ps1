@@ -67,6 +67,10 @@ foreach ($device in 'CON', 'nul', 'Aux.txt', 'COM1', "LPT$([char]0xB9)", 'conin$
   Assert-Equal $null (Resolve "onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Plans/$([Uri]::EscapeDataString($device))") "the device $device"
 }
 Assert-Equal $null (Resolve 'onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Plans./a') 'a dot at the end'
+Assert-Equal $null (Resolve 'onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Plans%2E/a') 'an encoded dot at the end'
+Assert-Equal $null (Resolve 'onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Plans/../Other') '"..", which .NET Framework resolves'
+Assert-Equal $null (Resolve 'onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/./Plans') '"."'
+Assert-Equal 'not taken' (Resolve 'onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/a\..\..\Windows') 'a backslash'
 Assert-Equal $null (Resolve 'onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Plans%20/a') 'a space at the end'
 Assert-Equal 'C:\Users\me\Contoso\Projects - Documents\CONTRACTS\COM10\nul2.txt\.hidden' (Resolve 'onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/CONTRACTS/COM10/nul2.txt/.hidden') 'names like devices, and a dot at the start'
 

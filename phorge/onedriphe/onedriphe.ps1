@@ -50,11 +50,11 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-# The link as an https URL of SharePoint, or $null.
+# The link as an https URL of SharePoint, or $null. A "\" it does not take: browsers send it encoded.
 function ConvertTo-SharePointUrl([string] $Link) {
   $text = $Link -replace '^onedriphe:', ''
   $url = $null
-  if (-not [Uri]::TryCreate($text, [UriKind]::Absolute, [ref] $url)) {
+  if ($text.Contains('\') -or -not [Uri]::TryCreate($text, [UriKind]::Absolute, [ref] $url)) {
     return $null
   }
   if ($url.Scheme -ne 'https' -or $url.Host -notmatch '^[a-z0-9-]+\.sharepoint\.com$' -or
@@ -64,10 +64,15 @@ function ConvertTo-SharePointUrl([string] $Link) {
   return $url
 }
 
-# The decoded segments of a URL's path ("/sites/A/Shared%20Documents/" gives "sites", "A", "Shared Documents").
+<#
+  The decoded segments of a URL's path as it was written ("/sites/A/Shared%20Documents/" gives "sites", "A",
+  "Shared Documents"): not of Uri.AbsolutePath, where .NET Framework (Windows PowerShell 5.1) drops a "." at the
+  end of a segment and resolves "..", and .NET (PowerShell 7) does not; Test-WindowsName judges them all alike.
+#>
 function Get-PathSegments([Uri] $Url) {
+  $path = ($Url.OriginalString -replace '^[a-z][a-z0-9+.-]*://[^/?#]*', '') -replace '[?#].*$', ''
   $segments = @()
-  foreach ($segment in $Url.AbsolutePath.Split('/')) {
+  foreach ($segment in $path.Split('/')) {
     if ($segment -ne '') {
       $segments += [Uri]::UnescapeDataString($segment)
     }
