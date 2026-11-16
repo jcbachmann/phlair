@@ -1,16 +1,18 @@
 <?php
 
 /**
- * OneDriphe's scripts (onedriphe/ of the library) to download, with Windows'
- * line breaks: the installer as one file, with the helper and the
+ * OneDriphe's scripts (onedriphe/ of the library) to download. For Windows,
+ * with its line breaks: the installer as one file, with the helper and the
  * uninstaller in it (in the place of its lines
  * "$helper = $null # ONEDRIPHE-HELPER" and "$uninstaller = ..."), and the
- * uninstaller.
+ * uninstaller. For Linux: its installer with the helper in it (in the place
+ * of its line "write_helper() { ... } # ONEDRIPHE-HELPER").
  */
 final class OneDripheDownloadController extends PhabricatorController {
 
   const INSTALLER = 'install-onedriphe.ps1';
   const UNINSTALLER = 'uninstall-onedriphe.ps1';
+  const LINUX_INSTALLER = 'install-onedriphe.sh';
 
   /** The variables of the installer that get a script, and their scripts. */
   const EMBEDDED = array(
@@ -25,16 +27,18 @@ final class OneDripheDownloadController extends PhabricatorController {
   public function handleRequest(AphrontRequest $request) {
     $file = $request->getURIData('file');
     if ($file === self::INSTALLER) {
-      $content = self::newInstaller();
+      $content = str_replace("\n", "\r\n", self::newInstaller());
     } else if ($file === self::UNINSTALLER) {
-      $content = self::read('uninstall.ps1');
+      $content = str_replace("\n", "\r\n", self::read('uninstall.ps1'));
+    } else if ($file === self::LINUX_INSTALLER) {
+      $content = self::newLinuxInstaller();
     } else {
       return new Aphront404Response();
     }
     return id(new AphrontFileResponse())
       ->setMimeType('text/plain')
       ->setDownload($file)
-      ->setContent(str_replace("\n", "\r\n", $content));
+      ->setContent($content);
   }
 
   public static function newInstaller() {
@@ -55,6 +59,24 @@ final class OneDripheDownloadController extends PhabricatorController {
         $installer);
     }
     return $installer;
+  }
+
+  public static function newLinuxInstaller() {
+    $installer = self::read('install.sh');
+    $script = rtrim(self::read('onedriphe.py'));
+    $placeholder =
+      'write_helper() { cp "$(dirname "$0")/onedriphe.py" "$1"; } '.
+      '# ONEDRIPHE-HELPER';
+    // In a here-document, which a line "ONEDRIPHE-HELPER" would end.
+    if (preg_match('/^ONEDRIPHE-HELPER$/m', $script) ||
+        substr_count($installer, $placeholder) !== 1) {
+      throw new Exception(pht('The scripts of OneDriphe do not fit together.'));
+    }
+    return str_replace(
+      $placeholder,
+      "write_helper() {\n  cat >\"\$1\" <<'ONEDRIPHE-HELPER'\n".$script.
+      "\nONEDRIPHE-HELPER\n}",
+      $installer);
   }
 
   /** A script of onedriphe/, with "\n" line breaks. */

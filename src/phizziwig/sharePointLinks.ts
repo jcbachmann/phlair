@@ -2,8 +2,8 @@
 // and get an icon of the kind of file and a tooltip with what the URL tells
 // about the file. Where there is more than one way to open one (the file in
 // the browser or in Word, Excel or PowerPoint; its location in the browser or,
-// with the option "onedriphe" on Windows, in Explorer), a click shows them in a
-// menu; with one way, the link is a link as any. While an app starts, a note
+// with the option "onedriphe", in Explorer on Windows or in the file manager on
+// Linux), a click shows them in a menu; with one way, the link is a link as any. While an app starts, a note
 // under the link tells so, and what to do if nothing happens. Links Phorge
 // broke (":x:" became "❌", without the Phlair library's rule) are repaired.
 
@@ -17,7 +17,7 @@ import {
   type SharePointLink,
 } from "./sharepoint";
 
-/** The link scheme of OneDriphe, Phlair's helper for Windows (phorge/onedriphe/README.md). */
+/** The link scheme of OneDriphe, Phlair's helper for Windows and Linux (phorge/onedriphe/README.md). */
 export const ONEDRIPHE = "onedriphe:";
 
 /** Phlair's settings in Phorge, where OneDriphe's installer is. */
@@ -27,11 +27,11 @@ const SETTINGS = "/settings/panel/phlair/";
 export interface OpenWay {
   /** What it opens, the heading of its group in the menu: "Open file", "Open folder" or "Open file location". */
   group: string;
-  /** Where it opens it: "In the browser", "In Excel", "In Explorer". */
+  /** Where it opens it: "In the browser", "In Excel", "In Explorer", "In the file manager". */
   label: string;
   icon: string;
   href: string;
-  /** The app it starts ("Excel", "Explorer"); without one, the browser opens the page. */
+  /** The app it starts ("Excel", "Explorer", "the file manager"); without one, the browser opens the page. */
   app?: string;
 }
 
@@ -99,9 +99,9 @@ export function enhanceSharePointLink(anchor: HTMLAnchorElement): void {
  * the file or folder itself ("Open file": in the browser, the link itself
  * first; in Word, Excel or PowerPoint where they may be installed), and
  * where a file is ("Open file location": its folder in SharePoint, where the
- * URL has its path; in Explorer, the file selected). A folder opens in
- * Explorer itself ("Open folder"). Explorer needs OneDriphe, and the path,
- * which sharing links do not have.
+ * URL has its path; in Explorer or the file manager, the file selected). A
+ * folder opens there itself ("Open folder"). That needs OneDriphe, and the
+ * path, which sharing links do not have.
  */
 export function openWays(link: SharePointLink, href: string): OpenWay[] {
   const folder = link.kind === "folder";
@@ -115,13 +115,14 @@ export function openWays(link: SharePointLink, href: string): OpenWay[] {
   if (link.folderUrl) {
     ways.push({ group: location, label: "In the browser", icon: "fa-globe", href: link.folderUrl });
   }
-  if (link.fileUrl && option("onedriphe") && isWindows()) {
+  const manager = option("onedriphe") ? fileManager() : null;
+  if (link.fileUrl && manager) {
     ways.push({
       group: folder ? itself : location,
-      label: "In Explorer",
+      label: `In ${manager}`,
       icon: "fa-folder-open-o",
       href: ONEDRIPHE + link.fileUrl,
-      app: "Explorer",
+      app: manager,
     });
   }
   return ways;
@@ -217,15 +218,12 @@ const CLOSE_AFTER = 60_000;
 
 function showHelp(element: HTMLElement, anchor: HTMLAnchorElement, way: OpenWay): void {
   element.classList.add("phizziwig-sharepoint-note-help");
-  const explorer = way.app === "Explorer";
+  const helper = way.href.startsWith(ONEDRIPHE);
+  const app = helper ? "OneDriphe" : way.app!;
   const text = document.createElement("span");
-  text.append(
-    "Nothing happening? If the browser asks, allow it to open ",
-    explorer ? "OneDriphe" : way.app!,
-    `. Without ${explorer ? "OneDriphe" : way.app} on this computer: `,
-  );
+  text.append(`Nothing happening? If the browser asks, allow it to open ${app}. Without ${app} on this computer: `);
   const next = document.createElement("a");
-  if (explorer) {
+  if (helper) {
     next.href = SETTINGS;
     next.textContent = "install it";
   } else {
@@ -270,7 +268,11 @@ function hasDesktopOffice(): boolean {
   return !/Linux|CrOS/.test(agent) || /Android/.test(agent);
 }
 
-/** Whether OneDriphe may be installed: it is for Windows. */
-function isWindows(): boolean {
-  return /Windows NT/.test(navigator.userAgent);
+/** The file manager OneDriphe opens: Explorer on Windows, the desktop's own on Linux; none elsewhere. */
+function fileManager(): string | null {
+  const agent = navigator.userAgent;
+  if (/Windows NT/.test(agent)) {
+    return "Explorer";
+  }
+  return /Linux/.test(agent) && !/Android|CrOS/.test(agent) ? "the file manager" : null;
 }

@@ -15,6 +15,7 @@
     "build:dev": "node build.mjs --dev",
     "watch": "node build.mjs --dev --watch",
     "test": "vitest run",
+    "test:linux": "cd phorge/onedriphe && python3 -m unittest",
     "test:windows": "docker run --rm -v \"$PWD/phorge/onedriphe:/w:ro\" mcr.microsoft.com/powershell@sha256:810c4f1e0c9d23022c3ec18c50a6205ee4b60766f1739d329b2948df1fd7d5b0 pwsh -NoProfile -Command \"& /w/onedriphe.tests.ps1; if (\\$LASTEXITCODE) { exit 1 }; & /w/compatibility.ps1\"",
     "pree2e": "node build.mjs --dev",
     "e2e": "playwright test && node e2e/firefox-extension.mjs",

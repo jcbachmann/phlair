@@ -22,8 +22,8 @@ export const OPTIONS: Record<Option, { name: string; description: string; defaul
   onedriphe: {
     name: "OneDriphe: SharePoint links",
     description:
-      "On Windows, a click on a SharePoint link also offers to open it in Explorer, where OneDrive syncs it. Needs " +
-      "Phizziwig, and OneDriphe on your computer (its installer is in Phorge's Settings → Phlair).",
+      "A click on a SharePoint link also offers to open it in Explorer (Windows) or the file manager (Linux), where " +
+      "it is synced. Needs Phizziwig, and OneDriphe on your computer (its installer is in Phorge's Settings → Phlair).",
     default: false,
   },
 };

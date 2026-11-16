@@ -30,7 +30,7 @@ final class PhlairApplication extends PhabricatorApplication {
   public function getRoutes() {
     return array(
       '/phlair/' => array(
-        'onedriphe/(?P<file>(?:un)?install-onedriphe\.ps1)' =>
+        'onedriphe/(?P<file>(?:un)?install-onedriphe\.(?:ps1|sh))' =>
           'OneDripheDownloadController',
       ),
     );

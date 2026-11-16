@@ -307,11 +307,21 @@ describe("enhanceSharePointLinks", () => {
       `Open folder › In Explorer: onedriphe:${folder}`,
     ]);
     expect(ways(FILE).at(-1)).toBe(`Open file location › In Explorer: onedriphe:${file}`);
-    // Not for sharing links, which have no path, nor off Windows.
-    expect(ways(SHARE).some((way) => way.includes("Explorer"))).toBe(false);
-    expect(ways(FOLDER, "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) Safari/605.1.15")).toEqual([
-      `Open folder › In the browser: ${FOLDER}`,
+    // On Linux, in the file manager.
+    expect(ways(FILE, LINUX)).toEqual([
+      `Open file › In the browser: ${FILE}`,
+      `Open file location › In the browser: ${location}`,
+      `Open file location › In the file manager: onedriphe:${file}`,
     ]);
+    // Not for sharing links, which have no path, nor where OneDriphe is not: macOS, Android, ChromeOS.
+    expect(ways(SHARE).some((way) => way.includes("onedriphe:"))).toBe(false);
+    for (const agent of [
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) Safari/605.1.15",
+      "Mozilla/5.0 (Linux; Android 15) Chrome/140.0",
+      "Mozilla/5.0 (X11; CrOS x86_64 16000.0.0) Chrome/140.0",
+    ]) {
+      expect(ways(FOLDER, agent)).toEqual([`Open folder › In the browser: ${FOLDER}`]);
+    }
   });
 
   it("opens the chosen way: a page as the link would, an app with a note until it took the focus", () => {
@@ -365,6 +375,14 @@ describe("enhanceSharePointLinks", () => {
     expect(note()!.querySelector("a")!.getAttribute("href")).toBe("/settings/panel/phlair/");
     note()!.querySelector<HTMLButtonElement>("button")!.click();
     expect(note()).toBeNull();
+
+    const linux = render(`<a href="${FILE}">Budget</a>`, LINUX).querySelector("a")!;
+    choose(linux, "Open file location", "In the file manager");
+    expect(note()!.textContent).toBe("Opening in the file manager…");
+    vi.advanceTimersByTime(HELP_AFTER);
+    expect(note()!.textContent).toContain(
+      "allow it to open OneDriphe. Without OneDriphe on this computer: install it.",
+    );
   });
 
   it("leaves Ctrl+click, a click in the editor, and other buttons to the browser and the editor", () => {

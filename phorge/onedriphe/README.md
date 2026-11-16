@@ -1,9 +1,10 @@
 # OneDriphe
 
-OneDriphe, Phlair's helper for Windows, opens SharePoint and OneDrive folders in Explorer, where the OneDrive app syncs
-them. It is what **In Explorer** (under _Open file location_, or _Open folder_) in the menu of a SharePoint link in Phorge
-talks to. A web page cannot open Explorer itself: browsers do not let websites open local folders. The menu item opens
-`onedriphe:https://…sharepoint.com/…`, and the browser hands such links to OneDriphe.
+OneDriphe, Phlair's helper for Windows and Linux, opens SharePoint and OneDrive folders in Explorer, where the OneDrive
+app syncs them, or on Linux in the file manager, where rclone mounts them (see [Linux](#linux)). It is what **In
+Explorer** or **In the file manager** (under _Open file location_, or _Open folder_) in the menu of a SharePoint link in
+Phorge talks to. A web page cannot open a file manager itself: browsers do not let websites open local folders. The menu
+item opens `onedriphe:https://…sharepoint.com/…`, and the browser hands such links to OneDriphe.
 
 When a link arrives, OneDriphe:
 
@@ -22,9 +23,10 @@ Terminal's) for a moment, so the scheme starts it through the console host witho
 (`conhost.exe --headless`, Windows 10 1809 and later). An unexpected error is written to `%TEMP%\OneDriphe.log`, and
 the link opens in the browser.
 
-Files: `onedriphe.ps1` (the helper), `install.ps1` (installs it), `uninstall.ps1` (removes it), the tests
+Files for Windows: `onedriphe.ps1` (the helper), `install.ps1` (installs it), `uninstall.ps1` (removes it), the tests
 `onedriphe.tests.ps1` and `windows.tests.ps1`, and `compatibility.ps1` (see Tests). They are plain PowerShell for the
-Windows PowerShell 5.1 that comes with Windows; nothing else is needed.
+Windows PowerShell 5.1 that comes with Windows; nothing else is needed. For Linux: `onedriphe.py` (the helper, Python 3.9
+or later), `install.sh` and the tests `test_onedriphe.py`.
 
 ## Turning it on
 
@@ -139,7 +141,43 @@ opens in the browser instead where a name is one Windows does not take as it is:
 and where a junction or symbolic link is on the way, which could lead out of the folder (OneDrive's files that are
 online only are no links).
 
+## Linux
+
+On Linux, OneDriphe is `onedriphe.py`, a Python script that does what the one for Windows does, with two differences:
+
+- **Where the libraries are:** there is no OneDrive app for Linux, and no registry to read. OneDriphe reads a list the
+  user writes, `~/.config/onedriphe/libraries`: per line a library's SharePoint URL, then its local folder (`~` is the
+  home folder; the folder may contain spaces), e.g.
+  `https://contoso.sharepoint.com/sites/Projects/Shared%20Documents ~/SharePoint/Projects`. The folder is any that has
+  the library's files under their names: a mount of rclone (`rclone mount`, which downloads files only when they are
+  opened), or the folder of another client. A link to a library that is not listed opens in the browser.
+- **Names:** Linux takes every name but `.`, `..` and ones with `/`; those, and a symbolic link that leads out of the
+  library's folder, send the link to the browser. Names compare without case where the folder has only one entry of
+  that name (SharePoint does not tell `Plan.docx` from `plan.docx`, Linux does).
+
+It shows folders and files through the file manager's D-Bus interface (`org.freedesktop.FileManager1`, `ShowFolders` and
+`ShowItems`, which select the file; Nautilus, Dolphin, Nemo, Caja and Thunar have it), with `busctl` of systemd; without
+the interface, `xdg-open` opens the folder. It never opens a file. An unexpected error is written to
+`~/.cache/onedriphe.log`, and the link opens in the browser.
+
+**Installing** (no root): the setting links to `install-onedriphe.sh` (`OneDripheDownloadController`: `install.sh` with
+`onedriphe.py` in it, in place of the line `write_helper() { … } # ONEDRIPHE-HELPER`). Run it with
+`sh ~/Downloads/install-onedriphe.sh`, or `sh install.sh` in a copy of this folder. It copies the helper to
+`~/.local/bin/onedriphe`, adds a desktop entry for the scheme `x-scheme-handler/onedriphe`
+(`~/.local/share/applications/onedriphe.desktop`, which `xdg-mime` makes the default), and creates the list of
+libraries with an explanation where there is none. Installing again updates it and keeps the list. Browsers find the
+scheme through the desktop entry. Browsers in a Snap or Flatpak (Ubuntu's Firefox is a Snap) hand it to the desktop
+portal, which is to start OneDriphe outside the sandbox; that is not tried yet. `~/.local/bin/onedriphe --list` shows the libraries, `--explain "onedriphe:https://…"` what a click does, and
+`--uninstall` removes the helper and its scheme (not the list, which the user wrote).
+
 ## Tests
+
+`npm run test:linux` runs `test_onedriphe.py` (Python's `unittest`): the links OneDriphe takes, the list of libraries,
+the mapping to local paths, what a click does in a folder of real files and symbolic links, the calls of the file
+manager, the command, and installing, updating and removing it in a temporary home folder. GitHub Actions runs them on
+the oldest Python it is for and a current one, and `shellcheck` on the installer. Phorge's E2E tests download the
+installer, compare it with this folder's files and run it. Untested by machines: the file manager's window and the
+browser's prompt.
 
 `npm run test:windows` runs, in a PowerShell 7 container (a pinned image):
 

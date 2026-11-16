@@ -11,15 +11,15 @@ Phlair comes as a Phorge library (`phorge/` in this repository) that the server 
 | The script                              | `PhlairCelerityResources`                          | Serves `rsrc/phlair.js` through Celerity (cached, versioned URLs).        |
 | Images of pasted text from other sites  | `PhizziwigDownloadConduitAPIMethod`                | `phizziwig.download`: the server downloads and stores the image.          |
 | SharePoint's sharing links stay whole   | `PhizziwigSharePointRemarkupRule`                  | A remarkup rule: links them before `:x:` in them becomes an emoji.        |
-| SharePoint folders in Explorer (option) | `OneDripheSetting`                                 | Per user, off: "In Explorer" with OneDriphe, Phlair's helper for Windows. |
-| OneDriphe's installer and uninstaller   | `PhlairApplication`, `OneDripheDownloadController` | Downloads in `/phlair/onedriphe/`, linked from the setting.               |
+| SharePoint folders in Explorer (option) | `OneDripheSetting`                                 | Per user, off: "In Explorer" (Linux: "In the file manager"), OneDriphe's. |
+| OneDriphe's installers and uninstaller  | `PhlairApplication`, `OneDripheDownloadController` | Downloads in `/phlair/onedriphe/`, linked from the setting.               |
 
 A new tool is a new subclass of `PhlairToolSetting`, whose key names the tool in the script (`src/tools.ts`). An
 option of a tool is a setting of the panel of its own, which `PhlairMainMenuBarExtension` passes to the script
 (`Option` in `src/tools.ts`).
 
-Opening links in Explorer only works on computers with [OneDriphe](../phorge/onedriphe/README.md), Phlair's helper for
-Windows (`phorge/onedriphe/`, part of the library). Users install it themselves with the steps and the download in the
+Opening links in Explorer or the file manager only works on computers with [OneDriphe](../phorge/onedriphe/README.md),
+Phlair's helper for Windows and Linux (`phorge/onedriphe/`, part of the library). Users install it themselves with the steps and the download in the
 setting.
 Where IT installs it on every computer, the administrator can turn the option on for everyone in _Global Default
 Settings_.

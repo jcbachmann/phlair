@@ -214,10 +214,12 @@ nothing moves when the cursor moves.
   turns the `:x:` (Excel), `:b:` (PDF), `:v:` (video) and `:o:` (OneNote) of sharing links into emoji, which breaks
   them; the library's remarkup rule prevents that for everyone (see [docs/PHORGE.md](docs/PHORGE.md)), and the editor
   repairs such links where Phorge has no library.
-- **SharePoint folders in Explorer** (an option, off by default): on Windows, links to folders and files that have
-  their path (copied from the address bar, not "Copy link") can be opened in Explorer too (_In Explorer_ in the menu).
-  [OneDriphe](phorge/onedriphe/README.md), Phlair's helper for Windows, opens the folder where the OneDrive app syncs
-  it, or a file's folder with the file selected, and opens the link in the browser where the folder is not synced. To
+- **SharePoint folders in Explorer or the file manager** (an option, off by default): on Windows and Linux, links to
+  folders and files that have their path (copied from the address bar, not "Copy link") can be opened in the file
+  manager too (_In Explorer_ or _In the file manager_ in the menu). [OneDriphe](phorge/onedriphe/README.md), Phlair's
+  helper, opens the folder where the OneDrive app syncs it (on Linux: where rclone mounts it, as listed in
+  `~/.config/onedriphe/libraries`), or a file's folder with the file selected, and opens the link in the browser where
+  the folder is not there. To
   turn it on, follow the steps of _OneDriphe: SharePoint Links_ in Phorge's _Settings → Phlair_:
   download and run the installer (no administrator rights needed), then choose _On_. With the extension, the option is
   on its options page.
@@ -321,8 +323,9 @@ shared.
   Every block but the last one of the text is followed by a separator, because Phorge renders some blocks
   differently at the end of a text.
 - `sharepoint.ts` reads SharePoint and OneDrive URLs (kind of file, name, site, desktop app); `sharePointLinks.ts`
-  shows such links in rendered text, with a menu of the ways to open them, one of them OneDriphe's (`phorge/onedriphe/`, in PowerShell, whose tests
-  `npm run test:windows` runs in a PowerShell container, and GitHub Actions on Windows).
+  shows such links in rendered text, with a menu of the ways to open them, one of them OneDriphe's (`phorge/onedriphe/`: in PowerShell for Windows, whose
+  tests `npm run test:windows` runs in a PowerShell container, and GitHub Actions on Windows; in Python for Linux, tested
+  by `npm run test:linux`).
 - `tools.ts` lists the tools and their options; the Phorge library passes the user's settings, the extension its
   options page.
 - `editor/` holds the CodeMirror 6 extensions:

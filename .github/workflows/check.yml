@@ -1,5 +1,5 @@
 # Formatting, types and unit tests, the extension against AMO's rules, the
-# library's PHP on old and new PHP, OneDriphe on Windows, and the E2E tests
+# library's PHP on old and new PHP, OneDriphe on Windows and Linux, and the E2E tests
 # against the Phorge of dev/phorge, as they run locally (README.md).
 name: Check
 
@@ -63,6 +63,23 @@ jobs:
       - name: Compatible with Windows PowerShell 5.1
         shell: pwsh
         run: ./phorge/onedriphe/compatibility.ps1
+
+  # OneDriphe for Linux (phorge/onedriphe/onedriphe.py): its tests, also of
+  # installing and removing it, on the oldest Python it is for and a current one.
+  onedriphe-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.x"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests
+        run: npm run test:linux
+      - name: Installer
+        run: shellcheck phorge/onedriphe/install.sh
 
   e2e:
     runs-on: ubuntu-latest

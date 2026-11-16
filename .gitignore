@@ -9,3 +9,4 @@ phorge/rsrc/
 phorge/resources/
 phorge/THIRD_PARTY_LICENSES.txt
 phorge/src/.phutil_module_cache
+__pycache__/
