@@ -475,6 +475,16 @@ test.describe("editing aids", () => {
     await expect.poll(() => source(page)).toBe("Element\tLine\n\n```\ncode: bold text\n```");
   });
 
+  test("remarkup copied from Phorge is pasted as it is, also a quoted code block with its language", async ({
+    page,
+  }) => {
+    await openNewWikiPage(page, "Paste remarkup");
+    await editor(page).click();
+    const text = "> ```lang=bash\n> test\n> ```\n> - __underlined__";
+    await paste(page, { text });
+    await expect.poll(() => source(page)).toBe(text);
+  });
+
   test("code blocks in quotes are code: no insert menu, no Markdown habits, pasted text plain in the quote", async ({
     page,
   }) => {

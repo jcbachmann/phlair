@@ -30,6 +30,15 @@ const SIGNALS: Record<string, string> = {
   Blockquote: "quote",
 };
 
+/**
+ * Markup that only remarkup has: a code block's options ("```lang=bash",
+ * "```name=x.sh, lines=10", "```counterexample"), a reply's header (">>!")
+ * and a file embed ("{F12}"). A text with it was copied from Phorge, and
+ * converting it would change it ("lang=lang=bash", "__underlined__" made
+ * bold).
+ */
+const REMARKUP_ONLY = /^[>\s]*```[ \t]*(?:lang|name|lines|counterexample)\b|^>>!|\{F\d+[,}]/im;
+
 interface Edit {
   from: number;
   to: number;
@@ -39,10 +48,14 @@ interface Edit {
 /**
  * The text as remarkup, or null when it does not look like Markdown: at
  * least two kinds of headings, lists, code fences, emphasis, links, tables
- * and quotes. A shell snippet with one "# comment" stays as it is.
+ * and quotes. A shell snippet with one "# comment" stays as it is, and so
+ * does remarkup (see REMARKUP_ONLY).
  */
 export function markdownToRemarkup(input: string): string | null {
   const text = input.replace(/\r\n?/g, "\n");
+  if (REMARKUP_ONLY.test(text)) {
+    return null;
+  }
   const tree = markdown.parse(text);
   const kinds = new Set<string>();
   tree.iterate({

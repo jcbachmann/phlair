@@ -59,6 +59,23 @@ describe("markdownToRemarkup", () => {
     expect(markdownToRemarkup(lines("# install the tools", "apt install x"))).toBeNull();
     expect(markdownToRemarkup("Just a sentence with *stars*.")).toBeNull();
   });
+
+  it("leaves remarkup copied from Phorge alone: code options, replies, file embeds", () => {
+    for (const text of [
+      lines("> ```lang=bash", "> test", "> ```"),
+      lines("> - item", "> ```name=x.sh, lang=bash", "> a", "> ```", "> __underlined__"),
+      lines("- item", "", "```counterexample", "x", "```", "", "> quote"),
+      lines("- item", "  ```LINES=10", "  x", "  ```", "", "> quote"),
+      lines(">>! In T1, @alice wrote:", "> - item", "> *not emphasis*"),
+      lines("> {F12, size=full}", "> - item", "> *not emphasis*"),
+    ]) {
+      expect(markdownToRemarkup(text), text).toBeNull();
+    }
+    // Markdown's own fences still get "lang=", also next to remarkup-like text.
+    expect(markdownToRemarkup(lines("> - item", "> ```bash", "> x", "> ```", "> [[ wiki/page ]]"))).toBe(
+      lines("> - item", "> ```lang=bash", "> x", "> ```", "> [[ wiki/page ]]"),
+    );
+  });
 });
 
 describe("markdownToRemarkup, as Markdown parses the text", () => {

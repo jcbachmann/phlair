@@ -173,7 +173,8 @@ nothing moves when the cursor moves.
   (CORS), such as Wikipedia. Images that can not be read (e.g. of a web mail behind its login, or attachments
   of a desktop mail program) become a link or their alternative text.
 - **Markdown text** becomes remarkup (headings, emphasis, code blocks, images, tables, reference links), as a Markdown
-  parser reads it (`@lezer/markdown`, with GitHub's extensions). Headings only get the leading `=`.
+  parser reads it (`@lezer/markdown`, with GitHub's extensions). Headings only get the leading `=`. Remarkup copied
+  from Phorge stays as it is (code blocks with options like `lang=`, replies, file embeds tell it apart).
 - **SharePoint and OneDrive links to files and folders** pasted alone become a link with a name (`[[ https://… | … ]]`), so the long URL
   does not show: the file's name where the URL has it (copied from the address bar), else its kind and site ("Excel
   workbook in Projects"), selected to be typed over. Sharing links ("Copy link") only name the kind of file and the site.
