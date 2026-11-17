@@ -1,4 +1,4 @@
-// The screenshots of the README (docs/screenshots). Each shows one feature
+// The screenshots of the README and the docs (docs/screenshots). Each shows one feature
 // in the local Phorge's demo content.
 
 import { type Page, test } from "@playwright/test";

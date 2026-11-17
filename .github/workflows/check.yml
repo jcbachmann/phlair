@@ -1,6 +1,6 @@
 # Formatting, types and unit tests, the extension against AMO's rules, the
 # library's PHP on old and new PHP, OneDriphe on Windows and Linux, and the E2E tests
-# against the Phorge of dev/phorge, as they run locally (README.md).
+# against the Phorge of dev/phorge, as they run locally (docs/DEVELOPMENT.md).
 name: Check
 
 on:
