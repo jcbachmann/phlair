@@ -170,8 +170,11 @@ the interface, `xdg-open` opens the folder. It never opens a file. An unexpected
 (`~/.local/share/applications/onedriphe.desktop`, which `xdg-mime` makes the default), and creates the list of
 libraries with an explanation where there is none. Installing again updates it and keeps the list. Browsers find the
 scheme through the desktop entry. Browsers in a Snap or Flatpak (Ubuntu's Firefox is a Snap) hand it to the desktop
-portal, which is to start OneDriphe outside the sandbox; that is not tried yet. `~/.local/bin/onedriphe --list` shows the libraries, `--explain "onedriphe:https://…"` what a click does, and
-`--uninstall` removes the helper and its scheme (not the list, which the user wrote).
+portal, which starts OneDriphe outside the sandbox: tried with Firefox as a Snap on Ubuntu 26.04, not yet with a
+Flatpak. `~/.local/bin/onedriphe --list` shows the libraries, `--explain "onedriphe:https://…"` what a click does, and
+`--uninstall` removes the helper and its scheme (not the list, which the user wrote). Where a click opens the browser
+instead of the file manager, the library is not in the list (`--list`), or its folder lacks the files: an rclone mount
+that was unmounted is an empty folder, which a start of its service mounts again.
 
 ## Tests
 
