@@ -1,10 +1,6 @@
-# Local Phorge for developing and testing the editor. Phorge upstream
-# is frozen since 2021; its last supported PHP is 7.4.
-FROM php:7.4-apache
-
-# The image is based on Debian bullseye, which has moved to the archive.
-RUN printf 'deb http://archive.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian-security bullseye-security main\n' > /etc/apt/sources.list \
- && rm -f /etc/apt/sources.list.d/*
+# Local Phorge for developing and testing the editor, on the PHP of
+# production (Debian 13, PHP 8.4).
+FROM php:8.4-apache-trixie
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git libzip-dev libpng-dev libjpeg-dev \
