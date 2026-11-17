@@ -3457,21 +3457,35 @@ test.describe("feedback of T30666", () => {
     await expect.poll(() => source(page)).toBe("= first line\n  - second line\n\nthird");
   });
 
-  test("Enter in the marker of a list item is Enter at the start of its text", async ({ page }) => {
+  test("Enter in the marker of a list item makes an empty line above it, at the start of its text an empty item", async ({
+    page,
+  }) => {
     await startWith(page, "  - item\n  - [ ] task\n  - [ ] more");
-    // At the start of the line, before the hidden marker.
+    // At the start of the line, before the hidden marker: the cursor goes on to the item's text.
     await page.locator(".cm-line", { hasText: "item" }).click();
     await page.keyboard.press("End");
     await page.keyboard.press("ArrowRight");
     await page.keyboard.press("Enter");
     await page.keyboard.type("x");
-    await expect.poll(() => source(page)).toBe("  - item\n  - [ ] \n  - [ ] xtask\n  - [ ] more");
+    await expect.poll(() => source(page)).toBe("  - item\n\n  - [ ] xtask\n  - [ ] more");
     // In the marker.
     await page.locator(".cm-line", { hasText: "more" }).click();
     await page.keyboard.press("Home");
     await page.keyboard.press("ArrowLeft");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toBe("  - item\n  - [ ] \n  - [ ] xtask\n  - [ ] \n  - [ ] more");
+    await expect.poll(() => source(page)).toBe("  - item\n\n  - [ ] xtask\n\n  - [ ] more");
+    // At the start of the text: an empty item above.
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("  - item\n\n  - [ ] xtask\n\n  - [ ] \n  - [ ] more");
+
+    // In a quote, the empty line is one of the quote.
+    await startWith(page, "> Asked:\n>   - one\n>   - two");
+    await page.locator(".cm-line", { hasText: "one" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("y");
+    await expect.poll(() => source(page)).toBe("> Asked:\n>   - one\n>\n>   - ytwo");
   });
 
   test("lists in quotes show their markers, continue, end and indent like other lists", async ({ page }) => {

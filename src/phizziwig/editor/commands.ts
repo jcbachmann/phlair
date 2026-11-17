@@ -189,7 +189,7 @@ function tableEnter(view: EditorView): boolean {
  * ends them (a list in a quote, not the quote). At the start of the text of a
  * block's first line (a list, quote or header, whose marker shows rendered),
  * it makes room above the block, without a marker. In the marker of a list
- * item (e.g. at the start of its line), as at the start of its text.
+ * item (e.g. at the start of its line), it makes an empty line above the item.
  */
 function continueMarkup(view: EditorView): boolean {
   const { state } = view;
@@ -206,6 +206,19 @@ function continueMarkup(view: EditorView): boolean {
   const header = block?.kind === "header" ? /^(=+|#+)\s*/.exec(line.text) : null;
   // Where the text starts after the markers.
   const marker = item ? line.length - item[5].length : quote ? quote[1].length : header ? header[0].length : null;
+  if (item && range.head < line.from + marker!) {
+    // In the marker of a list item: an empty line above the item (in a
+    // quote, a line of the quote), as in Obsidian; the cursor goes to the
+    // start of the item's text.
+    const insert = `${quote ? quote[1].trimEnd() : ""}\n`;
+    view.dispatch({
+      changes: { from: line.from, insert },
+      selection: { anchor: line.from + insert.length + marker! },
+      scrollIntoView: true,
+      userEvent: "input",
+    });
+    return true;
+  }
   if (
     marker !== null &&
     block &&
@@ -224,7 +237,7 @@ function continueMarkup(view: EditorView): boolean {
   if (!item && !quote) {
     return false;
   }
-  const head = item ? Math.max(range.head, line.from + marker!) : range.head;
+  const head = range.head;
   const markers = quote ? quote[1] : "";
   const content = item ? item[5] : quote![2];
   if (!item && quoteDepth(markers) > 1 && content.trim() === "" && head === line.to) {

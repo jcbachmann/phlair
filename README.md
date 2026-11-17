@@ -144,9 +144,10 @@ nothing moves when the cursor moves.
   start of a line is a header. A list starting at the start of the line moves in as a whole.
 - **Lists and quotes** continue on `Enter`; `Enter` on an empty item ends them, leaving its line empty (a list in a
   quote ends, the quote goes on). Everything for lists, headers and tables works in quotes too, the buttons change the
-  text after the `>`; code blocks in quotes are code (pasted text stays plain). `Enter` in the marker of a list item is `Enter` at the start of its text. `Backspace` at
-  the start of the text of a quote line removes its `>`. `Enter` at the
-  start of the text of a list, quote or header makes room above it. `Tab`/`Shift+Tab` indent list items:
+  text after the `>`; code blocks in quotes are code (pasted text stays plain). `Enter` in the marker of a list item
+  (e.g. at the start of its line) makes an empty line above it, as in Obsidian. `Backspace` at the start of the text
+  of a quote line removes its `>`. `Enter` at the start of the text of a list, quote or header makes room above it.
+  `Tab`/`Shift+Tab` indent list items:
   by two spaces, or in a list nested by repeating markers (`- item`, `-- nested`), by one marker.
   `Home` (Pos1) in a list item goes to the start of its text, after the marker and checkbox; pressed again, to the
   start of the line. `↑`/`↓` land in the text of list items too, not before their markers (from before a marker, before
