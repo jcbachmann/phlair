@@ -34,6 +34,7 @@ export function closeDropdown(owner?: Element): boolean {
     return false;
   }
   const hadFocus = open.contains(document.activeElement);
+  listen(false);
   open.remove();
   openOwner?.setAttribute("aria-expanded", "false");
   open = null;
@@ -212,41 +213,45 @@ export function showDropdownContent(
   openOwner = owner ?? null;
   openOwner?.setAttribute("aria-expanded", "true");
   menu.addEventListener("keydown", onMenuKeyDown);
+  listen(true);
   focusable(menu)[0]?.focus({ preventScroll: true });
   return menu;
 }
 
-document.addEventListener(
-  "mousedown",
-  (event) => {
-    const target = event.target as Node;
-    if (open && !open.contains(target) && !openOwner?.contains(target)) {
-      closeDropdown();
-    }
-  },
-  true,
-);
-window.addEventListener(
-  "scroll",
-  (event) => {
-    // Not the menu scrolling its own items.
-    if (event.target instanceof Node && open?.contains(event.target)) {
-      return;
-    }
-    if (!openOwner || (event.target instanceof Element && event.target.contains(openOwner))) {
-      closeDropdown();
-    }
-  },
-  true,
-);
-// Before Phorge, which takes Escape to leave its fullscreen editor.
-window.addEventListener(
-  "keydown",
-  (event) => {
-    if (event.key === "Escape" && closeDropdown()) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  },
-  true,
-);
+function onPageMouseDown(event: MouseEvent): void {
+  const target = event.target as Node;
+  if (open && !open.contains(target) && !openOwner?.contains(target)) {
+    closeDropdown();
+  }
+}
+
+function onPageScroll(event: Event): void {
+  // Not the menu scrolling its own items.
+  if (event.target instanceof Node && open?.contains(event.target)) {
+    return;
+  }
+  if (!openOwner || (event.target instanceof Element && event.target.contains(openOwner))) {
+    closeDropdown();
+  }
+}
+
+/** Before Phorge (on the window, in the capture phase), which takes Escape to leave its fullscreen editor. */
+function onPageKeyDown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && closeDropdown()) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
+/** The page's events that close the menu, listened to while one is open. */
+function listen(on: boolean): void {
+  if (on) {
+    document.addEventListener("mousedown", onPageMouseDown, true);
+    window.addEventListener("scroll", onPageScroll, true);
+    window.addEventListener("keydown", onPageKeyDown, true);
+  } else {
+    document.removeEventListener("mousedown", onPageMouseDown, true);
+    window.removeEventListener("scroll", onPageScroll, true);
+    window.removeEventListener("keydown", onPageKeyDown, true);
+  }
+}

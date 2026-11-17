@@ -11,6 +11,10 @@ import { Prec } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { typeahead, type TypeaheadResult } from "../phorge";
 import { leftEditor, Popup } from "./popup";
+import { LruCache } from "../../cache";
+
+/** How many queries' results an editor keeps, so typing back and forth asks the server once. */
+const QUERIES_KEPT = 100;
 
 /** Where the completed text is (the text of an editor, of the text or a table cell). Positions are offsets in it. */
 interface Host {
@@ -112,9 +116,10 @@ class Autocomplete {
   private results: TypeaheadResult[] = [];
   private focus: number | null = null;
   private loading = false;
-  /** Autocomplete texts of earlier queries, by trigger and query. */
-  private readonly known = new Map<string, string[]>();
-  private readonly cache = new Map<string, TypeaheadResult[]>();
+  /** Autocomplete texts of earlier queries, by trigger and query; the last ones. */
+  private readonly known = new LruCache<string, string[]>(QUERIES_KEPT);
+  /** The results of earlier queries, by source and query; the last ones. */
+  private readonly cache = new LruCache<string, TypeaheadResult[]>(QUERIES_KEPT);
   private timer: ReturnType<typeof setTimeout> | undefined;
   private popup: Popup | null = null;
 

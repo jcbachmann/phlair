@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Rendered } from "../src/phizziwig/phorge";
 import { BlockRenderer, type RenderItem } from "../src/phizziwig/renderer";
 
@@ -20,10 +20,18 @@ function server(fail: (text: string) => boolean = () => false) {
   return { render, requests };
 }
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+/** Lets the renderer's timers and the server's answers run; the timers are fake. */
+const settle = (ms = 20) => vi.advanceTimersByTimeAsync(ms);
 const item = (text: string, last = false): RenderItem => ({ text, last });
 
 describe("BlockRenderer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders blocks in one request and caches each", async () => {
     const { render, requests } = server();
     let rendered = 0;
@@ -89,9 +97,25 @@ describe("BlockRenderer", () => {
     };
     const renderer = new BlockRenderer(render, () => {});
     renderer.request(Array.from({ length: 20 }, (_, i) => item(`Block ${i}`)));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await settle(200);
     expect(renderer.get(item("Block 19"))).toBe("<p>Block 19</p>");
     expect(most).toBe(4);
+    renderer.destroy();
+  });
+
+  it("retries failed blocks later, and a block that renders then is no failure any more", async () => {
+    let down = true;
+    const { render, requests } = server(() => down);
+    const renderer = new BlockRenderer(render, () => {});
+    renderer.request([item("Flaky")]);
+    await settle();
+    expect(renderer.failures).toBe(1);
+    down = false;
+    // The first retry comes after 2 s.
+    await settle(2_500);
+    expect(requests.filter((text) => text.startsWith("Flaky")).length).toBeGreaterThan(1);
+    expect(renderer.get(item("Flaky"))).toBe("<p>Flaky</p>");
+    expect(renderer.failures).toBe(0);
     renderer.destroy();
   });
 

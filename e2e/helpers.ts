@@ -48,6 +48,22 @@ export async function settled(page: Page): Promise<void> {
   await expect(page.locator(".rme-editor").first()).toHaveAttribute("aria-busy", "false");
 }
 
+/**
+ * Waits until the browser has drawn a few frames: what an event changes in
+ * the page (CodeMirror's measuring, scrolling into view) is done by then. For
+ * checks that something does not happen, instead of a fixed time.
+ */
+export async function frames(page: Page, count = 3): Promise<void> {
+  await page.evaluate(
+    (n) =>
+      new Promise<void>((resolve) => {
+        const next = (left: number) => (left ? requestAnimationFrame(() => next(left - 1)) : resolve());
+        next(n);
+      }),
+    count,
+  );
+}
+
 export function editor(page: Page): Locator {
   return page.locator(".rme-editor .cm-content").first();
 }

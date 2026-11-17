@@ -8,8 +8,10 @@ import { ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import type { Block } from "../blocks";
 import { parseHtml, setHtml } from "../html";
 import { knownHeight, rememberHeight } from "./heights";
+import { LruCache } from "../../cache";
 
-const embedCache = new Map<string, string | null>();
+/** The images of rendered blocks that have any, by their HTML (see imagesOf()). */
+const embedCache = new LruCache<string, string | null>(200);
 
 const EMBED = '[class*="phabricator-remarkup-embed-layout"]';
 
@@ -43,14 +45,11 @@ export function imagesOf(html: string): string | null {
         })
         .join("") || null;
     embedCache.set(html, images);
-    if (embedCache.size > 200) {
-      embedCache.delete(embedCache.keys().next().value!);
-    }
   }
   return images;
 }
 
-const splitCache = new Map<string, { html: string; file: string | null }[]>();
+const splitCache = new LruCache<string, { html: string; file: string | null }[]>(200);
 
 /**
  * The images of imagesOf one by one, each with the file it embeds ("F123"; null
@@ -73,9 +72,6 @@ export function splitImages(images: string): { html: string; file: string | null
       empty = "";
     }
     splitCache.set(images, parts);
-    if (splitCache.size > 200) {
-      splitCache.delete(splitCache.keys().next().value!);
-    }
   }
   return parts;
 }

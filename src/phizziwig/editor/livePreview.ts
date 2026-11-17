@@ -10,7 +10,7 @@ import { EditorState, Facet, type Line, type Range, StateEffect, StateField } fr
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { type Block, type BlockKind, splitBlocks } from "../blocks";
 import type { BlockRenderer, RenderItem } from "../renderer";
-import { blockEdges, clearGaps, gapKey, gapMeasurer, gapsField, setGaps, textEdges } from "./gaps";
+import { blockEdges, clearGaps, fitEdgesCache, gapKey, gapMeasurer, gapsField, setGaps, textEdges } from "./gaps";
 import { focusField, focusTracking, setFocused } from "./focus";
 import {
   floatPadMeasure,
@@ -27,7 +27,7 @@ import type { InlineToken } from "../inline";
 import { findEmbeds } from "../embed";
 import { focusedCellSource, refreshCellEditor, setTableMode, TableWidget, tableModeField } from "./tableEditor";
 import { setHtml } from "../html";
-import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
+import { fitHeightsCache, knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { type ListItem, parseList } from "../list";
 import { LIST_ITEM, QUOTE_LINE, QUOTE_MARKERS, quoteDepth } from "../syntax";
 import {
@@ -679,6 +679,8 @@ const renderRequests = ViewPlugin.fromClass(
       }
       const { blocks, active, activeQuoted } = view.state.field(previewField);
       renderer.setBlockCount(blocks.length);
+      fitEdgesCache(blocks.length);
+      fitHeightsCache(blocks.length);
       const lastBlock = blocks.findLast((b) => !b.empty);
       // A table edited in a cell is edited like a block in the text.
       const tableInEdit = focusedCellSource(view)?.tableFrom;

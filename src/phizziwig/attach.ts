@@ -187,14 +187,23 @@ function restyleSoon(): void {
   restyleTimer = setTimeout(() => editors.forEach((editor) => editor.restyle()), 100);
 }
 
-// Dark Reader and similar tools add and remove styles and mark the root
-// element while the page is open.
-new MutationObserver(restyleSoon).observe(document.documentElement, {
-  attributes: true,
-  attributeFilter: ["class", "style", "data-darkreader-mode", "data-darkreader-scheme"],
-});
-// Fonts that arrive later change what pageStyle() measures (e.g. how far checklist items start).
-document.fonts?.addEventListener("loadingdone", restyleSoon);
+let watchingStyle = false;
+
+/** Restyles the editors when the page's styles change; from the first editor on. */
+function watchPageStyle(): void {
+  if (watchingStyle) {
+    return;
+  }
+  watchingStyle = true;
+  // Dark Reader and similar tools add and remove styles and mark the root
+  // element while the page is open.
+  new MutationObserver(restyleSoon).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "style", "data-darkreader-mode", "data-darkreader-scheme"],
+  });
+  // Fonts that arrive later change what pageStyle() measures (e.g. how far checklist items start).
+  document.fonts?.addEventListener("loadingdone", restyleSoon);
+}
 
 /**
  * Toolbar buttons the editor does itself instead of Phorge, by icon.
@@ -440,6 +449,7 @@ class LiveEditor {
     }
     this.restyle();
     editors.add(this);
+    watchPageStyle();
     this.bar.addEventListener("mousedown", this.onBarMouseDown);
     this.bar.addEventListener("click", this.onBarClick);
     window.addEventListener("click", this.onWindowClick, true);

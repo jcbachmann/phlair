@@ -9,6 +9,7 @@ import {
   createRevision,
   createTask,
   editor,
+  frames,
   imageSite,
   openNewWikiPage,
   openWithEditor,
@@ -219,12 +220,15 @@ test.describe("fixed bugs", () => {
   });
 
   test("typing in a cell renders the table once typing pauses", async ({ page }) => {
+    await page.clock.install();
     await startWith(page, "| a | b |\n| 1 | 2 |");
     let requests = 0;
     page.on("request", (request) => request.url().includes("/phriction/preview/") && requests++);
     await page.locator(".rme-table-editor td", { hasText: "1" }).click();
     await page.keyboard.type("234567890", { delay: 30 });
-    await page.waitForTimeout(1000);
+    // Past the pause after typing, and the rendering it asks for.
+    await page.clock.runFor(1000);
+    await settled(page);
     // The editor's requests; Phorge's own preview adds some.
     expect(requests).toBeLessThanOrEqual(4);
   });
@@ -629,7 +633,7 @@ test.describe("reported issues", () => {
     await page.locator(".remarkup-assist-button:has(.fa-link)").click();
     const picker = page.locator(".rme-picker");
     await expect(picker.locator(".rme-picker-search")).toBeFocused();
-    await page.waitForTimeout(300);
+    await frames(page);
     await expect(picker).toBeVisible();
     expect(await scroll()).toBe(before);
     await page.keyboard.press("Escape");
@@ -1220,14 +1224,19 @@ test.describe("review fixes", () => {
   });
 
   test("a block that failed is forgotten when its text is gone", async ({ page }) => {
-    let failed = 0;
-    await page.route("**/phriction/preview/**", (route) => {
-      if (route.request().postData()?.includes("bad")) {
-        failed++;
-        return route.fulfill({ status: 500, body: "Server error" });
-      }
-      return route.fallback();
-    });
+    await page.clock.install();
+    await page.route("**/phriction/preview/**", (route) =>
+      route.request().postData()?.includes("bad")
+        ? route.fulfill({ status: 500, body: "Server error" })
+        : route.fallback(),
+    );
+    // What was sent to be rendered, in the order the page sent it.
+    const posted: string[] = [];
+    page.on(
+      "request",
+      (request) => request.url().includes("/phriction/preview/") && posted.push(request.postData() ?? ""),
+    );
+    const sent = (text: string) => posted.filter((data) => data.includes(text)).length;
     await openNewWikiPage(page, "Forget failures");
     await editor(page).click();
     await page.keyboard.insertText("bad");
@@ -1238,12 +1247,16 @@ test.describe("review fixes", () => {
     await page.keyboard.insertText("good");
     await blur(page);
     await expect(page.locator(".rme-status")).toBeHidden();
-    // Requests made while the text was still "bad" may reach the route late on a busy machine.
-    await page.waitForTimeout(500);
-    const count = failed;
-    // No retries of "bad" any more (the first retry would come after 2 s).
-    await page.waitForTimeout(2500);
-    expect(failed).toBe(count);
+    const count = sent("bad");
+    // No retries of "bad" any more (the first retry would come after 2 s): none
+    // was sent before the request for a text typed after them.
+    await page.clock.runFor(10_000);
+    await editor(page).click();
+    await page.keyboard.press("End");
+    await page.keyboard.insertText(" later");
+    await blur(page);
+    await expect.poll(() => sent("later")).toBeGreaterThan(0);
+    expect(sent("bad")).toBe(count);
   });
 
   test("dragging selected text does not keep the blocks from switching", async ({ page }) => {
@@ -1340,7 +1353,7 @@ test.describe("second test round", () => {
     await page.mouse.up();
     // Right away, before typing anything (later renderings would redraw it
     // anyway): the blank line is a full line.
-    await page.waitForTimeout(100);
+    await frames(page);
     const blank = page.locator(".cm-line").filter({ hasText: /^$/ });
     expect(await blank.evaluate((line) => line.getBoundingClientRect().height)).toBeGreaterThan(18);
     await page.keyboard.type("New");
@@ -3023,7 +3036,9 @@ test.describe("sixteenth test round", () => {
           [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "After.")!.getBoundingClientRect()
             .top - document.querySelector(".rme-block-note")!.getBoundingClientRect().bottom,
       );
-    await page.waitForTimeout(500);
+    // Once the gaps are measured, which happens after rendering.
+    await settled(page);
+    await frames(page);
     await expect.poll(gap).toBeCloseTo(line, 0);
     await rendered.click();
     await expect(page.locator(".rme-block-note")).toHaveCount(0);
@@ -3789,8 +3804,8 @@ test.describe("uploads", () => {
   const panel = (page: Page) => page.locator(".rme-upload-status");
 
   /** Drops a file of a size on the editor, below its text. */
-  async function drop(page: Page, name: string, size = 5): Promise<void> {
-    await editor(page).evaluate(
+  async function drop(page: Page, name: string, size = 5, target = editor(page)): Promise<void> {
+    await target.evaluate(
       (node, [name, size]) => {
         const data = new DataTransfer();
         data.items.add(new File([new Uint8Array(size as number).fill(65)], name as string));
@@ -4017,12 +4032,37 @@ test.describe("uploads", () => {
     await expect(comment).not.toContainText("Uploading");
   });
 
+  test("a Differential inline comment saved while its file uploads is saved when the upload is done", async ({
+    page,
+  }) => {
+    await createRevision(page, "Inline upload");
+    await addPhlair(page);
+    await page.locator("td.new.n").first().click();
+    const inline = page.locator(".differential-inline-comment-edit");
+    const content = inline.locator(".rme-editor .cm-content");
+    await content.click();
+    await page.keyboard.type("See ");
+    const release = await hold(page, /\/file\/dropupload\//);
+    await drop(page, "inline.txt", 5, content);
+    await expect(inline.locator("textarea.remarkup-assist-textarea")).toHaveValue(/\{Uploading inline\.txt/);
+    let saves = 0;
+    page.on("request", (request) => request.url().includes("/differential/comment/inline/edit/") && saves++);
+    await inline.getByRole("button", { name: /Save/ }).click();
+    await expect(inline.locator(".rme-upload-status")).toContainText("The form is sent when done.");
+    expect(saves).toBe(0);
+    release();
+    const saved = page.locator(".differential-inline-comment:not(.inline-comment-preview)", { hasText: "See" });
+    await expect(saved).toContainText("inline.txt");
+    await expect(saved).not.toContainText("Uploading");
+  });
+
   test("a file undone while it uploads and redone afterwards is its reference", async ({ page }) => {
+    await page.clock.install();
     await openNewWikiPage(page, "Undo an upload");
     await editor(page).click();
     await page.keyboard.type("Notes.");
-    // Not one step with the typing.
-    await page.waitForTimeout(600);
+    // Not one undo step with the typing (CodeMirror joins changes within 500 ms).
+    await page.clock.runFor(600);
     const release = await hold(page, /\/file\/dropupload\//);
     await drop(page, "redo.txt");
     await expect.poll(() => source(page)).toMatch(/\{Uploading redo\.txt \d+…\}/);
@@ -4204,6 +4244,28 @@ test.describe("discoverability", () => {
     // Gone when the mouse leaves the image.
     await page.locator(".cm-line", { hasText: "Before." }).hover();
     await expect(more).toBeHidden();
+  });
+
+  test("menus close on a press elsewhere and when the page scrolls; typing hides a tooltip", async ({ page }) => {
+    await startWith(page, "Before.\n\n{F1}\n\n" + Array.from({ length: 40 }, (_, i) => `Line ${i}.`).join("\n\n"));
+    const menu = page.locator(".rme-image-menu");
+    const open = async () => {
+      await page.locator(".rme-editor a[data-rme-file] img").first().hover();
+      await page.locator(".rme-image-more").click();
+      await expect(menu).toBeVisible();
+    };
+    await open();
+    await page.locator("input[name=title]").click();
+    await expect(menu).toHaveCount(0);
+    await open();
+    await page.mouse.wheel(0, 200);
+    await expect(menu).toHaveCount(0);
+
+    const tip = page.locator(".jx-tooltip-container");
+    await page.getByRole("button", { name: "Horizontal line" }).hover();
+    await expect(tip).toHaveCount(1);
+    await page.keyboard.press("Shift");
+    await expect(tip).toHaveCount(0);
   });
 });
 
@@ -5375,7 +5437,8 @@ test.describe("images by their lines", () => {
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
     await expect(page.locator(".rme-image-menu")).toBeVisible();
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await page.waitForTimeout(300);
+    // The mouse events the browser makes of the touch, if any, are done by then.
+    await frames(page);
     expect(await cursor(page)).toBe("Before.".length);
     await expect(page.locator(".rme-image-menu")).toBeVisible();
   });

@@ -12,6 +12,7 @@
 import { type EditorState, StateEffect, StateField } from "@codemirror/state";
 import { type EditorView, ViewPlugin } from "@codemirror/view";
 import type { Block, BlockKind } from "../blocks";
+import { LruCache } from "../../cache";
 import { parseHtml } from "../html";
 import { wikiSlug } from "../phorge";
 import { NOTE_PREFIX } from "../syntax";
@@ -42,7 +43,14 @@ type Signature = string;
 
 /** Markup of an element of each signature, to measure it with; images left out. */
 const samples = new Map<Signature, string>();
-const edgesCache = new Map<string, [Signature, Signature]>();
+const MIN_EDGES = 2000;
+/** The edges of rendered blocks by their HTML; see fitEdgesCache(). */
+const edgesCache = new LruCache<string, [Signature, Signature]>(MIN_EDGES);
+
+/** Keeps the edges of at least twice as many blocks as a text has, like the renderer its HTML. */
+export function fitEdgesCache(blockCount: number): void {
+  edgesCache.capacity = Math.max(edgesCache.capacity, MIN_EDGES, blockCount * 2);
+}
 
 function signature(element: Element): Signature {
   return [element.tagName, ...Array.from(element.classList).sort()].join(".");
@@ -69,9 +77,6 @@ function htmlEdges(html: string): [Signature, Signature] | null {
     }
     edges = [signature(first), signature(last)];
     edgesCache.set(html, edges);
-    if (edgesCache.size > 2000) {
-      edgesCache.delete(edgesCache.keys().next().value!);
-    }
   }
   return edges;
 }

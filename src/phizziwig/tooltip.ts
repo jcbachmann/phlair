@@ -16,6 +16,7 @@ function hide(): void {
     current.remove();
     current = null;
     lastHidden = Date.now();
+    document.removeEventListener("keydown", hide, true);
   }
 }
 
@@ -86,6 +87,8 @@ function show(target: HTMLElement, text: string): void {
     node.classList.add("jx-tooltip-appear");
   }
   current = node;
+  // Like Phorge: typing hides the tip (see addTooltip()).
+  document.addEventListener("keydown", hide, true);
 }
 
 /**
@@ -107,5 +110,3 @@ export function addTooltip(element: HTMLElement, text: string): () => void {
     hide();
   };
 }
-
-document.addEventListener("keydown", hide, true);

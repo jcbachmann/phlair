@@ -1,5 +1,6 @@
 import { loadImage, type Rendered, type RenderFunction } from "./phorge";
 import { escapeText, parseHtml } from "./html";
+import { LruCache } from "../cache";
 
 const MIN_CACHE = 1000;
 /** How many blocks are rendered at once when a batch failed. */
@@ -28,13 +29,12 @@ export interface RenderItem {
  * fail are retried later.
  */
 export class BlockRenderer {
-  private readonly cache = new Map<string, string>();
+  private readonly cache = new LruCache<string, string>(MIN_CACHE);
   private readonly queued = new Map<string, RenderItem>();
   private readonly inFlight = new Set<string>();
   private readonly failed = new Map<string, { item: RenderItem; failures: number; retryAt: number }>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
-  private capacity = MIN_CACHE;
   private destroyed = false;
   private readonly separator = `RMESEP${Math.random().toString(36).slice(2, 10)}`;
 
@@ -65,14 +65,7 @@ export class BlockRenderer {
 
   /** Returns the cached HTML of a block, or undefined. */
   get(item: RenderItem): string | undefined {
-    const key = this.key(item);
-    const html = this.cache.get(key);
-    if (html !== undefined) {
-      // Keep recently used entries in the cache.
-      this.cache.delete(key);
-      this.cache.set(key, html);
-    }
-    return html;
+    return this.cache.get(this.key(item));
   }
 
   /**
@@ -91,7 +84,7 @@ export class BlockRenderer {
 
   /** Keeps at least twice as many blocks as the text has in the cache. */
   setBlockCount(count: number): void {
-    this.capacity = Math.max(MIN_CACHE, count * 2);
+    this.cache.capacity = Math.max(MIN_CACHE, count * 2);
   }
 
   /** The number of blocks that could not be rendered. */
@@ -274,9 +267,6 @@ export class BlockRenderer {
     const key = this.key(item);
     this.failed.delete(key);
     this.cache.set(key, html.trim());
-    while (this.cache.size > this.capacity) {
-      this.cache.delete(this.cache.keys().next().value!);
-    }
   }
 
   destroy(): void {
