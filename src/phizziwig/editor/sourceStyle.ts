@@ -135,18 +135,50 @@ function decorateBlock(view: EditorView, block: Block, ranges: Range<Decoration>
   styleTokens(blockTokens(doc, block), ranges);
 }
 
-/** The blocks inside a quote that look like themselves there: headers and lists, as Phorge renders them in quotes. */
+/**
+ * The blocks inside a quote that look like themselves there, as Phorge
+ * renders them in quotes: headers, lists, tables and rules; code blocks and
+ * notes as a box in the quote (style.css).
+ */
 function decorateQuoted(doc: Text, block: TextBlock, ranges: Range<Decoration>[]): void {
   if (block.kind === "list") {
     decorateList(doc, block.lines, ranges);
-  } else if (block.kind === "header") {
-    const [first, second] = block.lines;
-    const level = second ? (/^=/.test(second.text) ? 1 : 2) : headerLevel(first.text);
-    block.lines.forEach((line, i) => {
-      ranges.push(Decoration.line({ class: `rme-src-h rme-src-h${level}` }).range(doc.line(line.number).from));
-      decorateLine(block, line.from, line.text, i === 0, ranges);
-    });
+    return;
   }
+  let lineClass = "";
+  if (block.kind === "header") {
+    const [first, second] = block.lines;
+    lineClass = `rme-src-h rme-src-h${second ? (/^=/.test(second.text) ? 1 : 2) : headerLevel(first.text)}`;
+  } else if (MONOSPACED.has(block.kind)) {
+    lineClass = "rme-quoted-box rme-quoted-code";
+  } else if (block.kind === "note") {
+    const word = /(NOTE|IMPORTANT|WARNING)/.exec(block.lines[0].text)?.[1].toLowerCase() ?? "note";
+    lineClass = `rme-quoted-box rme-quoted-${word}`;
+  } else if (block.kind === "table") {
+    lineClass = "rme-src-table";
+  } else if (block.kind === "rule") {
+    lineClass = "rme-quoted-rule";
+  }
+  if (!lineClass) {
+    return;
+  }
+  const box = lineClass.includes("rme-quoted-box");
+  block.lines.forEach((line, i) => {
+    const start = doc.line(line.number).from;
+    let edge = "";
+    if (box) {
+      edge = (i === 0 ? " rme-box-first" : "") + (i === block.lines.length - 1 ? " rme-box-last" : "");
+    }
+    ranges.push(Decoration.line({ class: lineClass + edge }).range(start));
+    if (block.kind === "note" && i > 0) {
+      ranges.push(JOINED.range(start));
+    }
+    // A code block's "```" lines, which the rendered block does not show.
+    if (block.kind === "code" && (i === 0 ? /^\s*```[^`]*$/ : /^\s*```\s*$/).test(line.text)) {
+      mark(ranges, line.from, line.to, "rme-markup");
+    }
+    decorateLine(block, line.from, line.text, i === 0, ranges);
+  });
 }
 
 /**

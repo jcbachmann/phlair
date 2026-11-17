@@ -53,7 +53,7 @@ import { buttonIcon, toolbarButton } from "./toolbar";
 const enabledChoice = storedChoice(__TARGET__ === "phorge" ? null : "phizziwig-enabled", "1", ["1", "0"]);
 
 /**
- * Copies how the page renders headers and code blocks into CSS variables of
+ * Copies how the page renders headers, code blocks and notes into CSS variables of
  * the editor, so a block being edited takes the same space and has the same
  * font as the rendered one. Both differ between Phorge versions and custom
  * styles, and code blocks use each user's "Monospaced Font" setting. The probe
@@ -90,6 +90,12 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
   probe.append(codeBlock);
   const rule = document.createElement("hr");
   probe.append(rule);
+  const notes = ["note", "important", "warning"].map((word) => {
+    const note = document.createElement("div");
+    note.className = `remarkup-${word}`;
+    probe.append(note);
+    return note;
+  });
   // A list item and a checked checklist item: how much further the text of the second starts, and its color.
   const lists = ["", " remarkup-list-with-checkmarks"].map((checks) => {
     const list = document.createElement("ul");
@@ -155,6 +161,14 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
     "--rme-rule-color",
     parseFloat(ruleStyle.borderTopWidth) > 0 ? ruleStyle.borderTopColor : ruleStyle.backgroundColor,
   );
+  // Notes in quotes are drawn by the editor (style.css).
+  for (const note of notes) {
+    const word = note.className.replace("remarkup-", "");
+    const noteStyle = getComputedStyle(note);
+    editor.style.setProperty(`--rme-${word}-background`, noteStyle.backgroundColor);
+    editor.style.setProperty(`--rme-${word}-border-color`, noteStyle.borderLeftColor);
+    editor.style.setProperty(`--rme-${word}-border-width`, noteStyle.borderLeftWidth);
+  }
   probe.remove();
 
   // The textarea is hidden, but has its colors.

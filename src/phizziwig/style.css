@@ -291,9 +291,12 @@
 }
 
 .rme-editor .cm-line.rme-src-quote {
-  /* Where its text starts; lists in it are indented from there. */
+  /* Where its text starts and ends; lists in it are indented from there. */
   --rme-quote-pad: 12px;
-  padding: 0 12px;
+  --rme-quote-end: 12px;
+  /* The quote's own padding above and below the line, and that of a box in it (see below). */
+  padding: calc(var(--rme-quote-pad-top, 0px) + var(--rme-box-top, 0px)) 12px
+    calc(var(--rme-quote-pad-bottom, 0px) + var(--rme-box-bottom, 0px));
   border-left: 3px solid var(--rme-quote-border-color, #a7b5bf);
   background: var(--rme-quote-background, #f8f9fc);
   color: var(--rme-quote-color, #464c5c);
@@ -301,11 +304,11 @@
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-first {
-  padding-top: 8px;
+  --rme-quote-pad-top: 8px;
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-last {
-  padding-bottom: 8px;
+  --rme-quote-pad-bottom: 8px;
 }
 
 /* Images in a quote are in the quote, like in the rendered quote (livePreview.ts). */
@@ -325,11 +328,11 @@
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-first.rme-image-above {
-  padding-top: 0;
+  --rme-quote-pad-top: 0px;
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-last.rme-image-below {
-  padding-bottom: 0;
+  --rme-quote-pad-bottom: 0px;
 }
 
 /*
@@ -364,6 +367,7 @@
 .rme-editor .rme-src-quote.rme-quote-depth-2,
 .rme-editor .rme-preview-quote.rme-quote-depth-2 {
   --rme-quote-pad: 27px;
+  --rme-quote-end: 24px;
   padding-left: 27px;
   padding-right: 24px;
   background-image: var(--rme-inner-quote-bar), var(--rme-inner-quote-tint);
@@ -376,6 +380,7 @@
 .rme-editor .rme-src-quote.rme-quote-depth-3,
 .rme-editor .rme-preview-quote.rme-quote-depth-3 {
   --rme-quote-pad: 42px;
+  --rme-quote-end: 36px;
   padding-left: 42px;
   padding-right: 36px;
   background-image:
@@ -395,6 +400,7 @@
 .rme-editor .rme-src-quote.rme-quote-depth-4,
 .rme-editor .rme-preview-quote.rme-quote-depth-4 {
   --rme-quote-pad: 57px;
+  --rme-quote-end: 48px;
   padding-left: 57px;
   padding-right: 48px;
   background-image:
@@ -418,32 +424,137 @@
 
 /* Where a nested quote starts or ends, its padding; at an end of the whole quote, after the quote's own. */
 .rme-editor .cm-line.rme-src-quote.rme-quote-open {
-  padding-top: 8px;
+  --rme-quote-pad-top: 8px;
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-quote-close {
-  padding-bottom: 8px;
+  --rme-quote-pad-bottom: 8px;
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-first.rme-quote-open {
   --rme-quote-top: 8px;
-  padding-top: 16px;
+  --rme-quote-pad-top: 16px;
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-last.rme-quote-close {
   --rme-quote-bottom: 8px;
-  padding-bottom: 16px;
+  --rme-quote-pad-bottom: 16px;
 }
 
 /* Text right before or after a nested quote has Phorge's 12px between them, outside the nested quote. */
 .rme-editor .cm-line.rme-src-quote.rme-quote-open.rme-quote-apart {
   --rme-quote-top: 12px;
-  padding-top: 20px;
+  --rme-quote-pad-top: 20px;
 }
 
 .rme-editor .cm-line.rme-src-quote.rme-quote-close.rme-quote-apart {
   --rme-quote-bottom: 12px;
-  padding-bottom: 20px;
+  --rme-quote-pad-bottom: 20px;
+}
+
+/*
+ * Code blocks and notes in a quote (sourceStyle.ts) are boxes in it, as Phorge
+ * renders them: between the quote's paddings (of the innermost level), with
+ * their own padding around their text. Their lines are the quote's, so the box
+ * is drawn behind the text of each line, and its first and last lines have its
+ * padding above and below.
+ */
+.rme-editor .cm-line.rme-src-quote.rme-quoted-box {
+  position: relative;
+  /* The box goes behind the text, above the quote's background. */
+  z-index: 0;
+  padding-left: calc(var(--rme-quote-pad) + var(--rme-box-pad-left));
+  padding-right: calc(var(--rme-quote-end) + var(--rme-box-pad-right));
+}
+
+.rme-editor .cm-line.rme-quoted-box::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: var(--rme-quote-pad-top, 0px);
+  bottom: var(--rme-quote-pad-bottom, 0px);
+  left: var(--rme-quote-pad);
+  right: var(--rme-quote-end);
+  border-left: var(--rme-box-border, none);
+  background: var(--rme-box-background);
+}
+
+.rme-editor .cm-line.rme-quoted-box.rme-box-first {
+  --rme-box-top: var(--rme-box-pad-y);
+}
+
+.rme-editor .cm-line.rme-quoted-box.rme-box-last {
+  --rme-box-bottom: var(--rme-box-pad-y);
+}
+
+.rme-editor .cm-line.rme-quoted-box.rme-box-first::before {
+  border-top-left-radius: var(--rme-box-radius, 0px);
+  border-top-right-radius: var(--rme-box-radius, 0px);
+}
+
+.rme-editor .cm-line.rme-quoted-box.rme-box-last::before {
+  border-bottom-left-radius: var(--rme-box-radius, 0px);
+  border-bottom-right-radius: var(--rme-box-radius, 0px);
+}
+
+/* Like the rendered code blocks (see .rme-src-code), in the text's color and upright. */
+.rme-editor .cm-line.rme-quoted-code {
+  --rme-box-pad-left: var(--rme-code-padding-x, 12px);
+  --rme-box-pad-right: var(--rme-code-padding-x, 12px);
+  --rme-box-pad-y: var(--rme-code-padding-y, 12px);
+  --rme-box-radius: var(--rme-code-radius, 3px);
+  --rme-box-background: var(--rme-code-background, rgba(71, 87, 120, 0.08));
+  font-family: var(--rme-code-font-family, Menlo, Consolas, Monaco, monospace);
+  font-size: var(--rme-code-font-size, 11px);
+  font-style: normal;
+  line-height: var(--rme-code-line-height, 15px);
+  color: var(--rme-color, inherit);
+}
+
+/* Phorge's notes: 12px padding inside their border; the colors read from the page by pageStyle(). */
+.rme-editor .cm-line:is(.rme-quoted-note, .rme-quoted-important, .rme-quoted-warning) {
+  --rme-box-pad-left: calc(var(--rme-box-border-width) + 12px);
+  --rme-box-pad-right: 12px;
+  --rme-box-pad-y: 12px;
+  --rme-box-border: var(--rme-box-border-width) solid var(--rme-box-border-color);
+}
+
+.rme-editor .cm-line.rme-quoted-note {
+  --rme-box-border-width: var(--rme-note-border-width, 3px);
+  --rme-box-border-color: var(--rme-note-border-color, #3498db);
+  --rme-box-background: var(--rme-note-background, #ecf6fd);
+}
+
+.rme-editor .cm-line.rme-quoted-important {
+  --rme-box-border-width: var(--rme-important-border-width, 3px);
+  --rme-box-border-color: var(--rme-important-border-color, #c0392b);
+  --rme-box-background: var(--rme-important-background, #f9e6e5);
+}
+
+.rme-editor .cm-line.rme-quoted-warning {
+  --rme-box-border-width: var(--rme-warning-border-width, 3px);
+  --rme-box-border-color: var(--rme-warning-border-color, #f1c40f);
+  --rme-box-background: var(--rme-warning-background, #fdf5d4);
+}
+
+/* A rule in a quote: across the quote's text (see .rme-src-rule). */
+.rme-editor .cm-line.rme-quoted-rule {
+  position: relative;
+  z-index: 0;
+  color: color-mix(in srgb, currentColor 50%, transparent);
+}
+
+.rme-editor .cm-line.rme-quoted-rule::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: calc(
+    var(--rme-quote-pad-top, 0px) + (100% - var(--rme-quote-pad-top, 0px) - var(--rme-quote-pad-bottom, 0px)) / 2
+  );
+  left: var(--rme-quote-pad);
+  right: var(--rme-quote-end);
+  height: 1px;
+  background: var(--rme-rule-color, #dde8ef);
 }
 
 /*

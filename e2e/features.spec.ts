@@ -2034,6 +2034,114 @@ test.describe("everything renders until the cursor is on it", () => {
       .toBe("> Outer line\n>\n>> Inner one\n> Inner two\n> three\n> back\n>\n> Outer again");
   });
 
+  test("code blocks, notes and rules in quotes are boxes and lines in the quote, as Phorge renders them", async ({
+    page,
+  }) => {
+    const text = [
+      "> Asked:",
+      ">",
+      "> ```",
+      "> C:\\Users\\Someone\\jcb-vorlagen",
+      "> ```",
+      ">",
+      "> NOTE: Noted in a quote",
+      ">",
+      "> ---",
+      ">",
+      ">> ```",
+      ">> nested code",
+      ">> ```",
+    ].join("\n");
+    await startWith(page, "Start");
+    await textarea(page).evaluate((t: HTMLTextAreaElement, value) => (t.value = value), text);
+    const line = (part: string) => page.locator(".cm-line", { hasText: part });
+    await expect(line("nested code")).toBeVisible();
+    await expect(line("C:\\Users")).toHaveClass(/rme-quoted-code/);
+    await expect(line("Noted")).toHaveClass(/rme-quoted-note/);
+    await expect(line("Asked")).not.toHaveClass(/rme-quoted/);
+    // Phorge's rendering of the same text, beside the editor.
+    const html = (await conduit(page, "remarkup.process", { context: "phriction", contents: [text] }))[0].content;
+    await page.evaluate((h) => {
+      const rendered = document.createElement("div");
+      rendered.className = "phabricator-remarkup";
+      rendered.id = "rendered";
+      rendered.append(...new DOMParser().parseFromString(h, "text/html").body.childNodes);
+      document.querySelector(".rme-editor")!.before(rendered);
+    }, html);
+    // Where a word starts, from the left edge of its quote (the outer one's border).
+    const offset = (scope: string, word: string) =>
+      page.evaluate(
+        ([scope, word]) => {
+          const root = document.querySelector(scope)!;
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const at = node.textContent!.indexOf(word);
+            if (at >= 0) {
+              const range = document.createRange();
+              range.setStart(node, at);
+              range.setEnd(node, at + 1);
+              const quote = node.parentElement!.closest("blockquote, .cm-line")!;
+              const edge = scope === "#rendered" ? root.querySelector("blockquote")! : quote;
+              return range.getBoundingClientRect().left - edge.getBoundingClientRect().left;
+            }
+          }
+          throw new Error(`no ${word}`);
+        },
+        [scope, word],
+      );
+    for (const word of ["C:", "NOTE", "nested"]) {
+      expect(Math.abs((await offset(".rme-editor", word)) - (await offset("#rendered", word)))).toBeLessThan(1.5);
+    }
+    // The boxes in Phorge's colors, the code upright in its font.
+    const box = (part: string) =>
+      line(part).evaluate((element) => {
+        const style = getComputedStyle(element, "::before");
+        return [style.backgroundColor, style.borderLeftColor, style.borderLeftWidth];
+      });
+    const renderedStyle = (selector: string) =>
+      page
+        .locator(`#rendered ${selector}`)
+        .first()
+        .evaluate((element) => {
+          const style = getComputedStyle(element);
+          return [
+            style.backgroundColor,
+            style.borderLeftColor,
+            style.borderLeftWidth,
+            style.fontFamily,
+            style.fontStyle,
+          ];
+        });
+    const [noteBackground, noteBorder, noteWidth] = await renderedStyle(".remarkup-note");
+    expect(await box("Noted")).toEqual([noteBackground, noteBorder, noteWidth]);
+    const [codeBackground, , , codeFont] = await renderedStyle("pre.remarkup-code");
+    expect((await box("C:\\Users"))[0]).toBe(codeBackground);
+    await expect(line("C:\\Users")).toHaveCSS("font-family", codeFont);
+    await expect(line("C:\\Users")).toHaveCSS("font-style", "normal");
+    // The box's padding above its text: in a nested quote, after the nested quote's own.
+    const codePadding = await page
+      .locator("#rendered pre.remarkup-code")
+      .first()
+      .evaluate((element) => parseFloat(getComputedStyle(element).paddingTop));
+    const fences = page.locator(".cm-line.rme-quoted-code.rme-box-first");
+    await expect(fences).toHaveCount(2);
+    const top = (k: number) =>
+      fences
+        .nth(k)
+        .evaluate((element) => [
+          parseFloat(getComputedStyle(element).paddingTop),
+          parseFloat(getComputedStyle(element, "::before").top),
+        ]);
+    expect(await top(0)).toEqual([codePadding, 0]);
+    expect(await top(1)).toEqual([8 + codePadding, 8]);
+    // The rule across the quote's text, between the quote's paddings.
+    const rule = await page.locator(".cm-line.rme-quoted-rule").evaluate((element) => {
+      const style = getComputedStyle(element, "::before");
+      return [style.content, style.height];
+    });
+    expect(rule).toEqual(['""', "1px"]);
+  });
+
   test("quote markers are written as Phorge quotes while editing: levels together, a space before the text", async ({
     page,
   }) => {
