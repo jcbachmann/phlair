@@ -471,6 +471,25 @@ test.describe("editing aids", () => {
     await expect.poll(() => source(page)).toBe("Element\tLine\n\n```\ncode: bold text\n```");
   });
 
+  test("code blocks in quotes are code: no insert menu, no Markdown habits, pasted text plain in the quote", async ({
+    page,
+  }) => {
+    await startWith(page, "> Asked:\n> ```\n> code\n> ```");
+    await page.locator(".rme-block-code.rme-quoted-block").click();
+    await page.locator(".cm-line", { hasText: "code" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" /tab");
+    await expect(page.locator(".rme-autocomplete")).toHaveCount(0);
+    // "*" typed over selected text replaces it.
+    await page.keyboard.press("Shift+Control+ArrowLeft");
+    await page.keyboard.type("*");
+    await expect.poll(() => source(page)).toBe("> Asked:\n> ```\n> code /*\n> ```");
+    // The plain text, each line in the quote.
+    await paste(page, { html: "<b>bold</b> text" });
+    await paste(page, { text: "\nb" });
+    await expect.poll(() => source(page)).toBe("> Asked:\n> ```\n> code /*bold text\n> b\n> ```");
+  });
+
   test("a URL pasted over selected text links it, but not in code", async ({ page }) => {
     await openNewWikiPage(page, "Paste link");
     await editor(page).click();
@@ -2227,6 +2246,72 @@ test.describe("everything renders until the cursor is on it", () => {
     await page.keyboard.press("Escape");
     await page.keyboard.type("Below");
     await expect.poll(() => source(page)).toMatch(/\|\n> Below\n> after$/);
+  });
+
+  test("tables in quotes edited as text have the table's buttons and keys, keeping the quote's markers", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => localStorage.setItem("phizziwig-table-mode", "text"));
+    await startWith(page, "> Asked:\n> | a | b |\n> | 1 | 2 |");
+    const bar = page.locator(".rme-table-bar");
+    const button = (name: RegExp) => bar.getByRole("button", { name });
+    // Rendered while the cursor is not in it.
+    await page.locator(".rme-block-table.rme-quoted-block").click();
+    await page.locator(".cm-line", { hasText: "| a |" }).click();
+    await expect(bar).toBeVisible();
+    // Without room beside the table, the bar is above or below it, from where its text starts
+    // (after the quote's marker, which shows on the cursor's line).
+    const size = page.viewportSize()!;
+    await page.setViewportSize({ width: 600, height: size.height });
+    const text = await page.locator(".cm-line", { hasText: "| a |" }).evaluate((line) => {
+      // The table's first "|", after the quote's marker.
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const at = node.textContent!.indexOf("|");
+        if (at >= 0) {
+          const range = document.createRange();
+          range.setStart(node, at);
+          range.setEnd(node, at + 1);
+          return range.getBoundingClientRect().left;
+        }
+      }
+      throw new Error("No table on the line");
+    });
+    await expect.poll(async () => Math.round((await bar.boundingBox())!.x - text)).toBe(0);
+    await page.setViewportSize(size);
+    await page.locator(".cm-line", { hasText: "| 1 |" }).click();
+    await page.keyboard.press("End");
+    await button(/^Insert a column on the right/).click();
+    await expect.poll(() => source(page)).toBe("> Asked:\n> | a   | b   |     |\n> | 1   | 2   |     |");
+    await page.keyboard.type("c");
+    await button(/^Insert a row below/).click();
+    await page.keyboard.type("new");
+    await expect
+      .poll(() => source(page))
+      .toMatch(/^> Asked:\n> \| a +\| b +\| +\|\n> \| 1 +\| 2 +\| c +\|\n> \| new +\| +\| +\|$/);
+    // Rows move by keys, which align the table.
+    await page.keyboard.press("Alt+ArrowUp");
+    await expect
+      .poll(() => source(page))
+      .toBe("> Asked:\n> | a   | b   |     |\n> | new |     |     |\n> | 1   | 2   | c   |");
+    // Enter in an empty last row leaves the table, in the quote.
+    await page.locator(".cm-line", { hasText: "| 1 " }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("after");
+    await expect.poll(() => source(page)).toMatch(/\n> \| 1 +\| 2 +\| c +\|\n>\n> after$/);
+
+    // To the table mode: the cell the cursor was in is edited.
+    await page.locator(".rme-block-table.rme-quoted-block").click();
+    await page.locator(".cm-line", { hasText: "| new" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Shift+Tab");
+    await button(/^Edit the table as a table/).click();
+    await expect(page.locator(".rme-table-editor.rme-quoted-block")).toBeVisible();
+    await page.keyboard.type("X");
+    await expect.poll(() => source(page)).toMatch(/\n> \| newX +\|/);
   });
 
   test("blocks on consecutive lines of a quote have Phorge's space between them", async ({ page }) => {

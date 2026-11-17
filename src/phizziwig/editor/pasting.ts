@@ -2,7 +2,7 @@
 // Markdown arrive as remarkup, see src/paste.ts (Ctrl+Z after the paste gives
 // the plain text), and its images are uploaded; a URL pasted over selected text links it; lines
 // pasted into a quote stay in the quote. Ctrl+Shift+V pastes the plain text,
-// and code blocks always get it.
+// and code blocks (also in quotes) always get it.
 
 import { isolateHistory } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
@@ -19,7 +19,7 @@ import {
 import { linkMarkup } from "../linkMarkup";
 import { embeddedFile, fetchImage, fileByPhid } from "../phorge";
 import { inMonospace, LITERAL_BLOCKS, QUOTE_LINE, quoteDepth, quoteMarkers } from "../syntax";
-import { blockAtCursor } from "./livePreview";
+import { blockAtCursor, innerBlockAtCursor } from "./livePreview";
 import { hasText, uploadInPlace, uploadPlaceholder } from "./upload";
 
 /** Until when a paste is a plain one: Ctrl+Shift+V was pressed just before. */
@@ -117,10 +117,13 @@ export const pasting = EditorView.domEventHandlers({
       return false;
     }
     const block = blockAtCursor(view.state);
-    if (block && LITERAL_BLOCKS.has(block.kind)) {
+    // Code blocks get the plain text; in a quote, with the quote's markers.
+    const inner = innerBlockAtCursor(view.state);
+    const literal = !!inner && LITERAL_BLOCKS.has(inner.kind);
+    if (literal && !inner.quoted) {
       return false;
     }
-    const plain = Date.now() < plainUntil;
+    const plain = literal || Date.now() < plainUntil;
     plainUntil = 0;
     const html = data.getData("text/html");
     const text = data.getData("text/plain");

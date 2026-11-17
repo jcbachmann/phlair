@@ -3,7 +3,6 @@
 import { ChangeSet, EditorSelection, EditorState, Prec, type Text } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import { insertNewlineAndIndent } from "@codemirror/commands";
-import type { Block } from "../blocks";
 import {
   type CellPos,
   deleteColumn,
@@ -28,37 +27,59 @@ import { LIST_ITEM, outerQuote, QUOTE_LINE, quoteDepth, quoteMarkers, tidyQuoteM
 import { toolbarButton } from "../toolbar";
 import { hostTextarea } from "./host";
 import { focusField } from "./focus";
-import { blockAtCursor, blockAtLine, clicked, itemTextFrom, lineStart, previewField, quotePrefix } from "./livePreview";
+import {
+  blockAtCursor,
+  blockAtLine,
+  clicked,
+  innerBlockAtCursor,
+  itemTextFrom,
+  lineStart,
+  previewField,
+  quotePrefix,
+} from "./livePreview";
 import { insertBlock } from "./formatting";
-import { lineOf, rangeLines } from "./lines";
+import { lineMarkers, lineOf, markersOf, offsetInBlock, offsetWithMarkers, rangeLines, withMarkers } from "./lines";
 import { switchTableMode, tableModeField } from "./tableEditor";
 import { focusCell, focusedCell, focusedCellSource, runOnFocusedCell } from "./tableEditor";
 
+/** The table the cursor is in, as text: also one in a quote, whose lines keep the quote's markers. */
 interface TableContext {
-  block: Block;
+  /** Where its source is: from the start of its first line (with a quote's markers) to the end of its last. */
+  from: number;
+  to: number;
+  /** The markers of each of its lines in a quote; "" outside quotes. */
+  markers: string[];
   table: Table;
   at: CellPos;
 }
 
 function tableAt(state: EditorState): TableContext | null {
-  const block = blockAtCursor(state, "table");
-  if (!block) {
+  const block = innerBlockAtCursor(state);
+  if (block?.kind !== "table") {
     return null;
   }
-  const text = state.doc.sliceString(block.from, block.contentTo);
-  return { block, table: parseTable(text), at: locate(text, state.selection.main.head - block.from) };
+  const { doc } = state;
+  const text = block.lines.map((line) => line.text).join("\n");
+  return {
+    from: doc.line(block.lines[0].number).from,
+    to: block.lines[block.lines.length - 1].to,
+    markers: lineMarkers(doc, block),
+    table: parseTable(text),
+    at: locate(text, offsetInBlock(doc, block, state.selection.main.head)),
+  };
 }
 
-function applyTableEdit(view: EditorView, block: Block, edit: Edit | null): boolean {
+/** Writes a table's new text into its source; the cursor goes to the edit's cell. */
+function applyTableEdit(view: EditorView, context: TableContext, edit: Edit | null): boolean {
   if (!edit) {
     return true;
   }
   const { text } = formatTable(edit.table);
-  const anchor = block.from + offsetOf(edit.table, edit.cursor);
+  const anchor = context.from + offsetWithMarkers(text, context.markers, offsetOf(edit.table, edit.cursor));
   const row = edit.table.rows[edit.cursor.row];
   const cell = edit.selectCell && !row.separator ? (row.cells[edit.cursor.col] ?? "") : "";
   view.dispatch({
-    changes: { from: block.from, to: block.contentTo, insert: text },
+    changes: { from: context.from, to: context.to, insert: withMarkers(text, context.markers) },
     selection: EditorSelection.single(anchor, anchor + cell.length),
     scrollIntoView: true,
     userEvent: "input.table",
@@ -76,7 +97,7 @@ function tableCommand(operation: (table: Table, at: CellPos) => Edit | null) {
     if (!context) {
       return false;
     }
-    return applyTableEdit(view, context.block, operation(context.table, context.at));
+    return applyTableEdit(view, context, operation(context.table, context.at));
   };
 }
 
@@ -146,19 +167,21 @@ function tableEnter(view: EditorView): boolean {
   if (!context) {
     return false;
   }
-  const { block, table, at } = context;
+  const { from, to, markers, table, at } = context;
   if (at.row === table.rows.length - 1 && isEmptyRow(table.rows[at.row]) && table.rows.length > 1) {
     const rows = table.rows.slice(0, -1);
-    const text = formatTable({ ...table, rows }).text + "\n\n";
+    // A blank line and a new one after the table; in a quote, in the quote.
+    const marker = markersOf(markers, Infinity);
+    const text = `${withMarkers(formatTable({ ...table, rows }).text, markers)}\n${marker.trimEnd()}\n${marker}`;
     view.dispatch({
-      changes: { from: block.from, to: block.contentTo, insert: text },
-      selection: { anchor: block.from + text.length },
+      changes: { from, to, insert: text },
+      selection: { anchor: from + text.length },
       scrollIntoView: true,
       userEvent: "input.table",
     });
     return true;
   }
-  return applyTableEdit(view, block, insertRow(table, at, true));
+  return applyTableEdit(view, context, insertRow(table, at, true));
 }
 
 /**
@@ -508,13 +531,13 @@ function toggleTableMode(view: EditorView): boolean {
     view.dispatch({ effects: switchTableMode("table") });
     return true;
   }
-  const { block, table, at } = context;
-  // With the cursor outside of it, the table shows as a table.
+  const { from, to, table, at } = context;
+  // With the cursor outside of it, the table shows as a table (in a quote too).
   const { doc } = view.state;
-  const outside = block.from > 0 ? block.from - 1 : Math.min(doc.length, block.contentTo + 1);
+  const outside = from > 0 ? from - 1 : Math.min(doc.length, to + 1);
   view.dispatch({ effects: switchTableMode("table"), selection: { anchor: outside } });
   const row = table.rows[at.row]?.separator ? Math.max(0, at.row - 1) : at.row;
-  focusCell(view, block.from, row, at.col, "end");
+  focusCell(view, from, row, at.col, "end");
   return true;
 }
 
@@ -580,17 +603,14 @@ export const tableBar = ViewPlugin.fromClass(
       if (cell) {
         return cell.closest(".rme-table-editor")!.querySelector("table")!.getBoundingClientRect();
       }
-      const { active, blocks } = view.state.field(previewField);
-      const block = view.state.field(focusField)
-        ? blocks.find((b, i) => active.has(i) && b.kind === "table")
-        : undefined;
-      if (!block) {
+      const table = view.state.field(focusField) ? tableAt(view.state) : null;
+      if (!table) {
         return null;
       }
       // The source lines: as wide as their longest line.
       let right = 0;
       const { doc } = view.state;
-      for (let n = doc.lineAt(block.from).number; n <= doc.lineAt(block.contentTo).number; n++) {
+      for (let n = doc.lineAt(table.from).number; n <= doc.lineAt(table.to).number; n++) {
         const line = doc.line(n);
         // A wrapped line takes the whole width.
         const wrapped = view.lineBlockAt(line.from).height > view.defaultLineHeight * 1.5;
@@ -601,8 +621,9 @@ export const tableBar = ViewPlugin.fromClass(
           break;
         }
       }
-      const top = view.coordsAtPos(block.from);
-      const bottom = view.coordsAtPos(block.contentTo);
+      // In a quote, from where its text starts.
+      const top = view.coordsAtPos(table.from + table.markers[0].length);
+      const bottom = view.coordsAtPos(table.to);
       return top && bottom ? { top: top.top, bottom: bottom.bottom, left: top.left, right } : null;
     }
 

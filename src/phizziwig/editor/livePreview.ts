@@ -34,6 +34,7 @@ import {
   type BlockLine,
   blockLines,
   blockOfLine,
+  lineMarkers,
   lineOf,
   MAX_QUOTE_DEPTH,
   quotedBlocks,
@@ -112,6 +113,11 @@ export function blockAtCursor(state: EditorState, kind?: BlockKind): Block | und
 export function blockAtLine(state: EditorState, number: number): TextBlock | undefined {
   const preview = state.field(previewField, false);
   return preview ? blockOfLine(state.doc, preview.blocks, number) : undefined;
+}
+
+/** The block the cursor is in, also inside a quote (a code block in a quote, not the quote). */
+export function innerBlockAtCursor(state: EditorState): TextBlock | undefined {
+  return blockAtLine(state, state.doc.lineAt(state.selection.main.head).number);
 }
 
 /** The markers a line of a quote starts with ("" for other lines): where blocks inside the quote start. */
@@ -334,10 +340,7 @@ function buildDecorations(
         let widget: WidgetType | null = null;
         if (table) {
           // Each line's markers, which edits of the table keep.
-          const prefixes = inner.lines.map((line) =>
-            state.doc.sliceString(state.doc.line(line.number).from, line.from),
-          );
-          widget = new TableWidget(quoted.render.text, html, prefixes, classes);
+          widget = new TableWidget(quoted.render.text, html, lineMarkers(state.doc, inner), classes);
         } else if (html) {
           const ends = codeFences(inner.kind, inner.lines[0].text, inner.lines.length > 1 ? last.text : null);
           widget = new RenderedBlock(html, inner.kind, ends, inner.lines.length, classes);

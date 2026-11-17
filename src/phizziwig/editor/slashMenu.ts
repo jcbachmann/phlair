@@ -9,7 +9,7 @@ import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirro
 import { keyLabel } from "../keys";
 import { type Action, ACTIONS, GROUPS } from "./actions";
 import { inMonospace, LITERAL_BLOCKS } from "../syntax";
-import { blockAtCursor } from "./livePreview";
+import { innerBlockAtCursor } from "./livePreview";
 import { leftEditor, Popup } from "./popup";
 
 /** The insert menu of the text, or of a table cell's editor (only what fits in a cell), by its items. */
@@ -42,7 +42,7 @@ function insertMenu(items: Action[]) {
         }
         tr.changes.iterChanges((_fromA, _toA, fromB, toB, inserted) => {
           const line = update.state.doc.lineAt(fromB);
-          const block = blockAtCursor(update.state);
+          const block = innerBlockAtCursor(update.state);
           const before = update.state.sliceDoc(line.from, fromB);
           if (
             inserted.toString() === "/" &&

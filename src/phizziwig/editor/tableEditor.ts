@@ -38,6 +38,7 @@ import {
   type Table,
 } from "../table";
 import { hostTextarea } from "./host";
+import { markersOf, offsetWithMarkers, withMarkers } from "./lines";
 import { hasText, separated, submitWhenUploaded, uploadFiles } from "./upload";
 import { keepsFocus } from "./focus";
 import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
@@ -96,24 +97,14 @@ interface TableDom extends HTMLElement {
   rmePrefixes?: string[];
 }
 
-/** The markers of a line of a table: in a quote, the quote's; the last line's for lines added below. */
-function prefixOf(dom: TableDom, line: number): string {
-  const prefixes = dom.rmePrefixes ?? [];
-  return prefixes[Math.min(line, prefixes.length - 1)] ?? "";
+/** A table's new text as it goes into the document: in a quote, each line with the quote's markers. */
+function sourceOf(dom: TableDom, text: string): string {
+  return withMarkers(text, dom.rmePrefixes ?? []);
 }
 
 /** How long the table's source is in the document, with the markers of its lines. */
 function sourceLength(dom: TableDom): number {
-  const lines = (dom.rmeText ?? "").split("\n");
-  return lines.reduce((n, line, i) => n + prefixOf(dom, i).length + line.length, lines.length - 1);
-}
-
-/** A table's new text as it goes into the document: in a quote, each line with the quote's markers. */
-function sourceOf(dom: TableDom, text: string): string {
-  return text
-    .split("\n")
-    .map((line, i) => prefixOf(dom, i) + line)
-    .join("\n");
+  return sourceOf(dom, dom.rmeText ?? "").length;
 }
 
 /**
@@ -491,7 +482,7 @@ function leave(view: EditorView, dom: TableDom, down: boolean): void {
     view.dispatch({ selection: { anchor: next.from + markers }, scrollIntoView: true });
   } else {
     // The table ends the text: continue in a new paragraph after it (in a quote, in the quote).
-    const prefix = prefixOf(dom, Infinity);
+    const prefix = markersOf(dom.rmePrefixes ?? [], Infinity);
     const insert = `\n${prefix.trimEnd()}\n${prefix}`;
     view.dispatch({ changes: { from: to, insert }, selection: { anchor: to + insert.length }, scrollIntoView: true });
   }
@@ -530,10 +521,8 @@ function cellLocation(view: EditorView, dom: TableDom, cell: HTMLElement) {
   const { row, col } = positionOf(cell);
   const lines = (dom.rmeText ?? "").split("\n");
   const tableFrom = view.posAtDOM(dom);
-  const lineFrom =
-    tableFrom +
-    lines.slice(0, row).reduce((n, line, i) => n + prefixOf(dom, i).length + line.length + 1, 0) +
-    prefixOf(dom, row).length;
+  const start = lines.slice(0, row).reduce((n, line) => n + line.length + 1, 0);
+  const lineFrom = tableFrom + offsetWithMarkers(dom.rmeText ?? "", dom.rmePrefixes ?? [], start);
   return { row, col, tableFrom, lineFrom, line: lines[row], range: cellRange(lines[row], col) };
 }
 

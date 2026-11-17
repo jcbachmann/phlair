@@ -1,7 +1,16 @@
 import { EditorSelection, Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { splitBlocks } from "../src/phizziwig/blocks";
-import { quotedBlocks, quoteLineClasses, rangeLines } from "../src/phizziwig/editor/lines";
+import {
+  lineMarkers,
+  markersOf,
+  offsetInBlock,
+  offsetWithMarkers,
+  quotedBlocks,
+  quoteLineClasses,
+  rangeLines,
+  withMarkers,
+} from "../src/phizziwig/editor/lines";
 
 describe("rangeLines", () => {
   const doc = Text.of(["one", "two", "three"]);
@@ -66,5 +75,31 @@ describe("quoteLineClasses", () => {
       "rme-first rme-quote-depth-3 rme-quote-open rme-quote-close rme-quote-apart-below",
       "rme-last",
     ]);
+  });
+});
+
+describe("a block's text with the markers of its lines", () => {
+  const text = "> Asked:\n> | a | b |\n>| 1 | 2 |";
+  const doc = Text.of(text.split("\n"));
+  const table = quotedBlocks(doc, splitBlocks(text)[0])[1];
+
+  it("has each line's markers, also where they differ, and the last line's for lines added below", () => {
+    const markers = lineMarkers(doc, table);
+    expect(markers).toEqual(["> ", ">"]);
+    expect(withMarkers("| a |\n| 1 |\n| new |", markers)).toBe("> | a |\n>| 1 |\n>| new |");
+    expect(markersOf(markers, Infinity)).toBe(">");
+    expect(withMarkers("x", [])).toBe("x");
+  });
+
+  it("maps offsets of the text without markers to the text with them, and positions of the document to the text", () => {
+    const markers = ["> ", ">"];
+    // "| a |\n| 1 |": "1" is at 8, after "> | a |\n>| " at 11.
+    expect(offsetWithMarkers("| a |\n| 1 |", markers, 8)).toBe(11);
+    expect(offsetWithMarkers("| a |\n| 1 |", markers, 0)).toBe(2);
+    const [first, second] = table.lines;
+    expect(offsetInBlock(doc, table, text.indexOf("1"))).toBe(first.text.length + 1 + second.text.indexOf("1"));
+    // In the markers: the start of the line's text; on another line: none.
+    expect(offsetInBlock(doc, table, doc.line(3).from)).toBe(first.text.length + 1);
+    expect(offsetInBlock(doc, table, 0)).toBe(-1);
   });
 });

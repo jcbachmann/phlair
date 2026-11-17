@@ -7,7 +7,7 @@
 import { isolateHistory } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { inMonospace, LITERAL_BLOCKS } from "../syntax";
-import { blockAtCursor } from "./livePreview";
+import { innerBlockAtCursor } from "./livePreview";
 
 const ITALIC = /(^|[^*\w])\*([^*\s](?:[^*\n]*[^*\s])?)$/;
 
@@ -26,7 +26,7 @@ const WRAP: Record<string, [string, string]> = {
 
 export const markdownHabits = EditorView.inputHandler.of((view, from, to, text) => {
   const { state } = view;
-  const block = blockAtCursor(state);
+  const block = innerBlockAtCursor(state);
   if (!(text in WRAP) || (block && LITERAL_BLOCKS.has(block.kind))) {
     return false;
   }

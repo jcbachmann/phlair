@@ -161,3 +161,44 @@ export function quoteLineClasses(doc: Text, quote: Block, number: number): strin
 export function lineOf(block: TextBlock, number: number): BlockLine | undefined {
   return block.lines.find((line) => line.number === number);
 }
+
+/** The markers (a quote's) of a block's line by its index; lines after its last get the last line's. */
+export function markersOf(markers: readonly string[], index: number): string {
+  return markers[Math.min(index, markers.length - 1)] ?? "";
+}
+
+/** A block's text (without a quote's markers) as it goes into the document: each line after its markers. */
+export function withMarkers(text: string, markers: readonly string[]): string {
+  return text
+    .split("\n")
+    .map((line, i) => markersOf(markers, i) + line)
+    .join("\n");
+}
+
+/** Where an offset into a block's text is in the text with its markers (withMarkers()). */
+export function offsetWithMarkers(text: string, markers: readonly string[], offset: number): number {
+  const index = text.slice(0, offset).split("\n").length - 1;
+  let added = 0;
+  for (let i = 0; i <= index; i++) {
+    added += markersOf(markers, i).length;
+  }
+  return offset + added;
+}
+
+/** The markers before each line of a block: a quote's, "" for a block of the text. */
+export function lineMarkers(doc: Text, block: TextBlock): string[] {
+  return block.lines.map((line) => doc.sliceString(doc.line(line.number).from, line.from));
+}
+
+/** Where a position in the text is in a block's text (without the markers); -1 if it is not on its lines. */
+export function offsetInBlock(doc: Text, block: TextBlock, pos: number): number {
+  const number = doc.lineAt(pos).number;
+  let offset = 0;
+  for (const line of block.lines) {
+    if (line.number === number) {
+      return offset + Math.min(Math.max(0, pos - line.from), line.text.length);
+    }
+    offset += line.text.length + 1;
+  }
+  return -1;
+}
