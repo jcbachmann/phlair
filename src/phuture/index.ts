@@ -23,7 +23,8 @@ import css from "./style.css";
 const ITEM = "li.phui-oi";
 const LINK = ".phui-oi-link";
 
-const showChoice = storedChoice("phuture-show-snoozed", "0", ["1", "0"]);
+const SHOW_KEY = "phuture-show-snoozed";
+const showChoice = storedChoice(SHOW_KEY, "0", ["1", "0"]);
 
 /** The items of the page with a snooze button, by their key. */
 const items = new Map<HTMLElement, string>();
@@ -55,9 +56,10 @@ export function startPhuture(): void {
     }
   }).observe(document.body, { childList: true, subtree: true });
 
-  // Snoozes of other tabs; the day changing while the page was in the background.
+  // Snoozes, and showing snoozed items or not, of other tabs; the day
+  // changing while the page was in the background.
   window.addEventListener("storage", (event) => {
-    if (isSnoozesKey(event.key)) {
+    if (isSnoozesKey(event.key) || event.key === SHOW_KEY) {
       update();
     }
   });

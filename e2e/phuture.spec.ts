@@ -162,6 +162,22 @@ test("snoozes go to another browser by export and import", async ({ page, browse
   }
 });
 
+test("snoozes, and whether snoozed items show, go to the other tabs at once", async ({ page }) => {
+  const [id] = await createTasks(page, "Snoozed in another tab");
+  await openList(page, [id]);
+  const other = await page.context().newPage();
+  try {
+    await openList(other, [id]);
+    await snooze(page, id, /^Tomorrow/);
+    await expect(item(other, id)).toBeHidden();
+    await mainMenu(page, "Show snoozed items");
+    await expect(item(other, id)).toBeVisible();
+    await expect(other.locator(".phuture-list-note")).toHaveText("1 snoozed item shown · Hide");
+  } finally {
+    await other.close();
+  }
+});
+
 test("items that lists add later get a snooze button too", async ({ page }) => {
   const [id, later] = await createTasks(page, "There from the start", "Added later");
   await openList(page, [id]);
