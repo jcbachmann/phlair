@@ -10,8 +10,11 @@ bin/config set phabricator.developer-mode false
 # Phlair's library (../../phorge); seed.php turns Phizziwig off by default
 # and on for alice.
 bin/config set load-libraries '["/srv/phlair/src"]'
-# Lets the server download images from the host for the E2E tests (phizziwig.download).
-bin/config set security.outbound-blacklist '[]'
+# Lets the server download images from the host for the E2E tests
+# (phizziwig.download), which Phorge's default keeps out with all private
+# networks; link-local addresses (cloud metadata) stay out, which the tests
+# check.
+bin/config set security.outbound-blacklist '["169.254.0.0/16"]'
 # Files on disk, as in production: files over 4 MB are uploaded in chunks,
 # which need a storage engine for large files (the database's takes 1 MB).
 mkdir -p /var/phorge-files && chown www-data:www-data /var/phorge-files

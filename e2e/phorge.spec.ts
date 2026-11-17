@@ -204,6 +204,14 @@ test("the setting tells how to install and remove OneDriphe, with its scripts to
   }
 });
 
+test("the server downloads nothing the outbound blacklist keeps out, nor what is not on the web", async ({ page }) => {
+  await newWikiPage(page);
+  const download = (uri: string) => conduit(page, "phizziwig.download", { uri, name: "x.png" });
+  // The dev instance keeps out link-local addresses (dev/phorge/entrypoint.sh), like cloud metadata.
+  await expect(download("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/blacklist/i);
+  await expect(download("file:///etc/passwd")).rejects.toThrow(/protocol/i);
+});
+
 test("images of pasted text from other sites are downloaded by the server, for the user only", async ({
   page,
   browser,
