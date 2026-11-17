@@ -20,7 +20,7 @@ import {
 import { standardKeymap } from "@codemirror/commands";
 import { EditorView, type KeyBinding, keymap, WidgetType } from "@codemirror/view";
 import { minimalChange } from "../diff";
-import { INLINE_FORMATS } from "../syntax";
+import { INLINE_FORMATS, QUOTE_MARKERS } from "../syntax";
 import {
   type CellPos,
   cellRange,
@@ -89,9 +89,31 @@ export const tableModeField = StateField.define<TableMode>({
 });
 
 interface TableDom extends HTMLElement {
-  /** The source text of the table, as of the last update. */
+  /** The source text of the table, as of the last update; in a quote, without the quote's markers. */
   rmeText?: string;
   rmeHtml?: string;
+  /** In a quote, the markers of each of its lines (livePreview.ts). */
+  rmePrefixes?: string[];
+}
+
+/** The markers of a line of a table: in a quote, the quote's; the last line's for lines added below. */
+function prefixOf(dom: TableDom, line: number): string {
+  const prefixes = dom.rmePrefixes ?? [];
+  return prefixes[Math.min(line, prefixes.length - 1)] ?? "";
+}
+
+/** How long the table's source is in the document, with the markers of its lines. */
+function sourceLength(dom: TableDom): number {
+  const lines = (dom.rmeText ?? "").split("\n");
+  return lines.reduce((n, line, i) => n + prefixOf(dom, i).length + line.length, lines.length - 1);
+}
+
+/** A table's new text as it goes into the document: in a quote, each line with the quote's markers. */
+function sourceOf(dom: TableDom, text: string): string {
+  return text
+    .split("\n")
+    .map((line, i) => prefixOf(dom, i) + line)
+    .join("\n");
 }
 
 /**
@@ -455,7 +477,7 @@ export function enterTable(view: EditorView, from: number, fromAbove: boolean): 
 /** Puts the text cursor before or after the table. */
 function leave(view: EditorView, dom: TableDom, down: boolean): void {
   const from = view.posAtDOM(dom);
-  const to = from + (dom.rmeText ?? "").length;
+  const to = from + sourceLength(dom);
   const { doc } = view.state;
   // The editor would take the selection in the cell as its cursor on focus.
   window.getSelection()?.removeAllRanges();
@@ -463,10 +485,15 @@ function leave(view: EditorView, dom: TableDom, down: boolean): void {
   if (!down) {
     view.dispatch({ selection: { anchor: Math.max(0, from - 1) }, scrollIntoView: true });
   } else if (to < doc.length) {
-    view.dispatch({ selection: { anchor: to + 1 }, scrollIntoView: true });
+    // In a quote, after the markers of the next line, where its text starts.
+    const next = doc.lineAt(to + 1);
+    const markers = dom.rmePrefixes?.length ? (QUOTE_MARKERS.exec(next.text)?.[0].length ?? 0) : 0;
+    view.dispatch({ selection: { anchor: next.from + markers }, scrollIntoView: true });
   } else {
-    // The table ends the text: continue in a new paragraph after it.
-    view.dispatch({ changes: { from: to, insert: "\n\n" }, selection: { anchor: to + 2 }, scrollIntoView: true });
+    // The table ends the text: continue in a new paragraph after it (in a quote, in the quote).
+    const prefix = prefixOf(dom, Infinity);
+    const insert = `\n${prefix.trimEnd()}\n${prefix}`;
+    view.dispatch({ changes: { from: to, insert }, selection: { anchor: to + insert.length }, scrollIntoView: true });
   }
 }
 
@@ -478,7 +505,7 @@ function apply(view: EditorView, dom: TableDom, edit: Edit | null, original: Tab
   const from = view.posAtDOM(dom);
   if (edit.table !== original) {
     view.dispatch({
-      changes: { from, to: from + (dom.rmeText ?? "").length, insert: formatTable(edit.table).text },
+      changes: { from, to: from + sourceLength(dom), insert: sourceOf(dom, formatTable(edit.table).text) },
       userEvent: "input.table",
     });
   }
@@ -503,7 +530,10 @@ function cellLocation(view: EditorView, dom: TableDom, cell: HTMLElement) {
   const { row, col } = positionOf(cell);
   const lines = (dom.rmeText ?? "").split("\n");
   const tableFrom = view.posAtDOM(dom);
-  const lineFrom = tableFrom + lines.slice(0, row).reduce((n, line) => n + line.length + 1, 0);
+  const lineFrom =
+    tableFrom +
+    lines.slice(0, row).reduce((n, line, i) => n + prefixOf(dom, i).length + line.length + 1, 0) +
+    prefixOf(dom, row).length;
   return { row, col, tableFrom, lineFrom, line: lines[row], range: cellRange(lines[row], col) };
 }
 
@@ -541,7 +571,7 @@ function onInput(view: EditorView, dom: TableDom, cell: HTMLElement, typed: stri
       }
       cells[col] = value;
       view.dispatch({
-        changes: { from, to: from + text.length, insert: formatTable(table).text },
+        changes: { from, to: from + sourceLength(dom), insert: sourceOf(dom, formatTable(table).text) },
         userEvent: "input.table",
       });
     }
@@ -593,7 +623,9 @@ function tableKeys(view: EditorView, dom: TableDom, cell: HTMLElement): KeyBindi
           // Enter in an empty last row removes it and leaves the table.
           const rest = { ...table, rows: table.rows.filter((_, i) => i !== here.row) };
           const from = view.posAtDOM(dom);
-          view.dispatch({ changes: { from, to: from + (dom.rmeText ?? "").length, insert: formatTable(rest).text } });
+          view.dispatch({
+            changes: { from, to: from + sourceLength(dom), insert: sourceOf(dom, formatTable(rest).text) },
+          });
           leave(view, dom, true);
         } else {
           apply(view, dom, insertRow(table, here, true), table);
@@ -736,19 +768,35 @@ function insertHandles(view: EditorView, dom: TableDom): void {
 
 export class TableWidget extends WidgetType {
   constructor(
+    /** Its text; in a quote, without the quote's markers. */
     readonly text: string,
     readonly html: string | undefined,
+    /** In a quote, the quote's markers of each of its lines. */
+    readonly prefixes: readonly string[] = [],
+    /** More classes, e.g. of a table in a quote (livePreview.ts). */
+    readonly classes = "",
   ) {
     super();
   }
 
   override eq(other: TableWidget): boolean {
-    return other.text === this.text && other.html === this.html;
+    return (
+      other.text === this.text &&
+      other.html === this.html &&
+      other.classes === this.classes &&
+      other.prefixes.join("\n") === this.prefixes.join("\n")
+    );
   }
 
   override updateDOM(dom: HTMLElement): boolean {
+    dom.className = this.className();
+    (dom as TableDom).rmePrefixes = [...this.prefixes];
     sync(dom as TableDom, this.text, this.html);
     return true;
+  }
+
+  private className(): string {
+    return `rme-block rme-block-table rme-table-editor phabricator-remarkup ${this.classes}`.trim();
   }
 
   /** The table is gone (its text changed shape, or it scrolled away): so are the editors of its cells. */
@@ -772,7 +820,8 @@ export class TableWidget extends WidgetType {
 
   toDOM(view: EditorView): HTMLElement {
     const dom = document.createElement("div") as TableDom;
-    dom.className = "rme-block rme-block-table rme-table-editor phabricator-remarkup";
+    dom.className = this.className();
+    dom.rmePrefixes = [...this.prefixes];
     rememberHeight(`table:${this.text}`, dom);
     const wrap = document.createElement("div");
     wrap.className = "remarkup-table-wrap";

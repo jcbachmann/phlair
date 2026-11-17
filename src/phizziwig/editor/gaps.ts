@@ -6,11 +6,12 @@
 // high as the gap between the two elements when the page lays them out. That
 // gap is measured with the page's CSS, per pair of elements, so it also holds
 // for Phorge and other styles. A blank line between blocks is a line like any
-// other, as high as a line of text.
+// other, as high as a line of text. Blocks in a quote (lines.ts) have the
+// gaps of their elements in a quote.
 
 import { type EditorState, StateEffect, StateField } from "@codemirror/state";
 import { type EditorView, ViewPlugin } from "@codemirror/view";
-import type { Block } from "../blocks";
+import type { Block, BlockKind } from "../blocks";
 import { parseHtml } from "../html";
 import { wikiSlug } from "../phorge";
 import { NOTE_PREFIX } from "../syntax";
@@ -76,9 +77,8 @@ function htmlEdges(html: string): [Signature, Signature] | null {
 }
 
 /** The element a block renders as, from its text: for blocks being edited before they are rendered. */
-function kindSignature(state: EditorState, block: Block): Signature {
-  const text = state.doc.sliceString(block.from, block.contentTo);
-  switch (block.kind) {
+function kindSignature(kind: BlockKind, text: string): Signature {
+  switch (kind) {
     case "header": {
       const lines = text.split("\n");
       const level = lines.length > 1 ? (/^=/.test(lines[1]) ? 1 : 2) : (/^(=+|#+)/.exec(text)?.[1].length ?? 1);
@@ -108,17 +108,25 @@ function kindSignature(state: EditorState, block: Block): Signature {
 
 /** The first and last element of a block, from its HTML if there is any. */
 export function blockEdges(state: EditorState, block: Block, html: string | undefined): [Signature, Signature] {
+  return textEdges(block.kind, state.doc.sliceString(block.from, block.contentTo), html);
+}
+
+/** The first and last element of a block by its kind and text (in a quote, without the quote's markers). */
+export function textEdges(kind: BlockKind, text: string, html: string | undefined): [Signature, Signature] {
   const edges = html ? htmlEdges(html) : null;
   if (edges) {
     return edges;
   }
-  const sig = kindSignature(state, block);
+  const sig = kindSignature(kind, text);
   return [sig, sig];
 }
 
-export function gapKey(above: Signature, below: Signature): string {
-  return `${above}|${below}`;
+/** The key of the gap between two elements; `quoted` in a quote. */
+export function gapKey(above: Signature, below: Signature, quoted = false): string {
+  return `${quoted ? QUOTED : ""}${above}|${below}`;
 }
+
+const QUOTED = "quote:";
 
 function sampleOf(sig: Signature): string {
   const sample = samples.get(sig);
@@ -146,8 +154,9 @@ function measure(view: EditorView, keys: string[]): Map<string, number> {
   probe.className = "phabricator-remarkup";
   container.append(probe);
   const pairs = keys.map((key) => {
-    const [above, below] = key.split("|");
-    const pair = document.createElement("div");
+    const quoted = key.startsWith(QUOTED);
+    const [above, below] = key.slice(quoted ? QUOTED.length : 0).split("|");
+    const pair = document.createElement(quoted ? "blockquote" : "div");
     pair.style.display = "flow-root";
     pair.append(parseHtml(`<p>x</p>${sampleOf(above)}${sampleOf(below)}<p>x</p>`));
     probe.append(pair);

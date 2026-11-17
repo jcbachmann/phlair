@@ -1,7 +1,7 @@
 import { EditorSelection, Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { splitBlocks } from "../src/phizziwig/blocks";
-import { quotedBlocks, rangeLines } from "../src/phizziwig/editor/lines";
+import { quotedBlocks, quoteLineClasses, rangeLines } from "../src/phizziwig/editor/lines";
 
 describe("rangeLines", () => {
   const doc = Text.of(["one", "two", "three"]);
@@ -32,6 +32,39 @@ describe("quotedBlocks", () => {
       },
       { kind: "header", lines: [[5, "= Deeper"]] },
       { kind: "paragraph", lines: [[6, "after"]] },
+    ]);
+  });
+});
+
+describe("quoteLineClasses", () => {
+  const classes = (text: string) => {
+    const doc = Text.of(text.split("\n"));
+    const [quote] = splitBlocks(text);
+    return text.split("\n").map((_, i) => quoteLineClasses(doc, quote, i + 1).join(" "));
+  };
+
+  it("mark the ends of a quote and where nested quotes start and end", () => {
+    expect(classes("> one\n>\n>> two\n>> three\n>\n> four")).toEqual([
+      "rme-first",
+      "",
+      "rme-quote-depth-2 rme-quote-open",
+      "rme-quote-depth-2 rme-quote-close",
+      "",
+      "rme-last",
+    ]);
+  });
+
+  it("mark Phorge's margin on the side of a nested quote that has text right next to it", () => {
+    // Text above, a blank line below: the margin only above.
+    expect(classes("> one\n>> two\n>\n> four")[1]).toBe(
+      "rme-quote-depth-2 rme-quote-open rme-quote-apart-above rme-quote-close",
+    );
+    expect(classes("> one\n>\n>> two\n> four")[2]).toBe(
+      "rme-quote-depth-2 rme-quote-open rme-quote-close rme-quote-apart-below",
+    );
+    expect(classes(">>> deep\n> out")).toEqual([
+      "rme-first rme-quote-depth-3 rme-quote-open rme-quote-close rme-quote-apart-below",
+      "rme-last",
     ]);
   });
 });

@@ -3,13 +3,14 @@
 // hidden except where the cursor is (inlinePreview.ts), so nothing moves when
 // the cursor moves. Other blocks (code, literal, ...) show as the server renders
 // them, except while the cursor is in them; tables are edited as tables
-// (tableEditor.ts).
+// (tableEditor.ts). In a quote, which shows its source, the code blocks and
+// tables in it show rendered too, except while the cursor is in them.
 
 import { EditorState, Facet, type Line, type Range, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { type Block, type BlockKind, splitBlocks } from "../blocks";
 import type { BlockRenderer, RenderItem } from "../renderer";
-import { blockEdges, clearGaps, gapKey, gapMeasurer, gapsField, setGaps } from "./gaps";
+import { blockEdges, clearGaps, gapKey, gapMeasurer, gapsField, setGaps, textEdges } from "./gaps";
 import { focusField, focusTracking, setFocused } from "./focus";
 import {
   floatPadMeasure,
@@ -29,10 +30,16 @@ import { setHtml } from "../html";
 import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { type ListItem, parseList } from "../list";
 import { LIST_ITEM, QUOTE_LINE, QUOTE_MARKERS, quoteDepth } from "../syntax";
-import { type BlockLine, blockLines, blockOfLine, lineOf, type TextBlock } from "./lines";
-
-/** The deepest nested quote that style.css draws; deeper ones look like it. */
-export const MAX_QUOTE_DEPTH = 4;
+import {
+  type BlockLine,
+  blockLines,
+  blockOfLine,
+  lineOf,
+  MAX_QUOTE_DEPTH,
+  quotedBlocks,
+  quoteLineClasses,
+  type TextBlock,
+} from "./lines";
 
 /** Blocks that show their source, styled; see above. */
 export const STYLED_BLOCKS = new Set<BlockKind>(["paragraph", "header", "list", "quote", "note", "rule"]);
@@ -77,6 +84,8 @@ export interface PreviewState {
   blocks: Block[];
   /** Indexes of the blocks shown as source. */
   active: Set<number>;
+  /** Where the blocks in quotes start that show as source (see renderedInQuote()). */
+  activeQuoted: Set<number>;
   /** While the mouse selects text, the blocks keep showing as they were; see mouseSelection. */
   frozen: boolean;
   /** Gaps between blocks that are not measured yet; see gaps.ts. */
@@ -154,7 +163,10 @@ export function renderedSource(
   const { blocks } = state.field(previewField);
   const block = blocks.find((b) => b.from === from && !b.empty);
   if (!block) {
-    return null;
+    // A block in a quote: its source with the quote's markers, where the clicked text is found as well.
+    const quote = blocks.find((b) => b.kind === "quote" && !b.empty && b.from <= from && from <= b.contentTo);
+    const quoted = quote && renderedInQuote(state, quote).find((q) => q.from === from);
+    return quoted ? { from, to: quoted.to, text: state.doc.sliceString(from, quoted.to), render: quoted.render } : null;
   }
   const lastBlock = blocks.findLast((b) => !b.empty);
   return { from, to: block.contentTo, text: blockText(state, block), render: renderItem(state, block, lastBlock) };
@@ -176,6 +188,71 @@ function activeBlocks(state: EditorState, blocks: Block[], focused: boolean): Se
 }
 
 /**
+ * Blocks in a quote that show as the server renders them while the cursor is
+ * not in them, like outside quotes: Phorge renders the text of a quote as
+ * blocks again (lines.ts).
+ */
+const RENDERED_IN_QUOTES = new Set<BlockKind>(["code", "literal", "interpreter", "html-table", "table"]);
+
+/** A block in a quote that shows rendered: its lines, from the start of its first line (with the quote's markers). */
+interface QuotedBlock {
+  block: TextBlock;
+  from: number;
+  to: number;
+  /** Its text without the quote's markers, rendered on its own. */
+  render: RenderItem;
+}
+
+/** The blocks of a quote that show rendered while the cursor is not in them. */
+function renderedInQuote(state: EditorState, quote: Block): QuotedBlock[] {
+  if (quote.kind !== "quote" || quote.empty) {
+    return [];
+  }
+  return quotedBlocks(state.doc, quote)
+    .filter((block) => RENDERED_IN_QUOTES.has(block.kind))
+    .map((block) => ({
+      block,
+      from: state.doc.line(block.lines[0].number).from,
+      to: block.lines[block.lines.length - 1].to,
+      render: { text: block.lines.map((line) => line.text).join("\n"), last: false },
+    }));
+}
+
+/** Where the blocks in quotes start that the selection is in (see renderedInQuote()). */
+function activeInQuotes(state: EditorState, blocks: Block[], focused: boolean): Set<number> {
+  const active = new Set<number>();
+  if (!focused) {
+    return active;
+  }
+  for (const block of blocks) {
+    for (const quoted of renderedInQuote(state, block)) {
+      if (state.selection.ranges.some((range) => range.from <= quoted.to && range.to >= quoted.from)) {
+        active.add(quoted.from);
+      }
+    }
+  }
+  return active;
+}
+
+/** Classes of a line of a quote about its bottom (quoteLineClasses()). */
+const BOTTOM_EDGE = new Set(["rme-last", "rme-quote-close", "rme-quote-apart-below"]);
+
+/**
+ * The classes of a rendered block in a quote: it takes the place of its
+ * lines in the quote, so it is drawn like them (style.css), with the top of
+ * its first line and the bottom of its last.
+ */
+function quotedClasses(state: EditorState, quote: Block, block: TextBlock): string {
+  const first = quoteLineClasses(state.doc, quote, block.lines[0].number);
+  const last = quoteLineClasses(state.doc, quote, block.lines[block.lines.length - 1].number);
+  return [
+    "rme-quoted-block rme-src-quote",
+    ...first.filter((name) => !BOTTOM_EDGE.has(name)),
+    ...last.filter((name) => BOTTOM_EDGE.has(name)),
+  ].join(" ");
+}
+
+/**
  * A table (edited as a table) that the selection covers whole, without the
  * cursor in its text: it stays a table, so nothing moves while selecting.
  */
@@ -191,6 +268,7 @@ function buildDecorations(
   state: EditorState,
   blocks: Block[],
   active: Set<number>,
+  activeQuoted: Set<number>,
   oldPreviews: Map<number, string>,
 ): {
   decorations: DecorationSet;
@@ -237,12 +315,48 @@ function buildDecorations(
     if (block.kind === "list") {
       listImages(state, block, ranges, previews, oldPreviews);
     } else if ((active.has(i) && !tableSelected(state, block)) || alwaysSource(state, block)) {
+      if (block.kind === "quote") {
+        quoteGaps(state, block, gaps, missingGaps, ranges);
+      }
+      // In a quote, its code blocks as the server renders them and its tables
+      // as tables, in the quote, like outside quotes.
+      const quotedRanges: [number, number][] = [];
+      for (const quoted of renderedInQuote(state, block)) {
+        const { block: inner, from, to } = quoted;
+        const table = inner.kind === "table" && tableMode !== "text";
+        const selected = state.selection.ranges.every((r) => r.from <= from && r.to >= to);
+        if (activeQuoted.has(from) && !(table && selected)) {
+          continue;
+        }
+        const html = renderer?.getOrSimilar(quoted.render);
+        const classes = quotedClasses(state, block, inner);
+        const last = inner.lines[inner.lines.length - 1];
+        let widget: WidgetType | null = null;
+        if (table) {
+          // Each line's markers, which edits of the table keep.
+          const prefixes = inner.lines.map((line) =>
+            state.doc.sliceString(state.doc.line(line.number).from, line.from),
+          );
+          widget = new TableWidget(quoted.render.text, html, prefixes, classes);
+        } else if (html) {
+          const ends = codeFences(inner.kind, inner.lines[0].text, inner.lines.length > 1 ? last.text : null);
+          widget = new RenderedBlock(html, inner.kind, ends, inner.lines.length, classes);
+        }
+        if (widget) {
+          quotedRanges.push([from, to]);
+          ranges.push(Decoration.replace({ widget, block: true }).range(from, to));
+        }
+      }
       // A block with images keeps showing them by its source, so it does not
       // collapse; until the edited text is rendered, the last images stay.
       const images = currentImages(state, block, block.from, block.contentTo, htmls[i], oldPreviews);
       if (images) {
         previews.set(block.from, images);
-        if (lineImages(state, block, block.from, block.contentTo, images, ranges, true)) {
+        // Not those of a rendered block in a quote (e.g. in a table), which shows them itself.
+        const imageRanges: Range<Decoration>[] = [];
+        const floats = lineImages(state, block, block.from, block.contentTo, images, imageRanges, true);
+        ranges.push(...imageRanges.filter((r) => !quotedRanges.some(([from, to]) => r.from >= from && r.from <= to)));
+        if (floats) {
           // Floating images reach below the block like in the rendered text.
           const pad = state.field(floatPadsField, false)?.get(block.from);
           if (pad) {
@@ -281,6 +395,53 @@ function buildDecorations(
     previews,
     missingGaps,
   };
+}
+
+/**
+ * Between blocks in a quote on consecutive lines of the same level, the gap
+ * Phorge has between them in a quote, like between blocks outside quotes (see
+ * gaps.ts); drawn as part of the quote.
+ */
+function quoteGaps(
+  state: EditorState,
+  quote: Block,
+  gaps: Map<string, number>,
+  missingGaps: Set<string>,
+  ranges: Range<Decoration>[],
+): void {
+  const { doc } = state;
+  const renderer = state.facet(blockRenderer);
+  const markers = (number: number) => QUOTE_MARKERS.exec(doc.line(number).text)![0];
+  const edges = (block: TextBlock) => {
+    const text = block.lines.map((line) => line.text).join("\n");
+    const html = RENDERED_IN_QUOTES.has(block.kind) ? renderer?.getOrSimilar({ text, last: false }) : undefined;
+    return textEdges(block.kind, text, html);
+  };
+  const blocks = quotedBlocks(doc, quote);
+  for (let k = 1; k < blocks.length; k++) {
+    const above = blocks[k - 1].lines[blocks[k - 1].lines.length - 1].number;
+    const below = blocks[k].lines[0].number;
+    // Not around a reply's header ("In T1, @alice wrote:"), nor where a nested
+    // quote starts or ends (style.css), nor before a blank line a block starts with.
+    const [a, b] = [markers(above), markers(below)];
+    if (
+      above + 1 !== below ||
+      !blocks[k].lines[0].text.trim() ||
+      a.includes(">>!") ||
+      b.includes(">>!") ||
+      quoteDepth(a) !== quoteDepth(b)
+    ) {
+      continue;
+    }
+    const key = gapKey(edges(blocks[k - 1])[1], edges(blocks[k])[0], true);
+    const height = gaps.get(key);
+    if (height === undefined) {
+      missingGaps.add(key);
+    }
+    const depth = quoteLineClasses(doc, quote, below).filter((name) => name.startsWith("rme-quote-depth-"));
+    const widget = new Spacer(height ?? 0, ["rme-quoted-block rme-src-quote", ...depth].join(" "));
+    ranges.push(Decoration.widget({ widget, block: true, side: -1 }).range(doc.line(below).from));
+  }
 }
 
 /** The images of the items of a list, each item rendered on its own, by the lines of their embeds. */
@@ -432,7 +593,14 @@ export const previewField = StateField.define<PreviewState>({
   create(state) {
     const blocks = splitBlocks(state.doc.toString());
     const active = activeBlocks(state, blocks, false);
-    return { blocks, active, frozen: false, ...buildDecorations(state, blocks, active, new Map()) };
+    const activeQuoted = activeInQuotes(state, blocks, false);
+    return {
+      blocks,
+      active,
+      activeQuoted,
+      frozen: false,
+      ...buildDecorations(state, blocks, active, activeQuoted, new Map()),
+    };
   },
   update(value, tr) {
     let { frozen } = value;
@@ -460,13 +628,20 @@ export const previewField = StateField.define<PreviewState>({
     }
     const blocks = tr.docChanged ? splitBlocks(tr.state.doc.toString()) : value.blocks;
     const active = frozen && !tr.docChanged ? value.active : activeBlocks(tr.state, blocks, focused);
+    const activeQuoted = frozen && !tr.docChanged ? value.activeQuoted : activeInQuotes(tr.state, blocks, focused);
     // The cursor moved within what shows as source: the decorations stay.
-    if (!tr.docChanged && !rendered && sameSet(active, value.active)) {
+    if (!tr.docChanged && !rendered && sameSet(active, value.active) && sameSet(activeQuoted, value.activeQuoted)) {
       return { ...value, frozen };
     }
     const previews = new Map<number, string>();
     value.previews.forEach((images, from) => previews.set(tr.changes.mapPos(from, -1), images));
-    return { blocks, active, frozen, ...buildDecorations(tr.state, blocks, active, previews) };
+    return {
+      blocks,
+      active,
+      activeQuoted,
+      frozen,
+      ...buildDecorations(tr.state, blocks, active, activeQuoted, previews),
+    };
   },
   provide: (field) => [
     EditorView.decorations.from(field, (value) => value.decorations),
@@ -499,7 +674,7 @@ const renderRequests = ViewPlugin.fromClass(
       if (!renderer) {
         return;
       }
-      const { blocks, active } = view.state.field(previewField);
+      const { blocks, active, activeQuoted } = view.state.field(previewField);
       renderer.setBlockCount(blocks.length);
       const lastBlock = blocks.findLast((b) => !b.empty);
       // A table edited in a cell is edited like a block in the text.
@@ -511,6 +686,9 @@ const renderRequests = ViewPlugin.fromClass(
         if (!block.empty) {
           const item = renderItem(view.state, block, lastBlock);
           (active.has(i) || block.from === tableInEdit ? editing : shown).push(item);
+          for (const quoted of renderedInQuote(view.state, block)) {
+            (activeQuoted.has(quoted.from) || quoted.from === tableInEdit ? editing : shown).push(quoted.render);
+          }
           if (block.kind === "list" && item.text.includes("{F")) {
             // Their images show below each item.
             for (const unit of listItems(view.state, block)) {
@@ -542,12 +720,17 @@ const renderRequests = ViewPlugin.fromClass(
  * them (style.css), so its code is where the source shows it.
  */
 function fences(state: EditorState, block: Block): [boolean, boolean] {
-  if (block.kind !== "code") {
-    return [false, false];
-  }
   const first = state.doc.lineAt(block.from);
   const last = state.doc.lineAt(block.contentTo);
-  return [/^\s*```[^`]*$/.test(first.text), last.number > first.number && last.text.trim() === "```"];
+  return codeFences(block.kind, first.text, last.number > first.number ? last.text : null);
+}
+
+/** The fences of a block by the text of its first line and of its last (null if it has one line). */
+function codeFences(kind: BlockKind, first: string, last: string | null): [boolean, boolean] {
+  if (kind !== "code") {
+    return [false, false];
+  }
+  return [/^\s*```[^`]*$/.test(first), last !== null && last.trim() === "```"];
 }
 
 class RenderedBlock extends WidgetType {
@@ -557,6 +740,8 @@ class RenderedBlock extends WidgetType {
     readonly fences: [boolean, boolean],
     /** Lines of its source, for the estimate of its height. */
     readonly lines: number,
+    /** More classes, e.g. of a block in a quote (quotedClasses()). */
+    readonly classes = "",
   ) {
     super();
   }
@@ -570,14 +755,15 @@ class RenderedBlock extends WidgetType {
       other.html === this.html &&
       other.kind === this.kind &&
       other.fences[0] === this.fences[0] &&
-      other.fences[1] === this.fences[1]
+      other.fences[1] === this.fences[1] &&
+      other.classes === this.classes
     );
   }
 
   toDOM(): HTMLElement {
     const dom = document.createElement("div");
     // Clicks and selecting with the mouse: see mouseSelection.ts.
-    dom.className = `rme-block rme-rendered rme-block-${this.kind} phabricator-remarkup`;
+    dom.className = `rme-block rme-rendered rme-block-${this.kind} phabricator-remarkup ${this.classes}`.trim();
     dom.classList.toggle("rme-fence-before", this.fences[0]);
     dom.classList.toggle("rme-fence-after", this.fences[1]);
     // Server-rendered remarkup, the same HTML the page's preview shows.
@@ -617,17 +803,21 @@ export function appendInLists(parent: HTMLElement, item: ListItem, own: HTMLLIEl
 
 /** The gap between two blocks on consecutive lines; see gaps.ts. */
 class Spacer extends WidgetType {
-  constructor(readonly height: number) {
+  constructor(
+    readonly height: number,
+    /** More classes, e.g. of a gap in a quote (quoteGaps()). */
+    readonly classes = "",
+  ) {
     super();
   }
 
   override eq(other: Spacer): boolean {
-    return other.height === this.height;
+    return other.height === this.height && other.classes === this.classes;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const dom = document.createElement("div");
-    dom.className = "rme-spacer";
+    dom.className = `rme-spacer ${this.classes}`.trim();
     dom.style.height = `${this.height}px`;
     // A click here is a click on the nearer line, above or below, where the mouse is.
     dom.addEventListener("mousedown", (event) => {

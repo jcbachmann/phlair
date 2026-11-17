@@ -26,7 +26,9 @@ nothing moves when the cursor moves.
   - bold, italic, monospaced, struck through, highlighted and underlined text hides its markers;
   - headers hide their markers unless the cursor is on their line; quotes (also the `>>!` of replies), the word of
     `(NOTE)` notes and rules hide theirs; list items show their bullet, number or checkbox (a click on a bullet or number edits it, on a checkbox checks it, left of them goes to the start of the line);
-  - in quotes, headers and lists look like themselves too, as Phorge renders them there;
+  - in quotes, headers, lists, notes and rules look like themselves too, as Phorge renders them there; code blocks
+    and tables in quotes show rendered like elsewhere (tables edited cell by cell), with Phorge's space between
+    blocks on consecutive lines;
   - icons, keys and navigation paths (`{icon camera color=red}`, `{key Ctrl K}`, `{nav Home > Settings}`) show as
     Phorge draws them;
   - images, image macros and memes show as rendered, their `{F123}` or `{meme, …}` hidden;

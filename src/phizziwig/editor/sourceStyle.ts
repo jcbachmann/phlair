@@ -6,12 +6,12 @@ import type { Range, Text } from "@codemirror/state";
 import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type { Block, BlockKind } from "../blocks";
 import { parseList } from "../list";
-import { LIST_ITEM, QUOTE_LINE, quoteDepth } from "../syntax";
+import { LIST_ITEM, QUOTE_LINE } from "../syntax";
 import { wideRanges } from "../table";
 import type { InlineKind, InlineToken } from "../inline";
 import { blockTokens } from "./inlineTokens";
-import { MAX_QUOTE_DEPTH, previewField } from "./livePreview";
-import { type BlockLine, blockLines, quotedBlocks, type TextBlock } from "./lines";
+import { previewField } from "./livePreview";
+import { type BlockLine, blockLines, quotedBlocks, quoteLineClasses, type TextBlock } from "./lines";
 
 // Monospaced and highlighted text use Phorge's own element and classes,
 // so its CSS styles them like in the rendered text (the editor content has
@@ -95,32 +95,18 @@ function decorateBlock(view: EditorView, block: Block, ranges: Range<Decoration>
     return;
   }
 
-  const quoteLine = (n: number) =>
-    block.kind === "quote" && n >= first.number && n <= last.number ? QUOTE_LINE.exec(doc.line(n).text) : null;
-  const depth = (n: number) => {
-    const match = quoteLine(n);
-    return match ? quoteDepth(match[1]) : 0;
-  };
-  // Text right before or after a nested quote, without a blank line between them: Phorge's margin.
-  const text = (n: number) => !!quoteLine(n)?.[2].trim();
   for (let n = first.number; n <= last.number; n++) {
     const line = doc.line(n);
     if (block.kind === "note" && n > first.number) {
       ranges.push(JOINED.range(line.from));
     }
     if (lineClass) {
-      let edge = (n === first.number ? " rme-first" : "") + (n === last.number ? " rme-last" : "");
-      if (depth(n) > 1) {
-        // Nested quotes are drawn inside the quote, as Phorge renders them (style.css).
-        edge += ` rme-quote-depth-${Math.min(depth(n), MAX_QUOTE_DEPTH)}`;
-        if (depth(n) > depth(n - 1)) {
-          edge += text(n - 1) ? " rme-quote-open rme-quote-apart" : " rme-quote-open";
-        }
-        if (depth(n) > depth(n + 1)) {
-          edge += text(n + 1) ? " rme-quote-close rme-quote-apart" : " rme-quote-close";
-        }
-      }
-      ranges.push(Decoration.line({ class: lineClass + edge }).range(line.from));
+      // Nested quotes are drawn inside the quote, as Phorge renders them (style.css).
+      const edges =
+        block.kind === "quote"
+          ? quoteLineClasses(doc, block, n)
+          : [...(n === first.number ? ["rme-first"] : []), ...(n === last.number ? ["rme-last"] : [])];
+      ranges.push(Decoration.line({ class: [lineClass, ...edges].join(" ") }).range(line.from));
       // CodeMirror takes the default line height from a short plain line in
       // view. Marked lines are not plain, so it never uses a header, code or
       // note line with its own font or padding, which would skew its height

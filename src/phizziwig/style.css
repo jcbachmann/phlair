@@ -290,7 +290,8 @@
   padding-bottom: 12px;
 }
 
-.rme-editor .cm-line.rme-src-quote {
+/* A quote's lines, and its code blocks and tables while they show rendered (livePreview.ts) in their place. */
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote {
   /* Where its text starts and ends; lists in it are indented from there. */
   --rme-quote-pad: 12px;
   --rme-quote-end: 12px;
@@ -303,11 +304,11 @@
   font-style: italic;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-first {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-first {
   --rme-quote-pad-top: 8px;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-last {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-last {
   --rme-quote-pad-bottom: 8px;
 }
 
@@ -327,11 +328,11 @@
   padding-bottom: 8px;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-first.rme-image-above {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-first.rme-image-above {
   --rme-quote-pad-top: 0px;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-last.rme-image-below {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-last.rme-image-below {
   --rme-quote-pad-bottom: 0px;
 }
 
@@ -423,31 +424,31 @@
 }
 
 /* Where a nested quote starts or ends, its padding; at an end of the whole quote, after the quote's own. */
-.rme-editor .cm-line.rme-src-quote.rme-quote-open {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-quote-open {
   --rme-quote-pad-top: 8px;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-quote-close {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-quote-close {
   --rme-quote-pad-bottom: 8px;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-first.rme-quote-open {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-first.rme-quote-open {
   --rme-quote-top: 8px;
   --rme-quote-pad-top: 16px;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-last.rme-quote-close {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-last.rme-quote-close {
   --rme-quote-bottom: 8px;
   --rme-quote-pad-bottom: 16px;
 }
 
 /* Text right before or after a nested quote has Phorge's 12px between them, outside the nested quote. */
-.rme-editor .cm-line.rme-src-quote.rme-quote-open.rme-quote-apart {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-quote-apart-above {
   --rme-quote-top: 12px;
   --rme-quote-pad-top: 20px;
 }
 
-.rme-editor .cm-line.rme-src-quote.rme-quote-close.rme-quote-apart {
+.rme-editor :is(.cm-line, .rme-quoted-block).rme-src-quote.rme-quote-apart-below {
   --rme-quote-bottom: 12px;
   --rme-quote-pad-bottom: 20px;
 }
