@@ -25,8 +25,8 @@ the link opens in the browser.
 
 Files for Windows: `onedriphe.ps1` (the helper), `install.ps1` (installs it), `uninstall.ps1` (removes it), the tests
 `onedriphe.tests.ps1` and `windows.tests.ps1`, and `compatibility.ps1` (see Tests). They are plain PowerShell for the
-Windows PowerShell 5.1 that comes with Windows; nothing else is needed. For Linux: `onedriphe.py` (the helper, Python 3.9
-or later), `install.sh` and the tests `test_onedriphe.py`.
+Windows PowerShell 5.1 that comes with Windows; nothing else is needed. For Linux: `onedriphe.py` (the helper, for the
+Python 3 of a current distribution), `install.sh` and the tests `test_onedriphe.py`.
 
 ## Turning it on
 
@@ -178,7 +178,7 @@ portal, which is to start OneDriphe outside the sandbox; that is not tried yet. 
 `npm run test:linux` runs `test_onedriphe.py` (Python's `unittest`): the links OneDriphe takes, the list of libraries,
 the mapping to local paths, what a click does in a folder of real files and symbolic links, the calls of the file
 manager, the command, and installing, updating and removing it in a temporary home folder. GitHub Actions runs them on
-the oldest Python it is for and a current one, and `shellcheck` on the installer. Phorge's E2E tests download the
+its runner's Python 3, and `shellcheck` on the installer. Phorge's E2E tests download the
 installer, compare it with this folder's files and run it. Untested by machines: the file manager's window and the
 browser's prompt.
 

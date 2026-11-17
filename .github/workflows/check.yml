@@ -66,21 +66,16 @@ jobs:
         run: ./phorge/onedriphe/compatibility.ps1
 
   # OneDriphe for Linux (phorge/onedriphe/onedriphe.py): its tests, also of
-  # installing and removing it, on the oldest Python it is for and a current one.
+  # installing and removing it, on the runner's Python 3, and shellcheck on the
+  # installer (in its image: the runner's Ubuntu may not have it).
   onedriphe-linux:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.9", "3.x"]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python }}
       - name: Tests
         run: npm run test:linux
       - name: Installer
-        run: shellcheck phorge/onedriphe/install.sh
+        run: docker run --rm -v "$PWD/phorge/onedriphe:/w:ro" koalaman/shellcheck:v0.10.0 /w/install.sh
 
   e2e:
     runs-on: ubuntu-latest

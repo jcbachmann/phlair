@@ -20,7 +20,7 @@ The path stays in the library's folder: "..", and symbolic links that lead out
 of it, send the link to the browser. An unexpected error is written to
 ~/.cache/onedriphe.log, and the link opens in the browser.
 
-Python 3.9 or later, nothing else.
+The Python 3 of a current distribution, nothing else.
 """
 
 import os
