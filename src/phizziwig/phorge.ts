@@ -1,6 +1,8 @@
 // Talks to the Phorge server the page came from, with the user's session,
 // the same way the page's own Javascript does, and knows its page structure.
 
+import { mayFetchFrom } from "./privateHosts";
+
 /** The remarkup control: toolbar, textarea and the metadata input. */
 export const CONTROL = '[data-sigil~="remarkup-assist-control"]';
 export const TOOLBAR = ".remarkup-assist-bar";
@@ -18,7 +20,8 @@ export async function loadImage(uri: string): Promise<string> {
 /**
  * An image of pasted HTML, for uploading it: inline ("data:"), from this
  * site, or from another one if it can be read from there (see
- * crossOriginImage()). Installed in Phorge, the server stores images of
+ * crossOriginImage()), and is not one of a private network (privateHosts.ts).
+ * Installed in Phorge, the server stores images of
  * other sites itself and this returns the file. Throws if it can not be had.
  */
 export async function fetchImage(src: string, name: string): Promise<Blob | UploadedFile> {
@@ -35,8 +38,11 @@ export async function fetchImage(src: string, name: string): Promise<Blob | Uplo
   } else if (url.origin === location.origin) {
     const response = await pageFetch(url.href, { credentials: "same-origin", signal: AbortSignal.timeout(30_000) });
     blob = response.ok ? await response.blob() : null;
-  } else {
+  } else if (mayFetchFrom(url, location)) {
     blob = await crossOriginImage(url.href);
+  } else {
+    // The image keeps its link (see privateHosts.ts).
+    throw new Error(`Not fetched from a private network: ${src.slice(0, 80)}`);
   }
   if (!blob?.type.startsWith("image/")) {
     throw new Error(`Not an image: ${src.slice(0, 80)}`);

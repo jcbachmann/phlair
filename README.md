@@ -270,7 +270,8 @@ Releases, signing and the store listings: [docs/PACKAGING.md](docs/PACKAGING.md)
 - The extension's **options** choose the tools: both are on until turned off there.
 - **Userscript** (Violentmonkey, Tampermonkey): install `dist/phlair.user.js`, which runs all tools; add other
   instances in the script's settings. It asks for `GM.xmlHttpRequest` with `@connect *` to fetch the images of pasted
-  text from other sites, which Phorge's CSP keeps from the page.
+  text from other sites, which Phorge's CSP keeps from the page. Like Phorge's own fetches, it fetches none from
+  private networks (intranet names, local domains, private addresses), unless Phorge is on one too.
 
 On an instance with the library installed, the tools it starts for the user take precedence: turn a tool off in
 _Settings → Phlair_ to try the extension's or userscript's build of it.

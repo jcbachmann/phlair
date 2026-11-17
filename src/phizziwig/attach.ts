@@ -480,7 +480,11 @@ class LiveEditor {
       help.remove();
       feedback.remove();
     };
-    // Uploads and quoting change the textarea later; poll for that.
+    // Uploads and quoting change the textarea later; poll for that: Phorge
+    // sets its value from its scripts, which fires no event, and the
+    // extension's and userscript's scripts (in a world of their own) can not
+    // see that setter. A poll compares one string; browsers slow it down in
+    // background tabs.
     this.timer = setInterval(() => this.pull(), 300);
     // An editor in a hidden form measured nothing; measure when it shows.
     let hidden = this.wrapper.offsetWidth === 0;
