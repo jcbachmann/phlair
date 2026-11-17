@@ -36,6 +36,26 @@ async function chooseSetting(page: Page, setting: string, label: string, global 
   await expect(page.getByText("Changes saved.")).toBeVisible();
 }
 
+/**
+ * An option of the instance's configuration in the database, where an
+ * administrator's choices (Config) are, and which win over local.json; to
+ * put back after a test (undefined: none).
+ */
+function databaseConfig(option: string): unknown {
+  const { config } = JSON.parse(phabricatorExec(["bin/config", "get", option])) as {
+    config: { source: string; value: unknown }[];
+  };
+  return config.find((entry) => entry.source === "database")?.value;
+}
+
+function setDatabaseConfig(option: string, value: unknown): void {
+  if (value === undefined || value === null) {
+    phabricatorExec(["bin/config", "delete", "--database", option]);
+  } else {
+    phabricatorExec(["bin/config", "set", "--database", option, JSON.stringify(value)]);
+  }
+}
+
 test("Phorge loads the editor for a user who turned it on", async ({ page }) => {
   await newWikiPage(page);
   await expect(editor(page)).toBeVisible();
@@ -88,6 +108,8 @@ test("users turn on Phuture for themselves; it runs without Phizziwig too", asyn
     await expect(page.locator("html")).not.toHaveAttribute("data-phizziwig");
     await expect(page.locator(".phuture-menu-button")).toBeVisible();
     await expect(page.locator("li.phui-oi .phuture-action").first()).toBeAttached();
+    // Phizziwig's list of SharePoint libraries (PhlairConfigOptions) is for its users only.
+    expect(await page.content()).not.toContain("sharePointFolders");
 
     await chooseSetting(page, PHUTURE, "Default (Off)");
     await page.goto("/maniphest/query/all/");
@@ -112,7 +134,12 @@ test("users who have OneDriphe turn on its way to open SharePoint folders in Exp
   });
   const folder =
     "https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FProjects%2FShared%20Documents%2FPlans";
+  const HOSTS = "phlair.onedriphe-hosts";
+  const hosts = databaseConfig(HOSTS);
   try {
+    // Only for these hosts (others' tenants not), where the administrator chose some.
+    expect(() => setDatabaseConfig(HOSTS, ["contoso.sharepoint.com", "evil.com"])).toThrow();
+    setDatabaseConfig(HOSTS, ["contoso.sharepoint.com", "contoso-my.sharepoint.com"]);
     await page.goto("/maniphest/");
     const task = await conduit(page, "maniphest.edit", {
       transactions: [
@@ -143,7 +170,13 @@ test("users who have OneDriphe turn on its way to open SharePoint folders in Exp
       "In the browser",
       "In the file manager",
     ]);
+    // A link of another tenant: in the browser only.
+    setDatabaseConfig(HOSTS, ["fabrikam.sharepoint.com"]);
+    await page.goto(`/T${task.object.id}`);
+    await expect(link).toBeVisible();
+    await expect(link).not.toHaveAttribute("aria-haspopup");
   } finally {
+    setDatabaseConfig(HOSTS, hosts);
     await chooseSetting(page, ONEDRIPHE, "Default (Off)");
     await page.close();
     await linux.close();
@@ -210,6 +243,46 @@ test("the server downloads nothing the outbound blacklist keeps out, nor what is
   // The dev instance keeps out link-local addresses (dev/phorge/entrypoint.sh), like cloud metadata.
   await expect(download("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/blacklist/i);
   await expect(download("file:///etc/passwd")).rejects.toThrow(/protocol/i);
+});
+
+test("the administrator's list of SharePoint libraries makes links of their local paths pasted alone", async ({
+  page,
+}) => {
+  const OPTION = "phlair.sharepoint-folders";
+  const library = "https://contoso.sharepoint.com/sites/Firmendaten/Syncthing";
+  const set = (value: unknown) => setDatabaseConfig(OPTION, value);
+  const before = databaseConfig(OPTION);
+  try {
+    // Refused: not a SharePoint library, not a map, no names, a name of no folder, a name of two libraries.
+    for (const invalid of [
+      { "https://evil.com/x": ["JCB Team - Syncthing"] },
+      { [`${library}\n`]: ["JCB Team - Syncthing"] },
+      [library],
+      { [library]: [] },
+      { [library]: ["OneDrive/../x"] },
+      { [library]: ["JCB Team - Syncthing"], [`${library}/a`]: ["jcb team - syncthing"] },
+    ]) {
+      expect(() => set(invalid), JSON.stringify(invalid)).toThrow();
+    }
+    set({ [library]: ["JCB Team - Syncthing"] });
+    await newWikiPage(page);
+    await editor(page).click();
+    const path = "C:\\Users\\me\\OneDrive - Contoso\\JCB Team - Syncthing\\jcb-vorlagen";
+    await editor(page).evaluate((node, text) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", text);
+      node.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, path);
+    await expect(textarea(page)).toHaveValue(
+      "[[ https://contoso.sharepoint.com/:f:/r/sites/Firmendaten/Syncthing/jcb-vorlagen | jcb-vorlagen ]]",
+    );
+    await page.keyboard.press("Control+z");
+    await expect(textarea(page)).toHaveValue(path);
+    expect(await page.content()).toContain("sharePointFolders");
+  } finally {
+    // As it was (an administrator's list of the dev instance stays).
+    set(before);
+  }
 });
 
 test("images of pasted text from other sites are downloaded by the server, for the user only", async ({

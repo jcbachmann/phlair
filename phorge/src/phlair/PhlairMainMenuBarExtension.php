@@ -18,10 +18,16 @@ final class PhlairMainMenuBarExtension
       $options = array(
         'onedriphe' => OneDripheSetting::isEnabledFor($viewer),
       );
-      Javelin::initBehavior(
-        'phlair',
-        array('tools' => $tools, 'options' => $options),
-        'phlair');
+      $config = array('tools' => $tools, 'options' => $options);
+      // Phizziwig's libraries for pasted local paths, and the hosts of
+      // OneDriphe's links (PhlairConfigOptions).
+      if (in_array(PhizziwigSetting::SETTINGKEY, $tools, true)) {
+        $config['sharePointFolders'] = (object)PhabricatorEnv::getEnvConfig(
+          PhlairConfigOptions::SHAREPOINT_FOLDERS);
+        $config['oneDripheHosts'] = PhabricatorEnv::getEnvConfig(
+          PhlairConfigOptions::ONEDRIPHE_HOSTS);
+      }
+      Javelin::initBehavior('phlair', $config, 'phlair');
     }
     return array();
   }

@@ -178,9 +178,14 @@ function siteOf(segments: string[]): string | undefined {
   return undefined;
 }
 
-function kindOfName(name: string): SharePointKind | undefined {
+/**
+ * The kind of a file by its name's extension ("Budget.xlsx": "excel");
+ * undefined for a name without one, also for digits only, which are a
+ * folder's more often than a file's ("2026.11", "v1.2").
+ */
+export function kindOfName(name: string): SharePointKind | undefined {
   const extension = /\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1].toLowerCase();
-  return extension === undefined ? undefined : (EXTENSION_KINDS[extension] ?? "file");
+  return extension === undefined || /^\d+$/.test(extension) ? undefined : (EXTENSION_KINDS[extension] ?? "file");
 }
 
 function desktopOf(kind: SharePointKind, fileUrl: string): SharePointLink["desktop"] {
@@ -188,7 +193,8 @@ function desktopOf(kind: SharePointKind, fileUrl: string): SharePointLink["deskt
   return desktop && { app: desktop.app, uri: `${desktop.scheme}:ofe|u|${fileUrl}` };
 }
 
-function decode(segment: string): string {
+/** A segment of a URL's path, decoded; as it is where it is no valid encoding. */
+export function decode(segment: string): string {
   try {
     return decodeURIComponent(segment);
   } catch {

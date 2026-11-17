@@ -178,6 +178,16 @@ nothing moves when the cursor moves.
 - **SharePoint and OneDrive links to files and folders** pasted alone become a link with a name (`[[ https://… | … ]]`), so the long URL
   does not show: the file's name where the URL has it (copied from the address bar), else its kind and site ("Excel
   workbook in Projects"), selected to be typed over. Sharing links ("Copy link") only name the kind of file and the site.
+  Office's links for its apps (`ms-word:ofe|u|https://…`) give their URL.
+- **Local paths of SharePoint libraries** pasted alone become a link to the folder or file on SharePoint, which everyone
+  can open, with the menu of SharePoint links (and _In Explorer_): paths as Explorer copies them
+  (`C:\Users\me\OneDrive - Contoso\Documents\Plans`), also of WSL, macOS and Linux, and `file:///…`. The
+  administrator lists the libraries in _Config → Phlair_ (`phlair.sharepoint-folders`): each library's URL with the
+  names its folder has on users' computers (a synced library, a shortcut in OneDrive, an rclone mount), e.g.
+  `{"https://contoso.sharepoint.com/sites/Projects/Shared%20Documents": ["Projects - Documents", "OneDrive - Contoso/Documents"]}`.
+  A name may include folders above it, for one that is not unique by itself, and names one library only. A name with an
+  extension is a file's (`Plan.step`), else a folder's, also with digits only (`2026.11`). Other paths stay as pasted.
+  Only with the Phorge library, which passes the list to the pages of users who have Phizziwig on.
 - `Ctrl+Shift+V` pastes plain text, and code blocks always get the plain text; undo right after a converted paste brings
   back the plain text.
 
@@ -223,7 +233,9 @@ nothing moves when the cursor moves.
   manager too (_In Explorer_ or _In the file manager_ in the menu). [OneDriphe](phorge/onedriphe/README.md), Phlair's
   helper, opens the folder where the OneDrive app syncs it (on Linux: where rclone mounts it, as listed in
   `~/.config/onedriphe/libraries`), or a file's folder with the file selected, and opens the link in the browser where
-  the folder is not there. To
+  the folder is not there. The administrator can limit it to the company's tenant in _Config → Phlair_
+  (`phlair.onedriphe-hosts`, e.g. `contoso.sharepoint.com` and `contoso-my.sharepoint.com`), so that links of others'
+  tenants open in the browser only. To
   turn it on, follow the steps of _OneDriphe: SharePoint Links_ in Phorge's _Settings → Phlair_:
   download and run the installer (no administrator rights needed), then choose _On_. With the extension, the option is
   on its options page.
@@ -327,6 +339,7 @@ shared.
   the separators.
   Every block but the last one of the text is followed by a separator, because Phorge renders some blocks
   differently at the end of a text.
+- `localPaths.ts` makes SharePoint URLs of local paths in the configuration's libraries (`phlair.sharepoint-folders`).
 - `sharepoint.ts` reads SharePoint and OneDrive URLs (kind of file, name, site, desktop app); `sharePointLinks.ts`
   shows such links in rendered text, with a menu of the ways to open them, one of them OneDriphe's (`phorge/onedriphe/`: in PowerShell for Windows, whose
   tests `npm run test:windows` runs in a PowerShell container, and GitHub Actions on Windows; in Python for Linux, tested

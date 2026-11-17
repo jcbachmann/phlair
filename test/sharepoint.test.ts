@@ -9,6 +9,7 @@ import {
   closeOpeningNote,
   enhanceSharePointLink,
   enhanceSharePointLinks,
+  chooseOneDripheHosts,
   HELP_AFTER,
   openWays,
   showOpenWays,
@@ -220,6 +221,7 @@ describe("enhanceSharePointLinks", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     chooseOptions({});
+    chooseOneDripheHosts([]);
     closeDropdown();
     closeOpeningNote();
     document.body.innerHTML = "";
@@ -313,6 +315,16 @@ describe("enhanceSharePointLinks", () => {
       `Open file location › In the browser: ${location}`,
       `Open file location › In the file manager: onedriphe:${file}`,
     ]);
+    // Only for the configuration's hosts, where it has some (case aside); all without.
+    chooseOneDripheHosts(["fabrikam.sharepoint.com", "contoso-my.sharepoint.com"]);
+    expect(ways(FOLDER).some((way) => way.includes("onedriphe:"))).toBe(false);
+    chooseOneDripheHosts(["fabrikam.sharepoint.com", "Contoso.SharePoint.com"]);
+    expect(ways(FOLDER).at(-1)).toBe(`Open folder › In Explorer: onedriphe:${folder}`);
+    // Anything but a list of hosts: none, links to any host.
+    for (const chosen of ["contoso-my.sharepoint.com", { 0: "contoso-my.sharepoint.com" }]) {
+      chooseOneDripheHosts(chosen);
+      expect(ways(FOLDER).at(-1)).toBe(`Open folder › In Explorer: onedriphe:${folder}`);
+    }
     // Not for sharing links, which have no path, nor where OneDriphe is not: macOS, Android, ChromeOS.
     expect(ways(SHARE).some((way) => way.includes("onedriphe:"))).toBe(false);
     for (const agent of [

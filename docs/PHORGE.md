@@ -13,6 +13,8 @@ Phlair comes as a Phorge library (`phorge/` in this repository) that the server 
 | SharePoint's sharing links stay whole   | `PhizziwigSharePointRemarkupRule`                  | A remarkup rule: links them before `:x:` in them becomes an emoji.        |
 | SharePoint folders in Explorer (option) | `OneDripheSetting`                                 | Per user, off: "In Explorer" (Linux: "In the file manager"), OneDriphe's. |
 | OneDriphe's installers and uninstaller  | `PhlairApplication`, `OneDripheDownloadController` | Downloads in `/phlair/onedriphe/`, linked from the setting.               |
+| Local paths of SharePoint libraries     | `PhlairConfigOptions`                              | _Config → Phlair_: the libraries' folders, for links of pasted paths.     |
+| OneDriphe for the company's links only  | `PhlairConfigOptions`                              | _Config → Phlair_: the SharePoint hosts whose links offer "In Explorer".  |
 
 A new tool is a new subclass of `PhlairToolSetting`, whose key names the tool in the script (`src/tools.ts`). An
 option of a tool is a setting of the panel of its own, which `PhlairMainMenuBarExtension` passes to the script

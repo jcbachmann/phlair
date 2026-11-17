@@ -35,6 +35,19 @@ export interface OpenWay {
   app?: string;
 }
 
+let oneDripheHosts: string[] = [];
+
+/**
+ * Sets the hosts whose links offer OneDriphe (the Phorge library's
+ * configuration, phlair.onedriphe-hosts), e.g. the company's tenant; none:
+ * links to any host.
+ */
+export function chooseOneDripheHosts(chosen: unknown): void {
+  oneDripheHosts = Array.isArray(chosen)
+    ? chosen.filter((host): host is string => typeof host === "string").map((host) => host.toLowerCase())
+    : [];
+}
+
 const enhanced = new WeakSet<HTMLAnchorElement>();
 const waysOf = new WeakMap<HTMLAnchorElement, OpenWay[]>();
 
@@ -101,7 +114,8 @@ export function enhanceSharePointLink(anchor: HTMLAnchorElement): void {
  * where a file is ("Open file location": its folder in SharePoint, where the
  * URL has its path; in Explorer or the file manager, the file selected). A
  * folder opens there itself ("Open folder"). That needs OneDriphe, and the
- * path, which sharing links do not have.
+ * path, which sharing links do not have; and a host of the configuration's,
+ * where it has some.
  */
 export function openWays(link: SharePointLink, href: string): OpenWay[] {
   const folder = link.kind === "folder";
@@ -116,7 +130,7 @@ export function openWays(link: SharePointLink, href: string): OpenWay[] {
     ways.push({ group: location, label: "In the browser", icon: "fa-globe", href: link.folderUrl });
   }
   const manager = option("onedriphe") ? fileManager() : null;
-  if (link.fileUrl && manager) {
+  if (link.fileUrl && manager && (!oneDripheHosts.length || oneDripheHosts.includes(new URL(link.fileUrl).hostname))) {
     ways.push({
       group: folder ? itself : location,
       label: `In ${manager}`,

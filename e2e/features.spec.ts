@@ -5568,9 +5568,27 @@ test.describe("SharePoint links", () => {
     expect(folder.url()).toBe("https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/");
     await folder.close();
 
-    // An app: a note while it starts, which tells what to do when nothing happens.
+    // An app: a note while it starts, which tells what to do when nothing happens. The link to OneDriphe is caught
+    // before the browser follows it: Firefox would ask in a dialog of its own which app opens it, which takes the
+    // mouse from the page (Chromium ignores schemes it does not know).
+    await page.evaluate(() => {
+      document.addEventListener(
+        "click",
+        (event) => {
+          if (event.target instanceof HTMLAnchorElement && event.target.href.startsWith("onedriphe:")) {
+            event.preventDefault();
+            document.documentElement.dataset.followed = event.target.href;
+          }
+        },
+        true,
+      );
+    });
     await named.click();
     await choices.getByText("In Explorer").click();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-followed",
+      "onedriphe:https://contoso.sharepoint.com/sites/Projects/Shared%20Documents/Spec.docx",
+    );
     const note = page.locator(".phizziwig-sharepoint-note");
     await expect(note).toHaveText("Opening in Explorer…");
     await page.clock.runFor(5_000);

@@ -119,6 +119,9 @@ Bypass` overrides it: sign the scripts with the company's code signing certifica
   user runs.
 - **For everyone in Phorge:** once every computer has OneDriphe, the administrator can turn it on for all users
   in _Settings → Global Default Settings → Phlair_.
+- **Only the company's links:** _Config → Phlair → `phlair.onedriphe-hosts`_ limits _In Explorer_ to links to these
+  hosts, e.g. `contoso.sharepoint.com` and `contoso-my.sharepoint.com` (the OneDrives); links of customers' tenants,
+  which no one syncs, then open in the browser only. Empty: links to any host.
 
 ## How it finds the local folder
 

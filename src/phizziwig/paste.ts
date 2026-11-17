@@ -20,6 +20,7 @@
 import { formatTable, type TableRow } from "./table";
 import { parseHtml } from "./html";
 import { linkMarkup, linkName, linkTarget } from "./linkMarkup";
+import { sharePointOfPath } from "./localPaths";
 import { sharePointLabel, sharePointLink } from "./sharepoint";
 
 interface Style {
@@ -845,12 +846,18 @@ export { markdownToRemarkup } from "./markdownPaste";
  * A SharePoint or OneDrive URL pasted alone, as a link with a name: its long
  * URL does not show, and a sharing link's ":x:" can not become an emoji.
  * The name is the file's, if the URL has it, else its kind and site, which
- * the user is meant to replace (see genericLinkName()).
+ * the user is meant to replace (see genericLinkName()). Office's links for
+ * its apps ("ms-word:ofe|u|https://…") give their URL. A local path of a
+ * library of the configuration links to it on SharePoint (localPaths.ts).
  */
 export function sharePointToRemarkup(text: string): string | null {
-  const url = text.trim();
+  const url = text.trim().replace(/^ms-(?:word|excel|powerpoint):of[ev]\|u\|/i, "");
   const link = /^https?:\/\/\S+$/.test(url) ? sharePointLink(url) : null;
-  return link && linkMarkup(url, sharePointLabel(link));
+  if (link) {
+    return linkMarkup(url, sharePointLabel(link));
+  }
+  const local = sharePointOfPath(text);
+  return local && linkMarkup(local.url, local.name);
 }
 
 /**

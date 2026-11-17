@@ -2,6 +2,8 @@
 // Phorge library: starts the tools of Phlair.
 
 import { startPhizziwig } from "./phizziwig";
+import { chooseSharePointFolders } from "./phizziwig/localPaths";
+import { chooseOneDripheHosts } from "./phizziwig/sharePointLinks";
 import { startPhuture } from "./phuture";
 import { chooseOptions, chosenOptions, enabledTools, type Options, type Tool } from "./tools";
 
@@ -27,11 +29,17 @@ function start(tools: Tool[]): void {
 }
 
 if (__TARGET__ === "phorge") {
-  // The library's main menu extension starts it with the tools the user has on, and their options.
-  JX.behavior("phlair", (config: { tools: Tool[]; options?: Partial<Options> }) => {
-    chooseOptions(config.options ?? {});
-    start(config.tools);
-  });
+  // The library's main menu extension starts it with the tools the user has on, their options, and the
+  // configuration's SharePoint libraries and the hosts of OneDriphe's links.
+  JX.behavior(
+    "phlair",
+    (config: { tools: Tool[]; options?: Partial<Options>; sharePointFolders?: unknown; oneDripheHosts?: unknown }) => {
+      chooseOptions(config.options ?? {});
+      chooseSharePointFolders(config.sharePointFolders);
+      chooseOneDripheHosts(config.oneDripheHosts);
+      start(config.tools);
+    },
+  );
 } else {
   void Promise.all([enabledTools(), chosenOptions()]).then(([tools, chosen]) => {
     chooseOptions(chosen);
