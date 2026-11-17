@@ -102,11 +102,6 @@ export interface InlineOptions {
    */
   isMacro?: (name: string) => boolean;
   /**
-   * Applies the rules in the order PHP 7 sorts them in (see PHP7_ORDER),
-   * not PHP 8's. The dev container runs PHP 7.4.
-   */
-  php7?: boolean;
-  /**
    * Whether the server has the Phlair library's rule for SharePoint links
    * (PhizziwigSharePointRemarkupRule). By default, when this is the library's
    * build; the browser builds may run on a Phorge without it.
@@ -714,23 +709,8 @@ const REGISTERED: [number, Rule][] = [
   [190, sharePointRule],
 ];
 
-// PHP 7's sort is not stable: it orders rules of equal priority differently,
-// here as PHP 7.4 does for the rules above (the dev container's order, with
-// the Phlair library's rule; by index into them). The order depends on the
-// number of rules: print the keys of a block rule's getMarkupRules() in the
-// container after adding one. It matters where such rules overlap: nested
-// braces ("{icon {key x}}", "@{nav x}"), and a reference right after an embed
-// ("{F1}T1": in PHP 8's order "T1" is stored first, so no word character
-// follows "{F1}" and it is an embed; in PHP 7's, it may be "{", "F1" and "}").
-const PHP7_ORDER = [
-  0, 1, 2, 4, 17, 47, 7, 16, 31, 33, 5, 6, 39, 45, 9, 8, 37, 36, 35, 26, 32, 30, 29, 28, 34, 27, 25, 19, 11, 13, 18, 12,
-  20, 21, 22, 24, 15, 14, 38, 23, 10, 3, 40, 41, 42, 43, 44, 46,
-];
-
-const PHP7_RULES = PHP7_ORDER.map((index) => REGISTERED[index][1]);
-
-// PHP 8 sorts stably: equal priorities keep the order of registration.
-const PHP8_RULES = REGISTERED.map(([priority, rule], index) => ({ priority, rule, index }))
+// PHP sorts stably (since PHP 8): equal priorities keep the order of registration.
+const RULES = REGISTERED.map(([priority, rule], index) => ({ priority, rule, index }))
   .sort((a, b) => a.priority - b.priority || a.index - b.index)
   .map(({ rule }) => rule);
 
@@ -823,7 +803,7 @@ export function tokenizeInline(text: string, options: InlineOptions = {}): Inlin
   const [from, to] = phpTrim(text);
   const working = new Text(text, from, to, options.isMacro ?? (() => true));
   const sharePoint = options.sharePoint ?? __TARGET__ === "phorge";
-  for (const rule of options.php7 ? PHP7_RULES : PHP8_RULES) {
+  for (const rule of RULES) {
     if (sharePoint || rule !== sharePointRule) {
       rule(working);
     }

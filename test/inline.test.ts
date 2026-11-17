@@ -230,9 +230,8 @@ describe("tokenizeInline", () => {
     expect(fixtures.length).toBeGreaterThan(5000);
     const excluded: string[] = [];
     const mismatches = fixtures.flatMap(({ text, html }) => {
-      // The dev container runs PHP 7.4, which orders the rules differently,
-      // and has the Phlair library.
-      const tokens = tokenizeInline(text, { isMacro, php7: true, sharePoint: true });
+      // The dev container has the Phlair library.
+      const tokens = tokenizeInline(text, { isMacro, sharePoint: true });
       const reason = exclusion(text, tokens);
       if (reason) {
         excluded.push(reason);

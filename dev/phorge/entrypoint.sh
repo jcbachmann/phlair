@@ -23,7 +23,8 @@ bin/config set storage.local-disk.path /var/phorge-files
 # that *.localhost is this machine).
 bin/config set security.alternate-file-domain "$FILE_URI"
 
-until mysqladmin ping -h "$MYSQL_HOST" -uroot -p"$MYSQL_PASSWORD" --silent; do sleep 1; done
+# The client of Debian 13 asks for TLS by default; the dev database has none.
+until mysqladmin --skip-ssl ping -h "$MYSQL_HOST" -uroot -p"$MYSQL_PASSWORD" --silent; do sleep 1; done
 bin/storage upgrade --force
 php /usr/local/bin/seed.php
 # The daemons build the search index that wiki and project autocomplete use.

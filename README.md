@@ -319,8 +319,8 @@ shared.
   `test/blocks.test.ts` checks it against the PHP engine on ~3000 texts.
 - `inline.ts` finds the inline markup of a block like Phorge's inline rules (a port of the rules, in their order):
   formatting (also across lines), links, references, mentions, embeds, icons, emoji. `test/inline.test.ts` checks it
-  against the PHP engine on ~5000 texts. Rules of equal priority run in PHP 8's order (PHP 7's sort, in the dev
-  container, orders a few differently; the tests use that).
+  against the PHP engine on ~5000 texts. Rules of equal priority run in the order they are registered in, as PHP 8
+  sorts them (the library is made and tested for PHP 8.4, which the dev container runs).
 - `renderer.ts` renders blocks in batches: the texts are joined with a separator paragraph and the HTML is split at
   the separators.
   Every block but the last one of the text is followed by a separator, because Phorge renders some blocks
