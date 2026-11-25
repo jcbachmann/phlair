@@ -69,12 +69,17 @@ function selectedLink(state: EditorState): Link | null {
 
 /**
  * What the link dialog makes of a target and a text: a link with the text, or
- * without one the target alone (its reference, e.g. "T12", "@alice", a URL).
- * A Markdown link stays one. (Without a target, the text alone: unlink.)
+ * without one the target alone: its reference ("@alice", "D3", a URL), a task
+ * as its card ("{T12}", which shows its title and status). The reference that
+ * was being changed stays as it was written ("T12" or "{T12}") if it is picked
+ * again. A Markdown link stays one. (Without a target, the text alone: unlink.)
  */
-function linkResult(form: Link["form"], target: Target, text: string): string {
+function linkResult(form: Link["form"], target: Target, text: string, initial?: Target): string {
   if (!text) {
-    return target.reference;
+    if (initial && target.target === initial.target) {
+      return initial.reference;
+    }
+    return /^T\d+$/.test(target.reference) ? `{${target.reference}}` : target.reference;
   }
   return form === "markdown" ? `[${linkName(text)}](${target.target})` : linkMarkup(target.target, text);
 }
@@ -107,14 +112,14 @@ function openLinkDialog(
     // As written: the target of a link, the reference ("T12") of a reference.
     initial: initial?.label,
     initialTarget: initial,
-    pick: (target, range, text) => insertLink(view, range, linkResult(options.form, target, text)),
+    pick: (target, range, text) => insertLink(view, range, linkResult(options.form, target, text, initial)),
     unlink: (range, text) => insertLink(view, range, text),
   });
 }
 
 /**
  * The link button, Ctrl+K (and Ctrl+Shift+K): changes the link or the
- * reference ("T12", "@alice") the cursor is in, its text and its target, or
+ * reference ("T12", "{T12}", "@alice") the cursor is in, its text and its target, or
  * links the selected text, or inserts a link or reference at the cursor.
  */
 export function editLink(view: EditorView): boolean {
@@ -136,12 +141,12 @@ export function editLink(view: EditorView): boolean {
   const reference = selectedReference(state);
   if (reference) {
     // Its search shows what it refers to.
-    const mention = /^@(.+)$/.exec(reference.text);
-    const target = mention ? `/p/${mention[1]}/` : `/${reference.text}`;
+    const mention = /^@(.+)$/.exec(reference.label);
+    const target = mention ? `/p/${mention[1]}/` : `/${reference.label}`;
     openLinkDialog(
       view,
       { ...options, range: reference, text: "", form: "wiki" },
-      { label: reference.text, icon: "fa-anchor", reference: reference.text, target },
+      { label: reference.label, icon: "fa-anchor", reference: reference.text, target },
     );
     return true;
   }
@@ -152,17 +157,20 @@ export function editLink(view: EditorView): boolean {
 
 /**
  * The reference around the cursor or the selection (within one), e.g. "T12",
- * "D3#7" or "@alice", as Phorge finds them in the line (inline.ts). Not
- * commit hashes, which the search for objects does not find.
+ * "D3#7" or "@alice", as Phorge finds them in the line (inline.ts), or the
+ * card of a task or revision ("{T12}", "{D3}", the cards of the insert menu):
+ * as written, and what it refers to ("T12"). Not commit hashes, which the
+ * search for objects does not find.
  */
-function selectedReference(state: EditorState): { from: number; to: number; text: string } | null {
+function selectedReference(state: EditorState): { from: number; to: number; text: string; label: string } | null {
   const range = state.selection.main;
   const line = state.doc.lineAt(range.head);
   for (const token of textTokens(line.text, line.from)) {
     const text = state.sliceDoc(token.from, token.to);
-    const reference = token.kind === "mention" || (token.kind === "object" && /^[A-Z]\d/.test(text));
+    const card = token.kind === "embed" ? /^\{([TD]\d+)\}$/.exec(text)?.[1] : undefined;
+    const reference = token.kind === "mention" || (token.kind === "object" && /^[A-Z]\d/.test(text)) || card;
     if (reference && range.from >= token.from && range.to <= token.to) {
-      return { from: token.from, to: token.to, text };
+      return { from: token.from, to: token.to, text, label: card ?? text };
     }
   }
   return null;

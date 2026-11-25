@@ -13,6 +13,7 @@ import {
   imageSite,
   openNewWikiPage,
   openWithEditor,
+  pasteInCell,
   PNG_BYTES,
   settled,
   textarea,
@@ -427,9 +428,9 @@ test.describe("editing aids", () => {
     await picker.locator(".rme-picker-search").fill("calib");
     await expect(picker.locator(".jx-result.focused")).toContainText("T1: Calibrate the detector");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toBe("See T1");
+    await expect.poll(() => source(page)).toBe("See {T1}");
     await page.keyboard.type(".");
-    await expect.poll(() => source(page)).toBe("See T1.");
+    await expect.poll(() => source(page)).toBe("See {T1}.");
   });
 
   test("Markdown's *italic* turns into remarkup, but not in code and URLs", async ({ page }) => {
@@ -1189,7 +1190,7 @@ test.describe("review fixes", () => {
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("Remarkup Demo");
     await input.fill("calib");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toBe("T1");
+    await expect.poll(() => source(page)).toBe("{T1}");
   });
 
   test("a bare URL changed to a task becomes its reference; Open stays on the site", async ({ page, context }) => {
@@ -1203,7 +1204,7 @@ test.describe("review fixes", () => {
     await page.locator(".rme-picker .rme-picker-search").fill("T1");
     await expect(page.locator(".rme-picker .jx-result.focused")).toContainText("T1:");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toBe("See T1 now");
+    await expect.poll(() => source(page)).toBe("See {T1} now");
 
     await page.keyboard.press("End");
     await page.keyboard.type(" [[ //evil.example/x | there ]]");
@@ -1707,7 +1708,7 @@ test.describe("fourth test round", () => {
     await picker.locator(".rme-picker-search").fill("T2");
     await expect(picker.locator(".jx-result").first()).toContainText("T2");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toMatch(/^See T2 for the details/);
+    await expect.poll(() => source(page)).toMatch(/^See \{T2\} for the details/);
   });
 });
 
@@ -2676,7 +2677,7 @@ test.describe("tenth test round", () => {
 });
 
 test.describe("eleventh test round", () => {
-  test("Enter on an empty item ends the list without adding a line; at the start of a block it makes room above", async ({
+  test("Enter on an empty item ends the list without adding a line; at the start of a quote or header it makes room above", async ({
     page,
   }) => {
     await openNewWikiPage(page, "Enter");
@@ -2691,18 +2692,28 @@ test.describe("eleventh test round", () => {
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Delete");
     await page.keyboard.insertText("Intro.\n\n  - one\n  - two\n\n= Title");
-    // At the start of the first item's text (its bullet shows rendered), and of the header's.
+    // At the start of the first item's text (its bullet shows rendered): an empty item above, as for the other items.
     await page.locator(".cm-line", { hasText: "one" }).click();
     await page.keyboard.press("Home");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toBe("Intro.\n\n\n  - one\n  - two\n\n= Title");
-    // The header shows its markers: Home goes before them.
+    await expect.poll(() => source(page)).toBe("Intro.\n\n  - \n  - one\n  - two\n\n= Title");
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe("Intro.\n\n  - \n  - xone\n  - two\n\n= Title");
+    // Also when the list starts the text.
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.insertText("  - one\n  - two\n\n= Title");
+    await page.locator(".cm-line", { hasText: "one" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("  - \n  - one\n  - two\n\n= Title");
+    // The header shows its markers: Home goes before them; Enter makes room above it.
     await page.locator(".cm-line", { hasText: "Title" }).click();
     await page.keyboard.press("Home");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toBe("Intro.\n\n\n  - one\n  - two\n\n\n= Title");
+    await expect.poll(() => source(page)).toBe("  - \n  - one\n  - two\n\n\n= Title");
     await page.keyboard.type("x");
-    await expect.poll(() => source(page)).toBe("Intro.\n\n\n  - one\n  - two\n\n\nx= Title");
+    await expect.poll(() => source(page)).toBe("  - \n  - one\n  - two\n\n\nx= Title");
   });
 
   test("a header shows its markers while the cursor is on its line", async ({ page }) => {
@@ -4540,7 +4551,9 @@ test.describe("the link dialog", () => {
     await expect(page.locator(".rme-editor .rme-picking")).toHaveCount(0);
   });
 
-  test("a reference: without a text the reference, with one a link to it; Ctrl+K changes it", async ({ page }) => {
+  test("a reference: without a text the reference, a task as its card; with one a link to it; Ctrl+K changes it", async ({
+    page,
+  }) => {
     await openNewWikiPage(page, "Reference dialog");
     await editor(page).click();
     await page.keyboard.press("Control+Shift+k");
@@ -4548,7 +4561,7 @@ test.describe("the link dialog", () => {
     await link(page).fill("T1");
     await expect(picker(page).locator(".jx-result.focused")).toContainText("Calibrate the detector");
     await page.keyboard.press("Enter");
-    await expect.poll(() => source(page)).toBe("T1");
+    await expect.poll(() => source(page)).toBe("{T1}");
     // Ctrl+K on a reference changes it too.
     await page.keyboard.press("Control+k");
     // The reference to change, by its reference.
@@ -4556,6 +4569,41 @@ test.describe("the link dialog", () => {
     await text(page).fill("the detector");
     await link(page).press("Enter");
     await expect.poll(() => source(page)).toBe("[[ /T1 | the detector ]]");
+  });
+
+  test("Ctrl+K and Enter keep a reference or card as written; a task picked anew is its card, a URL stays bare", async ({
+    page,
+  }) => {
+    await startWith(page, "See T1 and {T1}.");
+    await page.locator(".cm-line").first().click();
+    await page.keyboard.press("Home");
+    for (let i = 0; i < 5; i++) {
+      await page.keyboard.press("ArrowRight");
+    }
+    for (const step of ["in T1", "in {T1}"]) {
+      await page.keyboard.press("Control+k");
+      await expect(link(page), step).toHaveValue("T1");
+      await page.keyboard.press("Enter");
+      await expect(picker(page)).toHaveCount(0);
+      await expect.poll(() => source(page), step).toBe("See T1 and {T1}.");
+      // Into the card, before its "}".
+      await page.keyboard.press("End");
+      await page.keyboard.press("ArrowLeft");
+      await page.keyboard.press("ArrowLeft");
+    }
+    await page.keyboard.press("End");
+    await page.keyboard.type(" ");
+    await page.keyboard.press("Control+k");
+    await link(page).fill("calib");
+    await expect(picker(page).locator(".jx-result.focused")).toContainText("T1: Calibrate the detector");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("See T1 and {T1}. {T1}");
+    await page.keyboard.type(" ");
+    await page.keyboard.press("Control+k");
+    await link(page).fill("https://example.com/z");
+    await expect(picker(page).locator(".jx-result.focused")).toContainText("Link to");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toBe("See T1 and {T1}. {T1} https://example.com/z");
   });
 });
 
@@ -5630,6 +5678,43 @@ test.describe("SharePoint links", () => {
     expect(await source(page)).toBe(`Numbers: ${SHARE} and [[ ${spec} | the spec ]].\n\nThe end.`);
   });
 
+  test("pasted into a table cell, a SharePoint URL becomes a link, and a pasted link keeps its |", async ({
+    page,
+    browserName,
+  }) => {
+    const TABLE = "| a | b |\n| --- | --- |\n| x | y |";
+    const first = page.locator('.rme-table-editor td[data-col="0"]');
+    const second = page.locator('.rme-table-editor td[data-col="1"]');
+    await startWith(page, TABLE);
+    await pasteInCell(page, first, ` ${SHARE}`);
+    // Its name selected, to type over, as in the text.
+    await page.keyboard.type("Budget");
+    const linked = `| a | b |\n| --- | --- |\n| x [[ ${SHARE} | Budget ]] | y |`;
+    await expect.poll(() => source(page)).toBe(linked);
+    // Undo: the typing, then the link (the URL as pasted), then the paste.
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe(linked.replace("Budget", "Excel workbook in Projects"));
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe(`| a | b |\n| --- | --- |\n| x ${SHARE} | y |`);
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe(TABLE);
+
+    // A pasted link keeps its "|", other "|" would end the cell.
+    await pasteInCell(page, second, " [[ https://example.com/a_b | the name ]] or a|b");
+    await expect
+      .poll(() => source(page))
+      .toBe(TABLE.replace("| y |", "| y [[ https://example.com/a_b | the name ]] or a¦b |"));
+    // In code, the URL stays as it is.
+    await page.keyboard.type(" `");
+    await pasteInCell(page, second, SHARE);
+    await expect.poll(() => source(page)).toContain(`or a¦b \`${SHARE}`);
+    if (browserName === "chromium") {
+      // Line and paragraph separators are line breaks too: spaces in a cell.
+      await pasteInCell(page, first, " one\u2028two\u2029three");
+      await expect.poll(() => source(page)).toContain("| x one two three |");
+    }
+  });
+
   test("the checkbox of an item with such a link is saved", async ({ page }) => {
     // A save compares the item's text with Phorge's rendering, which shows the URL.
     await page.clock.install();
@@ -5652,5 +5737,168 @@ test.describe("SharePoint links", () => {
       (await conduit(page, "maniphest.search", { constraints: { ids: [id] } })).data[0].fields.description.raw;
     await expect.poll(source).toBe(text.replace("- [ ]", "- [x]"));
     await expect(page.locator(".rme-check-note")).toHaveCount(0);
+  });
+});
+
+test.describe("notes of 2026-11-25", () => {
+  const TABLE = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+  const editedCell = (page: Page) => page.locator(".rme-table-editor td:has(.rme-cell-editor)");
+
+  test("a pasted table is edited as a table, in the cell the paste ends in", async ({ page }) => {
+    await openNewWikiPage(page, "Pasted table");
+    await editor(page).click();
+    await paste(page, { text: TABLE });
+    await expect.poll(() => source(page)).toBe(TABLE);
+    await expect(editedCell(page)).toHaveCount(1);
+    await expect(editedCell(page)).toContainText("2");
+    await page.keyboard.type("0");
+    await expect.poll(() => source(page)).toBe(TABLE.replace("| 2 |", "| 20 |"));
+    // Undo in the cell: the typing, then the paste; the text keeps the focus when the table goes.
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => source(page)).toBe("");
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe("x");
+
+    // In the middle of a line, copied with its line break: a block of its own, without the line break.
+    await startWith(page, "Before after.");
+    await page.locator(".cm-line", { hasText: "Before" }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Control+ArrowRight");
+    await paste(page, { text: `${TABLE}\n` });
+    await expect.poll(() => source(page)).toBe(`Before\n\n${TABLE}\n\n after.`);
+    await expect(editedCell(page)).toContainText("2");
+
+    // Cells of a spreadsheet.
+    await startWith(page, "Text.");
+    await page.locator(".cm-line", { hasText: "Text." }).click();
+    await page.keyboard.press("End");
+    await paste(page, { text: "Name\tValue\nx\t1\n" });
+    await expect.poll(() => source(page)).toBe("Text.\n\n| Name | Value |\n| ---- | ----- |\n| x    | 1     |");
+    await expect(editedCell(page)).toContainText("1");
+
+    // A table of a web page that is only its header: the paste ends on the line below the header, which has no cells.
+    await startWith(page, "Text.");
+    await page.locator(".cm-line", { hasText: "Text." }).click();
+    await page.keyboard.press("End");
+    await paste(page, { html: "<table><tr><th>Name</th><th>Value</th></tr></table>" });
+    await expect.poll(() => source(page)).toBe("Text.\n\n| Name | Value |\n| ---- | ----- |");
+    await expect(editedCell(page)).toHaveCount(0);
+    await expect(page.locator(".rme-table-editor th:has(.rme-cell-editor)")).toContainText("Value");
+
+    // Rows pasted into a table shown as its text are rows of that table.
+    await page.locator(".rme-table-bar").getByRole("button", { name: "Edit the table as text" }).click();
+    await page.locator(".cm-line", { hasText: "Text." }).click();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Home");
+    await paste(page, { text: "| y | 2 |\n" });
+    await expect.poll(() => source(page)).toBe("Text.\n\n| y | 2 |\n| Name | Value |\n| ---- | ----- |");
+    await expect(editedCell(page)).toHaveCount(0);
+  });
+
+  test("a table pasted into a quote, as plain text, or into a table being typed stays text", async ({ page }) => {
+    await startWith(page, "> Quoted:");
+    await page.locator(".cm-line", { hasText: "Quoted:" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await paste(page, { text: TABLE });
+    await expect.poll(() => source(page)).toBe(`> Quoted:\n> ${TABLE.replaceAll("\n", "\n> ")}`);
+    await expect(editedCell(page)).toHaveCount(0);
+
+    // Ctrl+Shift+V: as copied.
+    await startWith(page, "Text: ");
+    await page.locator(".cm-line", { hasText: "Text:" }).click();
+    await page.keyboard.press("End");
+    await paste(page, { text: TABLE }, true);
+    await expect.poll(() => source(page)).toBe(`Text: ${TABLE}`);
+    await expect(editedCell(page)).toHaveCount(0);
+
+    // A table being typed shows its text, also when a link is pasted into it.
+    await openNewWikiPage(page, "Typed table");
+    await editor(page).click();
+    await page.keyboard.insertText("| a | b |\n| --- | --- |\n| 1 | x ");
+    const share = "https://contoso.sharepoint.com/:x:/s/Projects/EaB3c-Xy_Z?e=Ab12cd";
+    await paste(page, { text: share });
+    await expect
+      .poll(() => source(page))
+      .toBe(`| a | b |\n| --- | --- |\n| 1 | x [[ ${share} | Excel workbook in Projects ]]`);
+    await expect(page.locator(".rme-cell-editor")).toHaveCount(0);
+  });
+
+  test("Up from a table that starts the text makes a line above it; Enter before a table's first | does too", async ({
+    page,
+  }) => {
+    await startWith(page, `${TABLE}\n\nEnd.`);
+    await page.locator(".rme-table-editor td", { hasText: "1" }).click();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.type("Intro.");
+    await expect.poll(() => source(page)).toBe(`Intro.\n\n${TABLE}\n\nEnd.`);
+    // Up again from the table goes to the line above, adding none.
+    await page.locator(".rme-table-editor th", { hasText: "a" }).click();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.type("!");
+    await expect.poll(() => source(page)).toBe(`Intro.\n!\n${TABLE}\n\nEnd.`);
+
+    // In a quote, the lines are the quote's.
+    const quoted = `> ${TABLE.replaceAll("\n", "\n> ")}`;
+    await startWith(page, `${quoted}\n\nEnd.`);
+    await page.locator(".rme-table-editor th", { hasText: "a" }).click();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe(`> x\n>\n${quoted}\n\nEnd.`);
+
+    // Edited as text: Enter at the start of its first line makes a line above it, adding no row.
+    await page.addInitScript(() => localStorage.setItem("phizziwig-table-mode", "text"));
+    await startWith(page, `${TABLE}\n\nEnd.`);
+    await page.locator(".cm-line", { hasText: "End." }).click();
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Intro.");
+    await expect.poll(() => source(page)).toBe(`Intro.\n\n${TABLE}\n\nEnd.`);
+    // Elsewhere, Enter adds a row.
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => source(page)).toMatch(/^Intro\.\n\n\| a +\| b +\|\n\| -+ \| -+ \|\n\| +\| +\|\n\| 1/);
+
+    // In a quote, the lines are the quote's.
+    await startWith(page, `> Quoted:\n>\n${quoted}`);
+    await page.locator(".cm-line", { hasText: "Quoted:" }).click();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("x");
+    await expect.poll(() => source(page)).toBe(`> Quoted:\n>\n> x\n>\n${quoted}`);
+  });
+
+  test("Enter left of the first item's marker makes an empty line, right of it an empty item, in every kind of list", async ({
+    page,
+  }) => {
+    for (const [item, above, next] of [
+      ["  - one", "  - ", "  - one"],
+      ["  # one", "  # ", "  # one"],
+      ["  1. one", "  1. ", "  2. one"],
+      ["  - [ ] one", "  - [ ] ", "  - [ ] one"],
+      // The checked box stays with its text.
+      ["  - [x] one", "  - [ ] ", "  - [x] one"],
+    ]) {
+      // Right of the marker, at the start of the item's text: an empty item above, the cursor staying with the text.
+      await startWith(page, `${item}\n\nEnd.`);
+      await page.locator(".cm-line", { hasText: "one" }).click();
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("x");
+      const moved = next.replace("one", "xone");
+      await expect.poll(() => source(page), item).toBe(`${above}\n${moved}\n\nEnd.`);
+      // Left of it (Home goes to the start of the text, then of the line): an empty line above.
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => source(page), item).toBe(`${above}\n\n${moved}\n\nEnd.`);
+    }
   });
 });

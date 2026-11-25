@@ -20,8 +20,11 @@ import {
 import { standardKeymap } from "@codemirror/commands";
 import { EditorView, type KeyBinding, keymap, WidgetType } from "@codemirror/view";
 import { minimalChange } from "../diff";
+import { genericLinkName, pastedLink } from "../paste";
 import { INLINE_FORMATS, QUOTE_MARKERS } from "../syntax";
 import {
+  CELL_LINK,
+  cellPipes,
   type CellPos,
   cellRange,
   columnCount,
@@ -40,7 +43,7 @@ import {
 import { hostTextarea } from "./host";
 import { markersOf, offsetWithMarkers, withMarkers } from "./lines";
 import { hasText, separated, submitWhenUploaded, uploadFiles } from "./upload";
-import { keepsFocus } from "./focus";
+import { keepsFocus, setFocused } from "./focus";
 import { knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { openLinkOnModClick } from "./openLink";
 import { storedChoice } from "../../storage";
@@ -232,7 +235,7 @@ function editCell(
             if (!tr.docChanged || tr.annotation(fromSource) || tr.annotation(openingLink)) {
               return tr;
             }
-            const outside = tr.newDoc.toString().replace(/\[\[[^\]]*\]\]/g, "");
+            const outside = tr.newDoc.toString().replace(CELL_LINK, "");
             return /[\r\n|]|\[\[/.test(outside) ? [] : tr;
           }),
           EditorView.updateListener.of((update) => {
@@ -240,7 +243,8 @@ function editCell(
             const opening = update.transactions.some((tr) => tr.annotation(openingLink));
             const setFromSource = update.transactions.some((tr) => tr.annotation(fromSource));
             if (update.docChanged && !setFromSource && !opening) {
-              onInput(view, dom, cell, update.state.doc.toString());
+              const pasted = update.transactions.some((tr) => tr.isUserEvent("input.paste"));
+              onInput(view, dom, cell, update.state.doc.toString(), pasted);
             }
           }),
           EditorView.domEventHandlers({
@@ -251,12 +255,39 @@ function editCell(
                 void uploadToCell(view, cell, Array.from(data.files));
                 return true;
               }
-              // Plain text on one line, "|" not splitting the cell; a URL over selected text links it.
+              // Plain text on one line, "|" not splitting the cell (cellPipes());
+              // a URL over selected text links it. A SharePoint URL or a local
+              // path of a library becomes a link, as in the text (pasting.ts):
+              // the text as pasted, then the link as an undo step of its own,
+              // with its name selected if it is only its kind.
               event.preventDefault();
-              const text = (data?.getData("text/plain") ?? "").replace(/[\r\n]+/g, " ").replace(/\|/g, "¦");
-              if (!support?.linkSelection(editor, text.trim())) {
-                editor.dispatch(editor.state.replaceSelection(text), { userEvent: "input.paste" });
+              const text = (data?.getData("text/plain") ?? "").replace(/[\r\n\u2028\u2029]+/g, " ");
+              if (support?.linkSelection(editor, text.trim())) {
+                return true;
               }
+              const paste = (insert: string, selection?: { anchor: number; head: number }) =>
+                editor.dispatch(editor.state.replaceSelection(insert), {
+                  ...(selection ? { selection } : {}),
+                  userEvent: "input.paste",
+                });
+              const { from } = editor.state.selection.main;
+              const link = pastedLink(editor.state.sliceDoc(0, from), text);
+              if (!link) {
+                paste(cellPipes(text));
+                return true;
+              }
+              paste(text);
+              // The link replaces what was pasted, with the spaces around it.
+              const start = from + (text.length - text.trimStart().length);
+              const end = from + text.trimEnd().length;
+              const name = genericLinkName(link);
+              editor.dispatch({
+                changes: { from: start, to: end, insert: link },
+                selection: name
+                  ? { anchor: start + name[0], head: start + name[1] }
+                  : { anchor: start + link.length + (text.length - text.trimEnd().length) },
+                userEvent: "input.paste",
+              });
               return true;
             },
             blur() {
@@ -456,6 +487,19 @@ export function focusCell(
   }
 }
 
+/**
+ * Edits a cell of a table that the text cursor is in, which shows as its text
+ * (a table just pasted): the table renders without the focus in the text, and
+ * its cell takes the focus.
+ */
+export function editCellAt(view: EditorView, from: number, row: number, col: number): void {
+  view.dispatch({ effects: setFocused.of(false) });
+  focusCell(view, from, row, col, "end");
+  if (!focusedCell(view)) {
+    view.dispatch({ effects: setFocused.of(true) });
+  }
+}
+
 /** Moves into a table from the line above (first row) or below (last row). */
 export function enterTable(view: EditorView, from: number, fromAbove: boolean): void {
   const dom = tableDomAt(view, from);
@@ -473,8 +517,12 @@ function leave(view: EditorView, dom: TableDom, down: boolean): void {
   // The editor would take the selection in the cell as its cursor on focus.
   window.getSelection()?.removeAllRanges();
   view.focus();
-  if (!down) {
-    view.dispatch({ selection: { anchor: Math.max(0, from - 1) }, scrollIntoView: true });
+  const first = doc.lineAt(from);
+  if (!down && first.from === 0) {
+    // The table starts the text: continue in a new paragraph before it (in a quote, in the quote).
+    openLineAbove(view, 0, markersOf(dom.rmePrefixes ?? [], 0));
+  } else if (!down) {
+    view.dispatch({ selection: { anchor: first.from - 1 }, scrollIntoView: true });
   } else if (to < doc.length) {
     // In a quote, after the markers of the next line, where its text starts.
     const next = doc.lineAt(to + 1);
@@ -486,6 +534,21 @@ function leave(view: EditorView, dom: TableDom, down: boolean): void {
     const insert = `\n${prefix.trimEnd()}\n${prefix}`;
     view.dispatch({ changes: { from: to, insert }, selection: { anchor: to + insert.length }, scrollIntoView: true });
   }
+}
+
+/**
+ * A new line above a table whose first line starts at `from`, with the cursor
+ * on it, and a blank line between it and the table, as between blocks. In a
+ * quote, lines of the quote (`marker`: the quote's markers of the table's
+ * first line).
+ */
+export function openLineAbove(view: EditorView, from: number, marker: string): void {
+  view.dispatch({
+    changes: { from, insert: `${marker}\n${marker.trimEnd()}\n` },
+    selection: { anchor: from + marker.length },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
 }
 
 /** Applies a table operation and focuses the cell the cursor of the edit is in. */
@@ -527,7 +590,7 @@ function cellLocation(view: EditorView, dom: TableDom, cell: HTMLElement) {
 }
 
 /** Writes the text of a cell into the source, changing only that cell. */
-function onInput(view: EditorView, dom: TableDom, cell: HTMLElement, typed: string): void {
+function onInput(view: EditorView, dom: TableDom, cell: HTMLElement, typed: string, pasted = false): void {
   // Firefox may type a space as a no-break space; the source gets a space.
   const value = typed.replace(/\u00a0/g, " ");
   const text = dom.rmeText ?? "";
@@ -546,9 +609,13 @@ function onInput(view: EditorView, dom: TableDom, cell: HTMLElement, typed: stri
       const change = minimalChange(old, value);
       view.dispatch({
         changes: { from: start + change.from, to: start + change.to, insert: change.insert },
-        userEvent: "input.type",
-        // Typing that starts in a cell is an undo step of its own.
-        annotations: cell.dataset.written === undefined ? isolateHistory.of("before") : [],
+        userEvent: pasted ? "input.paste" : "input.type",
+        // Typing that starts in a cell is an undo step of its own, and so is a paste.
+        annotations: pasted
+          ? isolateHistory.of("full")
+          : cell.dataset.written === undefined
+            ? isolateHistory.of("before")
+            : [],
       });
       cell.dataset.written = String(value.length);
     } else {
@@ -561,7 +628,8 @@ function onInput(view: EditorView, dom: TableDom, cell: HTMLElement, typed: stri
       cells[col] = value;
       view.dispatch({
         changes: { from, to: from + sourceLength(dom), insert: sourceOf(dom, formatTable(table).text) },
-        userEvent: "input.table",
+        userEvent: pasted ? "input.paste" : "input.table",
+        annotations: pasted ? isolateHistory.of("full") : [],
       });
     }
   } finally {
@@ -601,6 +669,10 @@ function tableKeys(view: EditorView, dom: TableDom, cell: HTMLElement): KeyBindi
   // The editor's undo history, not the cell's.
   const history = (command: typeof undo) => () => {
     command(view);
+    // The table may be gone (e.g. undoing its paste), or drawn anew: the text keeps the focus.
+    if (!cell.isConnected) {
+      view.focus();
+    }
     return true;
   };
   return [

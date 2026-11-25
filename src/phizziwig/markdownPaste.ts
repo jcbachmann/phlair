@@ -32,12 +32,20 @@ const SIGNALS: Record<string, string> = {
 
 /**
  * Markup that only remarkup has: a code block's options ("```lang=bash",
- * "```name=x.sh, lines=10", "```counterexample"), a reply's header (">>!")
- * and a file embed ("{F12}"). A text with it was copied from Phorge, and
- * converting it would change it ("lang=lang=bash", "__underlined__" made
- * bold).
+ * "```name=x.sh, lines=10", "```counterexample"), a reply's header (">>!"),
+ * a file embed ("{F12}") and a named link in double brackets ("[[ url | name ]]").
+ * A text with it was copied from Phorge, and converting it would change it
+ * ("lang=lang=bash", "__underlined__" made bold, "_" of a URL as emphasis).
+ * Obsidian's links with another text ("[[Page|text]]") look the same, and
+ * stay as they are too.
  */
-const REMARKUP_ONLY = /^[>\s]*```[ \t]*(?:lang|name|lines|counterexample)\b|^>>!|\{F\d+[,}]/im;
+const REMARKUP_ONLY =
+  /^[>\s]*```[ \t]*(?:lang|name|lines|counterexample)\b|^>>!|\{F\d+[,}]|\[\[[^\]\n|]*\|[^\]\n]*\]\]/im;
+
+/** Whether a position is in a project tag or a mention ("#a_b_c", "@a_b"): its "_" and "*" are no emphasis. */
+function inMention(text: string, pos: number): boolean {
+  return /(?:^|[\s(])[#@][^\s#@]*$/.test(text.slice(text.lastIndexOf("\n", pos - 1) + 1, pos));
+}
 
 interface Edit {
   from: number;
@@ -167,10 +175,10 @@ function convert(node: SyntaxNode, text: string, references: Map<string, string>
     }
     case "Emphasis": {
       // "*a*" and "_a_" → "//a//"; not inside a word ("2*3*4"), which is
-      // more likely arithmetic than emphasis.
+      // more likely arithmetic than emphasis, nor in a project tag.
       const marks = node.getChildren("EmphasisMark");
       const inWord = /\w/.test(text[node.from - 1] ?? "") && /\w/.test(text[node.to] ?? "");
-      if (!inWord) {
+      if (!inWord && !inMention(text, node.from)) {
         for (const mark of marks) {
           replace(mark.from, mark.to, "//");
         }
@@ -180,7 +188,7 @@ function convert(node: SyntaxNode, text: string, references: Map<string, string>
     case "StrongEmphasis": {
       // "__a__" → "**a**".
       for (const mark of node.getChildren("EmphasisMark")) {
-        if (text.startsWith("_", mark.from)) {
+        if (text.startsWith("_", mark.from) && !inMention(text, node.from)) {
           replace(mark.from, mark.to, "**");
         }
       }

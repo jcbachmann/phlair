@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cellPipes,
   cellRange,
   columnCount,
   deleteColumn,
@@ -117,5 +118,15 @@ describe("cellRange", () => {
     expect([text(0), text(1), text(2), text(3)]).toEqual(["a", "[[ /w/ | wiki ]]", "", null]);
     // Text typed into the empty cell goes after the space after its "|".
     expect(cellRange(line, 2)?.from).toBe(line.lastIndexOf("|    |") + 2);
+  });
+});
+
+describe("cellPipes", () => {
+  it("makes each | a ¦, which does not end the cell, except in links", () => {
+    expect(cellPipes("a|b [[ https://example.com/x | the | name ]] c | d [[ page ]]")).toBe(
+      "a¦b [[ https://example.com/x | the | name ]] c ¦ d [[ page ]]",
+    );
+    // A link left open is no link.
+    expect(cellPipes("[[ a | b")).toBe("[[ a ¦ b");
   });
 });

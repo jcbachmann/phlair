@@ -413,6 +413,12 @@ describe("tsvToRemarkup", () => {
     );
   });
 
+  it("keeps the | of a link in a cell", () => {
+    expect(tsvToRemarkup("Link\tNote\n[[ /T1 | task ]]\ta|b")).toBe(
+      lines("| Link             | Note |", "| ---------------- | ---- |", "| [[ /T1 | task ]] | a¦b  |"),
+    );
+  });
+
   it("allows extra empty cells at the end of rows", () => {
     expect(tsvToRemarkup("a\tb\t\t\nc\td")).toBe(lines("| a   | b   |", "| --- | --- |", "| c   | d   |"));
   });

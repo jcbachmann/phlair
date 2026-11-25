@@ -1,6 +1,6 @@
 // Keyboard commands and the table toolbar.
 
-import { ChangeSet, EditorSelection, EditorState, Prec, type Text } from "@codemirror/state";
+import { ChangeSet, type ChangeSpec, EditorSelection, EditorState, Prec, type Text } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import { insertNewlineAndIndent } from "@codemirror/commands";
 import {
@@ -39,7 +39,7 @@ import {
 } from "./livePreview";
 import { insertBlock } from "./formatting";
 import { lineMarkers, lineOf, markersOf, offsetInBlock, offsetWithMarkers, rangeLines, withMarkers } from "./lines";
-import { switchTableMode, tableModeField } from "./tableEditor";
+import { openLineAbove, switchTableMode, tableModeField } from "./tableEditor";
 import { focusCell, focusedCell, focusedCellSource, runOnFocusedCell } from "./tableEditor";
 
 /** The table the cursor is in, as text: also one in a quote, whose lines keep the quote's markers. */
@@ -161,13 +161,22 @@ export function insertTable(view: EditorView, columns: number, rows: number): bo
   return true;
 }
 
-/** Enter in a table adds a row; Enter in an empty last row leaves the table. */
+/**
+ * Enter in a table adds a row; in an empty last row it leaves the table, and
+ * before the table's first "|" it makes a new line above it.
+ */
 function tableEnter(view: EditorView): boolean {
   const context = tableAt(view.state);
   if (!context) {
     return false;
   }
   const { from, to, markers, table, at } = context;
+  const marker = markersOf(markers, 0);
+  if (view.state.selection.main.head <= from + marker.length + table.indent.length) {
+    // Before the first "|": a new line above the table, to type on.
+    openLineAbove(view, from, marker);
+    return true;
+  }
   if (at.row === table.rows.length - 1 && isEmptyRow(table.rows[at.row]) && table.rows.length > 1) {
     const rows = table.rows.slice(0, -1);
     // A blank line and a new one after the table; in a quote, in the quote.
@@ -187,9 +196,10 @@ function tableEnter(view: EditorView): boolean {
 /**
  * Enter continues lists and quotes, also lists in quotes; on an empty item it
  * ends them (a list in a quote, not the quote). At the start of the text of a
- * block's first line (a list, quote or header, whose marker shows rendered),
- * it makes room above the block, without a marker. In the marker of a list
- * item (e.g. at the start of its line), it makes an empty line above the item.
+ * block's first line (a quote or header, whose marker shows rendered), it
+ * makes room above the block, without a marker. At the start of an item's
+ * text, also of the first one, it makes an empty item above; in the marker of
+ * a list item (e.g. at the start of its line), an empty line above the item.
  */
 function continueMarkup(view: EditorView): boolean {
   const { state } = view;
@@ -221,6 +231,7 @@ function continueMarkup(view: EditorView): boolean {
   }
   if (
     marker !== null &&
+    !item &&
     block &&
     line.from === block.from &&
     range.head <= line.from + marker &&
@@ -273,13 +284,22 @@ function continueMarkup(view: EditorView): boolean {
   }
   // A reply's header (">>! In T1, @alice wrote:") continues as its quote.
   let prefix = quote ? quoteMarkers(quoteDepth(markers)) : "";
+  const changes: ChangeSpec[] = [];
   if (item) {
     const number = /^(\d+)([.)])$/.exec(item[2]);
-    const marker = number ? `${Number(number[1]) + 1}${number[2]}` : item[2];
-    prefix += item[1] + marker + item[3] + (item[4] ? "[ ] " : "");
+    const next = number ? `${Number(number[1]) + 1}${number[2]}` : item[2];
+    // At the start of the item's text, the text goes on to the new line with
+    // its checkbox, checked or not; the empty item left above gets an empty one.
+    const box = item[4] ?? "";
+    const atText = head === line.from + marker!;
+    prefix += item[1] + next + item[3] + (box && (atText ? box : "[ ] "));
+    if (atText && /^\[[xX]\]/.test(box)) {
+      changes.push({ from: head - box.length, to: head - box.length + 3, insert: "[ ]" });
+    }
   }
+  changes.push({ from: head, insert: "\n" + prefix });
   view.dispatch({
-    changes: { from: head, insert: "\n" + prefix },
+    changes,
     selection: { anchor: head + 1 + prefix.length },
     scrollIntoView: true,
     userEvent: "input",

@@ -12,14 +12,17 @@ import {
   htmlToRemarkup,
   type ImageMarkup,
   markdownToRemarkup,
-  sharePointToRemarkup,
+  pastedLink,
   shouldConvertHtml,
   tsvToRemarkup,
 } from "../paste";
 import { linkMarkup } from "../linkMarkup";
 import { embeddedFile, fetchImage, fileByPhid } from "../phorge";
 import { inMonospace, LITERAL_BLOCKS, QUOTE_LINE, quoteDepth, quoteMarkers } from "../syntax";
-import { blockAtCursor, innerBlockAtCursor } from "./livePreview";
+import { locate, parseTable } from "../table";
+import { TABLE_LINE } from "../blocks";
+import { blockAt, blockAtCursor, innerBlockAtCursor } from "./livePreview";
+import { editCellAt, tableModeField } from "./tableEditor";
 import { hasText, uploadInPlace, uploadPlaceholder } from "./upload";
 
 /** Until when a paste is a plain one: Ctrl+Shift+V was pressed just before. */
@@ -141,9 +144,7 @@ export const pasting = EditorView.domEventHandlers({
     if (!plain && text && insert === null) {
       const line = state.doc.lineAt(range.from);
       insert =
-        (inMonospace(state.sliceDoc(line.from, range.from)) ? null : sharePointToRemarkup(text)) ??
-        tsvToRemarkup(text) ??
-        markdownToRemarkup(text);
+        pastedLink(state.sliceDoc(line.from, range.from), text) ?? tsvToRemarkup(text) ?? markdownToRemarkup(text);
     }
     // A link's name that is only its kind of file, to be typed over.
     const name = insert === null ? null : genericLinkName(insert);
@@ -155,9 +156,14 @@ export const pasting = EditorView.domEventHandlers({
         return false;
       }
       insert = lines.map((line, i) => (i === 0 ? line : line ? quote + line : quote.trimEnd())).join("\n");
-    } else if (insert === null) {
+    } else if (insert === null && (plain || inner?.kind === "table" || !TABLE_LINE.test(text))) {
+      // As typed; also rows pasted into a table.
       return false;
-    } else if (insert.includes("\n")) {
+    } else if (insert === null) {
+      // A table, as a block of its own (below), edited as a table (editPastedTable()).
+      insert = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+    }
+    if (!quote && insert.includes("\n")) {
       // Blocks (tables, lists, ...) are blocks of their own.
       const before = state.sliceDoc(state.doc.lineAt(range.from).from, range.from);
       const after = state.sliceDoc(range.to, state.doc.lineAt(range.to).to);
@@ -167,11 +173,13 @@ export const pasting = EditorView.domEventHandlers({
     // The text as copied, then what it became as an undo step of its own:
     // Ctrl+Z after a paste gives the plain text.
     const raw = text.replace(/\r\n?/g, "\n");
+    let start = range.from;
     if (raw && raw !== insert) {
       const pasted = state.update(state.replaceSelection(raw), { userEvent: "input.paste" });
       view.dispatch(pasted);
       // Where the text went: the quote markers it is in may have been tidied (tidyQuotes).
       const from = pasted.changes.mapPos(range.from, -1);
+      start = from;
       view.dispatch({
         changes: { from, to: pasted.changes.mapPos(range.to, 1), insert },
         selection: name ? { anchor: from + name[0], head: from + name[1] } : { anchor: from + insert.length },
@@ -182,10 +190,29 @@ export const pasting = EditorView.domEventHandlers({
     } else {
       view.dispatch(state.replaceSelection(insert), { userEvent: "input.paste", scrollIntoView: true });
     }
+    // Where what was pasted ends, before the blank lines that separate it from the text after it.
+    editPastedTable(view, start, start + insert.trimEnd().length);
     void uploadAll(uploads);
     return true;
   },
 });
+
+/**
+ * A table that a paste made and ends with is edited as a table, in the cell
+ * the paste ends in, as a table inserted with the button is (unless tables are
+ * edited as text, or it is in a quote, whose tables are edited in the quote).
+ */
+function editPastedTable(view: EditorView, from: number, end: number): void {
+  const { state } = view;
+  const block = blockAt(state, end);
+  if (block?.kind !== "table" || block.from < from || state.field(tableModeField, false) !== "table") {
+    return;
+  }
+  const text = state.sliceDoc(block.from, block.contentTo);
+  const { row, col } = locate(text, end - block.from);
+  // The separator row below the header has no cells: the header's.
+  editCellAt(view, block.from, parseTable(text).rows[row]?.separator ? row - 1 : row, col);
+}
 
 /** Uploads the images of a paste, a few at a time: a long article must not start dozens of downloads at once. */
 async function uploadAll(uploads: Parameters<typeof uploadInPlace>[], parallel = 3): Promise<void> {

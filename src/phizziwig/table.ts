@@ -349,3 +349,14 @@ function displayWidth(text: string): number {
   }
   return Array.from(graphemes.segment(text)).length + wideRanges(text).length;
 }
+
+/** A link in a cell, "[[ url | name ]]": its "|" does not end the cell. */
+export const CELL_LINK = /\[\[[^\]]*\]\]/g;
+
+/** A text as a cell's: each "|" becomes "¦", which does not end the cell, except in links (CELL_LINK). */
+export function cellPipes(text: string): string {
+  return text
+    .split(new RegExp(`(${CELL_LINK.source})`))
+    .map((part, i) => (i % 2 ? part : part.replaceAll("|", "¦")))
+    .join("");
+}

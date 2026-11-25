@@ -102,11 +102,15 @@ function blockText(state: EditorState, block: Block): string {
 
 /** The block the cursor is in, optionally only of a kind. */
 export function blockAtCursor(state: EditorState, kind?: BlockKind): Block | undefined {
-  const head = state.selection.main.head;
+  return blockAt(state, state.selection.main.head, kind);
+}
+
+/** The block a position is in, optionally only of a kind. */
+export function blockAt(state: EditorState, pos: number, kind?: BlockKind): Block | undefined {
   // None in the editor of a table cell (tableEditor.ts).
   return state
     .field(previewField, false)
-    ?.blocks.find((b) => (!kind || b.kind === kind) && !b.empty && head >= b.from && head <= b.contentTo);
+    ?.blocks.find((b) => (!kind || b.kind === kind) && !b.empty && pos >= b.from && pos <= b.contentTo);
 }
 
 /** The block a line is in, also inside a quote (lines.ts). */

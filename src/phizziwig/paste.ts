@@ -17,11 +17,12 @@
 //   light, saturated one: browsers copy page and table backgrounds into the
 //   HTML, and those are not highlights.
 
-import { formatTable, type TableRow } from "./table";
+import { cellPipes, formatTable, type TableRow } from "./table";
 import { parseHtml } from "./html";
 import { linkMarkup, linkName, linkTarget } from "./linkMarkup";
 import { sharePointOfPath } from "./localPaths";
 import { sharePointLabel, sharePointLink } from "./sharepoint";
+import { inMonospace } from "./syntax";
 
 interface Style {
   bold: boolean;
@@ -189,7 +190,7 @@ export function tsvToRemarkup(text: string): string | null {
     return null;
   }
   const result: TableRow[] = rows.map((row) => ({
-    cells: row.slice(0, width).map((cell) => cell.replace(/\s+/g, " ").trim().replaceAll("|", "¦")),
+    cells: row.slice(0, width).map((cell) => cellPipes(cell.replace(/\s+/g, " ").trim())),
     separator: false,
   }));
   // A table of only a header row looks odd; one row stays a plain row.
@@ -858,6 +859,15 @@ export function sharePointToRemarkup(text: string): string | null {
   }
   const local = sharePointOfPath(text);
   return local && linkMarkup(local.url, local.name);
+}
+
+/**
+ * A pasted SharePoint URL or local path of a library as a link
+ * (sharePointToRemarkup()), unless it goes into monospaced text, which is
+ * literal: `before` is the text of its line before it.
+ */
+export function pastedLink(before: string, text: string): string | null {
+  return inMonospace(before) ? null : sharePointToRemarkup(text);
 }
 
 /**

@@ -264,7 +264,8 @@ const htmlTableRule: Rule = (lines, cursor) => {
   return numLines;
 };
 
-const TABLE_LINE = new RegExp(`^${S}*\\|`);
+/** A line of a table: it starts with "|". */
+export const TABLE_LINE = new RegExp(`^${S}*\\|`);
 
 const tableRule: Rule = (lines, cursor) => {
   let numLines = 0;

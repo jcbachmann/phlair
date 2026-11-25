@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { authFile, phabricatorExec } from "./env";
-import { conduit, editor, imageSite, textarea } from "./helpers";
+import { conduit, editor, imageSite, pasteInCell, textarea } from "./helpers";
 
 // The tests change alice's setting and the instance's configuration: one at a time, in one browser.
 test.describe.configure({ mode: "serial" });
@@ -279,6 +279,16 @@ test("the administrator's list of SharePoint libraries makes links of their loca
     await page.keyboard.press("Control+z");
     await expect(textarea(page)).toHaveValue(path);
     expect(await page.content()).toContain("sharePointFolders");
+
+    // Also in a table cell (T30775).
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.insertText("| a | b |\n| --- | --- |\n| x | y |\n\nEnd.");
+    await page.locator(".cm-line", { hasText: "End." }).click();
+    await pasteInCell(page, page.locator(".rme-table-editor td", { hasText: "x" }), ` ${path}`);
+    await expect(textarea(page)).toHaveValue(
+      "| a | b |\n| --- | --- |\n| x [[ https://contoso.sharepoint.com/:f:/r/sites/Firmendaten/Syncthing/jcb-vorlagen | jcb-vorlagen ]] | y |\n\nEnd.",
+    );
   } finally {
     // As it was (an administrator's list of the dev instance stays).
     set(before);

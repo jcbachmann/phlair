@@ -68,6 +68,37 @@ export function editor(page: Page): Locator {
   return page.locator(".rme-editor .cm-content").first();
 }
 
+/**
+ * Pastes a text at the end of a table cell, which it starts to edit.
+ * Chromium gets a paste event with the data; Firefox takes only the
+ * clipboard's text, so it is copied first, from the form's title field
+ * (copying ends the editing of a cell), and pasted with Ctrl+V.
+ */
+export async function pasteInCell(page: Page, cell: Locator, text: string): Promise<void> {
+  const firefox = page.context().browser()?.browserType().name() === "firefox";
+  if (firefox) {
+    const title = page.locator("input[name=title]");
+    const before = await title.inputValue();
+    await title.fill(text);
+    await title.selectText();
+    await page.keyboard.press("Control+c");
+    await title.fill(before);
+  }
+  await cell.click();
+  await page.keyboard.press("End");
+  if (firefox) {
+    await page.keyboard.press("Control+v");
+    return;
+  }
+  await page.evaluate((text) => {
+    const data = new DataTransfer();
+    data.setData("text/plain", text);
+    document.activeElement!.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  }, text);
+}
+
 export function textarea(page: Page): Locator {
   return page.locator("textarea.remarkup-assist-textarea").first();
 }

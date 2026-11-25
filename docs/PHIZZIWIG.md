@@ -58,15 +58,20 @@ nothing moves when the cursor moves.
   deletes rows and columns and toggles the header row. **`+` handles** appear on the left and top borders of the table
   when the mouse is near them and insert a row or column there.
 - **Keys:** `Tab`/`Shift+Tab` move between cells (and add a row at the end), `Enter` adds a row (on an empty last row it
-  leaves the table), arrow keys move between cells and out of the table, `Alt+↑/↓` move rows, `Alt+Shift+←/→` move
+  leaves the table), arrow keys move between cells and out of the table (`↑` from a table at the start of the text
+  makes a new line above it, as `↓` at the end does below it), `Alt+↑/↓` move rows, `Alt+Shift+←/→` move
   columns, `Ctrl+Z` undoes, and typing `[[` in a cell adds the closing `]]`. A cell is edited like a line of the text:
-  formatting buttons and shortcuts, `Ctrl+K`, the link bubble, a URL pasted over selected text,
-  uploads (the upload button, pasting and dropping files), Phorge's autocomplete and the insert menu (with what fits in
-  a cell) work in cells.
+  formatting buttons and shortcuts, `Ctrl+K`, the link bubble, a URL pasted over selected text, pasted SharePoint
+  links and local paths of SharePoint libraries (they become links, see Pasting; `Ctrl+Z` gives them back as
+  pasted), uploads (the upload button, pasting and dropping files), Phorge's autocomplete and the insert menu (with
+  what fits in a cell) work in cells.
 - **New tables** from the table button: pick the size in a grid, and the table opens for editing with its first header
-  cell selected.
+  cell selected. A pasted table (also cells of a spreadsheet or a table of a web page) opens for editing in the cell
+  the paste ends in; in a quote, and pasted with `Ctrl+Shift+V`, it stays text. Pasted text goes into a cell on one
+  line, its `|` as `¦` (which does not end the cell), except in links (`[[ url | name ]]`).
 - **As text:** the first button of the table bar switches to editing tables as aligned text (with `Tab` between cells)
   and back; the choice is remembered. A table the text cursor is in (e.g. a new one being typed) shows its source.
+  `Enter` before the first `|` of a table makes a new line above it.
 
 ![Editing a table, with the table bar and a + handle](screenshots/tables.png)
 
@@ -76,9 +81,10 @@ nothing moves when the cursor moves.
   reference. The target is searched for, or a URL is taken: wiki pages and tasks with the words in their title, then those
   with them in their text; each open ones before closed (deleted or moved) ones, and wiki pages before tasks; then
   people, projects, repositories and other objects. Selected text is the link's text (and stays highlighted while
-  the dialog is open); with the cursor on a link or a reference (`T12`, `@alice`) they change it. Without a text, the
-  target alone is written (`T12`, `@alice`, a URL); without a target, the text alone; without either, nothing. `Tab`
-  goes between the fields, `Enter` applies.
+  the dialog is open); with the cursor on a link, a reference or a card (`T12`, `@alice`, `{T12}`) they change it.
+  Without a text, the target alone is written: a task picked anew as its card (`{T12}`, which shows its title and
+  status), others as their reference (`@alice`, `D3`, a URL), and the reference being changed as it was written;
+  without a target, the text alone; without either, nothing. `Tab` goes between the fields, `Enter` applies.
 - With the cursor in a link, a **bubble** offers to open, change or remove it. A URL pasted over selected text links it.
 - **Phorge's autocomplete menu** for `@user`, `#project`, `[[ wiki page`, `:emoji` and `((short URL`, with the
   same rules and keys (a port of its `PHUIXAutocomplete`).
@@ -134,8 +140,9 @@ nothing moves when the cursor moves.
 - **Lists and quotes** continue on `Enter`; `Enter` on an empty item ends them, leaving its line empty (a list in a
   quote ends, the quote goes on). Everything for lists, headers and tables works in quotes too, the buttons change the
   text after the `>`; code blocks in quotes are code (pasted text stays plain). `Enter` in the marker of a list item
-  (e.g. at the start of its line) makes an empty line above it, as in Obsidian. `Backspace` at the start of the text
-  of a quote line removes its `>`. `Enter` at the start of the text of a list, quote or header makes room above it.
+  (e.g. at the start of its line) makes an empty line above it, as in Obsidian; at the start of its text (also of the
+  first item), an empty item above it, the text keeping its checkbox. `Backspace` at the start of the text of a quote
+  line removes its `>`. `Enter` at the start of the text of a quote or header makes room above it.
   `Tab`/`Shift+Tab` indent list items:
   by two spaces, or in a list nested by repeating markers (`- item`, `-- nested`), by one marker.
   `Home` (Pos1) in a list item goes to the start of its text, after the marker and checkbox; pressed again, to the
@@ -164,7 +171,8 @@ nothing moves when the cursor moves.
   of a desktop mail program) become a link or their alternative text.
 - **Markdown text** becomes remarkup (headings, emphasis, code blocks, images, tables, reference links), as a Markdown
   parser reads it (`@lezer/markdown`, with GitHub's extensions). Headings only get the leading `=`. Remarkup copied
-  from Phorge stays as it is (code blocks with options like `lang=`, replies, file embeds tell it apart).
+  from Phorge stays as it is (code blocks with options like `lang=`, replies, file embeds and named links
+  `[[ … | … ]]` tell it apart); `_` and `*` in project tags and mentions (`#a_b_c`) are no emphasis.
 - **SharePoint and OneDrive links to files and folders** pasted alone become a link with a name (`[[ https://… | … ]]`), so the long URL
   does not show: the file's name where the URL has it (copied from the address bar), else its kind and site ("Excel
   workbook in Projects"), selected to be typed over. Sharing links ("Copy link") only name the kind of file and the site.
