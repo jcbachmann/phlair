@@ -426,81 +426,270 @@ test("places tooltips like Phorge's, also when the toolbar sticks to the top", a
   }
 });
 
-test("lists, highlighted and monospaced text look like in Phorge's preview, also while editing", async ({ page }) => {
-  await openNewWikiPage(page, "Same look");
-  await editor(page).click();
-  await page.keyboard.insertText(
-    [
-      "Text with !!highlighted!! and `monospaced` words, `https://example.com/*`, `http://localhost:8087/*`.",
-      "1. One\n2. Two that is long enough to wrap onto a second line of the editor, so wrapped lines are compared too.",
-      "- Outer\n  - Nested one\n  - Nested two\n- Outer two",
-      "- [ ] Open\n- [X] Done",
-      "# First\n# Second",
-      "End.",
-    ].join("\n\n"),
+/** The box of the first letter of the text of each element (not of spaces, nor of the zero-width spaces of markers). */
+function firstLetters(page: Page, selector: string): Promise<{ left: number; top: number; height: number }[]> {
+  return page.locator(selector).evaluateAll((elements) =>
+    elements.map((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const i = (node.textContent ?? "").search(/[^\s\u200b]/);
+        if (i >= 0) {
+          const range = document.createRange();
+          range.setStart(node, i);
+          range.setEnd(node, i + 1);
+          const { left, top, height } = range.getBoundingClientRect();
+          return { left, top, height };
+        }
+      }
+      throw new Error(`No text in ${el.outerHTML}`);
+    }),
   );
-  const blur = () => page.evaluate(() => (document.activeElement as HTMLElement).blur());
-  await blur();
-  await settled(page);
-  await page.addStyleTag({ content: ".phui-remarkup-preview { display: block !important; }" });
-  const preview = page.locator(".phui-remarkup-preview .phui-preview-body .phabricator-remarkup");
-  await expect(preview).toContainText("End.");
-  const endTop = () => page.locator(".cm-line", { hasText: "End." }).evaluate((el) => el.getBoundingClientRect().top);
-  // The left edge of the first letter of each item, from the left edge of the text.
-  const firstLetters = (selector: string, container: string) =>
-    page.locator(selector).evaluateAll(
-      (elements, container) =>
-        elements.map((el) => {
-          const left = document.querySelector(container)!.getBoundingClientRect().left;
+}
+
+/**
+ * Where the bullet, number or checkbox of each item is drawn, from the first
+ * letter of its text: the box of the dark pixels left of the letter in a
+ * screenshot, as no element has the box of what the browser draws for them.
+ */
+async function markers(page: Page, selector: string): Promise<number[][]> {
+  const letters = await firstLetters(page, selector);
+  const png = (await page.screenshot()).toString("base64");
+  return page.evaluate(
+    async ({ png, letters }) => {
+      const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+      const image = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const canvas = new OffscreenCanvas(image.width, image.height);
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      // Screenshots are in device pixels.
+      const scale = image.width / innerWidth;
+      return letters.map(({ left: x, top: y, height }) => {
+        // Up to 40px left of the letter, in its line (not in the lines above and below it).
+        const [left, top, right, bottom] = [x - 40, y - 2, x - 1, y + height + 2].map((n) => Math.round(n * scale));
+        if (left < 0 || top < 0 || bottom > image.height) {
+          throw new Error("An item outside the window");
+        }
+        const width = right - left;
+        const { data } = context.getImageData(left, top, width, bottom - top);
+        const box = [Infinity, Infinity, -Infinity, -Infinity];
+        for (let k = 0; k < data.length; k += 4) {
+          if (0.3 * data[k] + 0.59 * data[k + 1] + 0.11 * data[k + 2] < 170) {
+            const [column, row] = [(k / 4) % width, Math.floor(k / 4 / width)];
+            box[0] = Math.min(box[0], column);
+            box[1] = Math.min(box[1], row);
+            box[2] = Math.max(box[2], column);
+            box[3] = Math.max(box[3], row);
+          }
+        }
+        // From the letter, in CSS pixels.
+        return box.map((n, i) => Math.round((n + (i % 2 ? top : left)) / scale - (i % 2 ? y : x)));
+      });
+    },
+    { png, letters },
+  );
+}
+
+// In the page's font, and in one whose bullets make items 0.5px taller in Firefox (as most do; Lato does not).
+for (const font of [null, "Liberation Sans"]) {
+  test(`lists, highlighted and monospaced text look like in Phorge's preview, also while editing${font ? `, in ${font}` : ""}`, async ({
+    page,
+    browserName,
+  }) => {
+    // Tall, so the editor and the preview are in the window, for screenshots.
+    await page.setViewportSize({ width: 1280, height: 3200 });
+    if (font) {
+      // From the start, so the editor measures the page in it.
+      await page.addInitScript((font) => {
+        const style = document.createElement("style");
+        style.textContent = `.phabricator-remarkup { font-family: "${font}" !important; }`;
+        document.documentElement.append(style);
+      }, font);
+    }
+    await openNewWikiPage(page, "Same look");
+    await editor(page).click();
+    await page.keyboard.insertText(
+      [
+        "Text with !!highlighted!! and `monospaced` words, `https://example.com/*`, `http://localhost:8087/*`.",
+        "1. One\n2. Two that is long enough to wrap onto a second line of the editor, so wrapped lines are compared too.",
+        "- Outer\n  - Nested one\n  - Nested two\n- Outer two",
+        "- [ ] Open\n- [X] Done",
+        // Phorge indents lists in checklist items further, and lower; also past a skipped level.
+        "- [ ] Parent\n  - [ ] Child\n  - Child bullet\n- [ ] Parent two\n      - Skipped level\n  - Back",
+        // Lower also after markup in the item, as Phorge renders it (a task that does not exist is text); its items grey in
+        // a checked one.
+        "- Parent with **bold**\n  - Bold child\n- Parent of T99999999\n  - Child of no task\n- [X] Checked parent\n  - Grey child",
+        "> Quoted:\n> - Quoted one\n> - [ ] Quoted box\n>   - Quoted child\n> - Quoted last\n>   - Ends the quote",
+        "> Next quote.",
+        "# First\n# Second",
+        "End.",
+      ].join("\n\n"),
+    );
+    const blur = () => page.evaluate(() => (document.activeElement as HTMLElement).blur());
+    await blur();
+    await settled(page);
+    await page.addStyleTag({ content: ".phui-remarkup-preview { display: block !important; }" });
+    const preview = page.locator(".phui-remarkup-preview .phui-preview-body .phabricator-remarkup");
+    await expect(preview).toContainText("End.");
+    const endTop = () => page.locator(".cm-line", { hasText: "End." }).evaluate((el) => el.getBoundingClientRect().top);
+    // The left edge of the first letter of each item, from the left edge of the text.
+    const textStarts = async (selector: string, container: string) => {
+      const left = (await page.locator(container).first().boundingBox())!.x;
+      return (await firstLetters(page, selector)).map((letter) => Math.round(letter.left - left));
+    };
+    const PREVIEW_ITEMS = ".phui-remarkup-preview .phui-preview-body li:not(.phantom-item)";
+    const inPreview = await textStarts(
+      PREVIEW_ITEMS,
+      ".phui-remarkup-preview .phui-preview-body .phabricator-remarkup",
+    );
+    const items = () => textStarts(".cm-line.rme-src-list", ".rme-editor .cm-line");
+    expect(await items()).toEqual(inPreview);
+    // The bullets, numbers and checkboxes are drawn as in the preview, beside the text.
+    const previewMarkers = await markers(page, PREVIEW_ITEMS);
+    const sameMarkers = async (message: string) => {
+      const shown = await markers(page, ".cm-line.rme-src-list");
+      const off = shown.map((box, i) => Math.max(...box.map((n, k) => Math.abs(n - previewMarkers[i][k]))));
+      expect(
+        Math.max(...off),
+        `${message}: ${JSON.stringify(shown)} vs. ${JSON.stringify(previewMarkers)}`,
+      ).toBeLessThanOrEqual(1);
+    };
+    await sameMarkers("not editing");
+    // As far apart as in the preview: the space from each item's text to the next item's in its list.
+    const gaps = (selector: string) =>
+      page.locator(selector).evaluateAll((elements) => {
+        // The item's own text: not that of lists in it, nor its marker.
+        const letters = (el: Element) => {
+          const rects: DOMRect[] = [];
           const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
           for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-            const i = (node.textContent ?? "").search(/[^\s\u200b]/);
+            const parent = node.parentElement!;
+            if (el.matches("li") ? parent.closest("li") !== el : parent.closest(".rme-list-marker")) {
+              continue;
+            }
+            for (let i = 0; i < node.textContent!.length; i++) {
+              if (/[^\s\u200b]/.test(node.textContent![i])) {
+                const range = document.createRange();
+                range.setStart(node, i);
+                range.setEnd(node, i + 1);
+                rects.push(range.getBoundingClientRect());
+              }
+            }
+          }
+          return rects;
+        };
+        const outermost = (el: Element) => {
+          let list = el.closest("ul, ol")!;
+          while (list.parentElement?.closest("ul, ol")) {
+            list = list.parentElement.closest("ul, ol")!;
+          }
+          return list;
+        };
+        return elements.map((el, i) => {
+          const previous = elements[i - 1];
+          const sameList = el.matches("li")
+            ? previous && outermost(previous) === outermost(el)
+            : el.previousElementSibling === previous;
+          return sameList ? Math.round((letters(el)[0].top - letters(previous).at(-1)!.bottom) * 10) / 10 : null;
+        });
+      });
+    const previewGaps = await gaps(PREVIEW_ITEMS);
+    const sameGaps = async (message: string) => {
+      const shown = await gaps(".cm-line.rme-src-list");
+      const off = shown.map((gap, i) =>
+        gap === null ? (previewGaps[i] === null ? 0 : 99) : Math.abs(gap - previewGaps[i]!),
+      );
+      expect(
+        Math.max(...off),
+        `${message}: ${JSON.stringify(shown)} vs. ${JSON.stringify(previewGaps)}`,
+      ).toBeLessThanOrEqual(0.3);
+    };
+    await sameGaps("not editing");
+    if (font && browserName === "firefox") {
+      // The case the line heights are for: Firefox's bullets make the items taller.
+      const extra = await page
+        .locator(".rme-editor")
+        .evaluate((el) =>
+          ["top", "bottom"].reduce(
+            (sum, side) => sum + parseFloat(el.style.getPropertyValue(`--rme-ul-marker-${side}`)),
+            0,
+          ),
+        );
+      expect(extra).toBeGreaterThan(0);
+    }
+    // As much space below the last item of a quote, inside the quote: from the bottom of its last letter.
+    const below = (selector: string) =>
+      page.locator(selector).evaluateAll((quotes) =>
+        quotes.map((quote) => {
+          let last: DOMRect | null = null;
+          const walker = document.createTreeWalker(quote, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const i = node.textContent!.search(/[^\s\u200b]\s*$/);
             if (i >= 0) {
               const range = document.createRange();
               range.setStart(node, i);
               range.setEnd(node, i + 1);
-              return Math.round(range.getBoundingClientRect().left - left);
+              last = range.getBoundingClientRect();
             }
           }
-          return null;
+          return Math.round((quote.getBoundingClientRect().bottom - last!.bottom) * 10) / 10;
         }),
-      container,
+      );
+    const previewBelow = await below(".phui-remarkup-preview .phui-preview-body blockquote");
+    const sameBelow = async (message: string) =>
+      expect(await below(".cm-line.rme-src-quote.rme-last"), message).toEqual(previewBelow);
+    await sameBelow("not editing");
+    // In their colors: in a quote, the quote's; in a checked item, grey.
+    const colors = (selector: string, pseudo: string | null) =>
+      page.locator(selector).evaluateAll((lis, pseudo) => lis.map((li) => getComputedStyle(li, pseudo).color), pseudo);
+    const listItems = "li.remarkup-list-item:not(.remarkup-checked-item, .remarkup-unchecked-item, .phantom-item)";
+    expect(await colors(`.rme-src-list .rme-item-marker ${listItems}:not(.rme-list-around)`, "::marker")).toEqual(
+      await colors(`.phui-remarkup-preview .phui-preview-body ${listItems}`, "::marker"),
     );
-  const inPreview = await firstLetters(
-    ".phui-remarkup-preview .phui-preview-body li",
-    ".phui-remarkup-preview .phui-preview-body .phabricator-remarkup",
-  );
-  const items = () => firstLetters(".cm-line.rme-src-list", ".rme-editor .cm-line");
-  expect(await items()).toEqual(inPreview);
-  const before = await endTop();
-  for (const text of ["One", "Outer", "Open", "First"]) {
-    await page.locator(".cm-line.rme-src-list", { hasText: text }).first().click();
-    // Wrapped lines of an item start where the item text starts.
-    expect(await items(), `editing ${text}`).toEqual(inPreview);
-    expect(await endTop(), `editing ${text} moved the text below`).toBeCloseTo(before, 0);
-  }
+    expect(await colors(".cm-line.rme-src-list", null)).toEqual(await colors(PREVIEW_ITEMS, null));
+    const before = await endTop();
+    for (const text of [
+      "One",
+      "Outer",
+      "Open",
+      "Child",
+      "Skipped",
+      "Bold child",
+      "no task",
+      "Quoted one",
+      "Ends the",
+      "First",
+    ]) {
+      await page.locator(".cm-line.rme-src-list", { hasText: text }).first().click();
+      // Wrapped lines of an item start where the item text starts.
+      expect(await items(), `editing ${text}`).toEqual(inPreview);
+      expect(await endTop(), `editing ${text} moved the text below`).toBeCloseTo(before, 0);
+      await sameMarkers(`editing ${text}`);
+      await sameGaps(`editing ${text}`);
+      await sameBelow(`editing ${text}`);
+    }
 
-  const style = (selector: string) =>
-    page.locator(selector).evaluate((el) => {
-      const s = getComputedStyle(el);
-      // Font names with or without quotes, as each stylesheet writes them.
-      return [s.backgroundColor, s.padding, s.fontFamily.replace(/"/g, ""), s.fontSize];
-    });
-  const highlight = await style(".phui-remarkup-preview .remarkup-highlight");
-  const monospaced = await style(".phui-remarkup-preview .remarkup-monospaced >> nth=0");
-  await page.locator(".cm-line", { hasText: "Text with" }).click();
-  // At the start of the text, so the cursor is on none of them.
-  await page.keyboard.press("Control+Home");
-  expect(await style(".cm-line .remarkup-highlight")).toEqual(highlight);
-  expect(await style(".cm-line .remarkup-monospaced >> nth=0")).toEqual(monospaced);
-  // Each monospaced text is one element (its backticks hidden), with nothing styled inside, like URLs.
-  await expect(page.locator(".cm-line tt.remarkup-monospaced")).toHaveText([
-    "monospaced",
-    "https://example.com/*",
-    "http://localhost:8087/*",
-  ]);
-  await expect(page.locator(".cm-line tt .rme-link")).toHaveCount(0);
-});
+    const style = (selector: string) =>
+      page.locator(selector).evaluate((el) => {
+        const s = getComputedStyle(el);
+        // Font names with or without quotes, as each stylesheet writes them.
+        return [s.backgroundColor, s.padding, s.fontFamily.replace(/"/g, ""), s.fontSize];
+      });
+    const highlight = await style(".phui-remarkup-preview .remarkup-highlight");
+    const monospaced = await style(".phui-remarkup-preview .remarkup-monospaced >> nth=0");
+    await page.locator(".cm-line", { hasText: "Text with" }).click();
+    // At the start of the text, so the cursor is on none of them.
+    await page.keyboard.press("Control+Home");
+    expect(await style(".cm-line .remarkup-highlight")).toEqual(highlight);
+    expect(await style(".cm-line .remarkup-monospaced >> nth=0")).toEqual(monospaced);
+    // Each monospaced text is one element (its backticks hidden), with nothing styled inside, like URLs.
+    await expect(page.locator(".cm-line tt.remarkup-monospaced")).toHaveText([
+      "monospaced",
+      "https://example.com/*",
+      "http://localhost:8087/*",
+    ]);
+    await expect(page.locator(".cm-line tt .rme-link")).toHaveCount(0);
+  });
+}
 
 test.describe("tables", () => {
   const TABLE = "| Element | Line\n| --- | ---\n| Fe | **Ka**\n| Cu | Ka";

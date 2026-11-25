@@ -22,11 +22,11 @@ import {
   setFloatPads,
   splitImages,
 } from "./imagePreview";
-import { blockTokens } from "./inlineTokens";
+import { blockTokens, textTokens } from "./inlineTokens";
 import type { InlineToken } from "../inline";
 import { findEmbeds } from "../embed";
 import { focusedCellSource, refreshCellEditor, setTableMode, TableWidget, tableModeField } from "./tableEditor";
-import { setHtml } from "../html";
+import { parseHtml, setHtml } from "../html";
 import { fitHeightsCache, knownHeight, LINE_HEIGHT, rememberHeight } from "./heights";
 import { type ListItem, parseList } from "../list";
 import { LIST_ITEM, QUOTE_LINE, QUOTE_MARKERS, quoteDepth } from "../syntax";
@@ -143,7 +143,7 @@ function sameSet<T>(a: Set<T>, b: Set<T>): boolean {
 }
 
 /** An item of a list block: its source range and what it renders as on its own. */
-interface SourceItem {
+export interface SourceItem {
   from: number;
   to: number;
   item: ListItem;
@@ -163,6 +163,44 @@ export function lineItems(lines: BlockLine[]): SourceItem[] {
     item,
     render: { text: item.text, last: false },
   }));
+}
+
+/**
+ * Whether something renders before the lists nested in an item, which then
+ * keep their top margin: Phorge takes it away from a list that is the first
+ * element of its item (":first-child"). In a checklist item its hidden
+ * checkbox does; else markup or a line break of its text may, as its own
+ * rendering shows (null until it is rendered). Plain text does not.
+ */
+export function rendersBeforeNested(state: EditorState, unit: SourceItem): boolean | null {
+  if (unit.item.mark !== null) {
+    return true;
+  }
+  if (unit.item.first === unit.item.last && !textTokens(unit.item.text, 0).length) {
+    return false;
+  }
+  const html = rendererOf(state)?.get(unit.render);
+  if (html === undefined) {
+    return null;
+  }
+  // Its own item: the innermost one (the others place it in its lists).
+  const own = [...parseHtml(html).querySelectorAll("li")].at(-1);
+  return !!own?.firstElementChild;
+}
+
+/** The items of the lists of a block (its own, or in a quote) with lists nested in them. */
+function parentItems(state: EditorState, block: Block): SourceItem[] {
+  const lists =
+    block.kind === "list"
+      ? [listItems(state, block)]
+      : block.kind === "quote" && !block.empty
+        ? quotedBlocks(state.doc, block)
+            .filter((inner) => inner.kind === "list")
+            .map((inner) => lineItems(inner.lines))
+        : [];
+  return lists.flatMap((units) =>
+    units.filter((unit, k) => (units[k + 1]?.item.path.length ?? 0) > unit.item.path.length),
+  );
 }
 
 /** What a rendered block in the text shows, by its start: its source text, and what it renders as. */
@@ -702,6 +740,13 @@ const renderRequests = ViewPlugin.fromClass(
             // Their images show below each item.
             for (const unit of listItems(view.state, block)) {
               items.push(unit.render);
+            }
+          }
+          // Whether the lists nested in an item start lower (sourceStyle.ts):
+          // with the block, or once typing pauses in it.
+          for (const unit of parentItems(view.state, block)) {
+            if (rendersBeforeNested(view.state, unit) === null) {
+              (active.has(i) ? editing : shown).push(unit.render);
             }
           }
         }

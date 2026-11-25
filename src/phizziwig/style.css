@@ -180,15 +180,6 @@
   margin-top: 0;
 }
 
-/*
- * Firefox draws bullets in its own font, which makes each item 0.5px taller
- * than its line height; in the text font the items are as high as the lines
- * of the source, so entering a list does not move the text below it.
- */
-.rme-block li::marker {
-  font-family: inherit;
-}
-
 .rme-block a {
   cursor: pointer;
 }
@@ -296,8 +287,8 @@
   --rme-quote-pad: 12px;
   --rme-quote-end: 12px;
   /* The quote's own padding above and below the line, and that of a box in it (see below). */
-  padding: calc(var(--rme-quote-pad-top, 0px) + var(--rme-box-top, 0px)) 12px
-    calc(var(--rme-quote-pad-bottom, 0px) + var(--rme-box-bottom, 0px));
+  padding: calc(var(--rme-quote-pad-top, 0px) + var(--rme-box-top, 0px) + var(--rme-list-top, 0px)) 12px
+    calc(var(--rme-quote-pad-bottom, 0px) + var(--rme-box-bottom, 0px) + var(--rme-list-bottom, 0px));
   border-left: 3px solid var(--rme-quote-border-color, #a7b5bf);
   background: var(--rme-quote-background, #f8f9fc);
   color: var(--rme-quote-color, #464c5c);
@@ -560,9 +551,11 @@
 
 /*
  * List lines are indented like Phorge's lists (30px, nested lists 24px
- * more, checklist items 6px more), and the marker hangs into the indent, so
- * the item text starts where the rendered item text starts. In a quote, from
- * where the quote's text starts.
+ * more, checklist items 6px more, lists in checklist items 2px more: see
+ * pageStyle()), and the marker hangs into the indent, so the item text
+ * starts where the rendered item text starts. In a quote, from where the
+ * quote's text starts. The line style sets --rme-check-parents: the number
+ * of checklist items the line's item is in.
  */
 .rme-editor .cm-line.rme-src-list {
   --rme-depth: 0;
@@ -570,8 +563,40 @@
   position: relative;
   /* An item without text keeps its height; its marker is out of the flow. */
   min-height: 1.7em;
-  --rme-indent: calc(var(--rme-quote-pad, 0px) + 30px + var(--rme-depth) * 24px + var(--rme-check));
+  --rme-indent: calc(
+    var(--rme-quote-pad, 0px) + 30px + var(--rme-depth) * 24px + var(--rme-check) + var(--rme-check-parents, 0) *
+      var(--rme-check-nest, 2px)
+  );
   padding-left: var(--rme-indent);
+  /*
+   * The space above and below the line that the rendered item has (in a
+   * quote, besides the quote's own: see .rme-src-quote): what the browser's
+   * marker adds to the line (Firefox's bullets, read by pageStyle()), and the
+   * margins of nested lists.
+   */
+  --rme-list-top: calc(var(--rme-marker-top, 0px) + var(--rme-nest-top, 0px));
+  --rme-list-bottom: calc(var(--rme-marker-bottom, 0px) + var(--rme-nest-bottom, 0px));
+}
+
+.rme-editor .cm-line.rme-src-list:not(.rme-src-quote) {
+  padding-top: var(--rme-list-top);
+  padding-bottom: var(--rme-list-bottom);
+}
+
+/* The first line of an item that the browser marks with a bullet or a number. */
+.rme-editor .cm-line.rme-list-ul-item {
+  --rme-marker-top: var(--rme-ul-marker-top, 0px);
+  --rme-marker-bottom: var(--rme-ul-marker-bottom, 0px);
+}
+
+.rme-editor .cm-line.rme-list-ol-item {
+  --rme-marker-top: var(--rme-ol-marker-top, 0px);
+  --rme-marker-bottom: var(--rme-ol-marker-bottom, 0px);
+}
+
+/* A nested list that keeps its top margin (sourceStyle.ts; the margin from pageStyle()). */
+.rme-editor .cm-line.rme-list-nest-start {
+  --rme-nest-top: var(--rme-nest-margin-top, 4px);
 }
 
 .rme-editor .cm-line.rme-list-depth-1 {
@@ -590,9 +615,17 @@
   --rme-depth: 4;
 }
 
-/* How much further checklist items start than other items, read from the page by pageStyle(). */
+/*
+ * How much further checklist items start than other items, read from the
+ * page by pageStyle(): a space more, which is narrower in a quote's italic
+ * text.
+ */
 .rme-editor .cm-line.rme-list-check {
   --rme-check: var(--rme-check-indent, 6px);
+}
+
+.rme-editor .cm-line.rme-src-quote.rme-list-check {
+  --rme-check: var(--rme-quote-check-indent, 6px);
 }
 
 /*
@@ -650,9 +683,9 @@
   visibility: hidden;
 }
 
-/* The 4px bottom margin of nested lists (their top margin is 0 in Phorge). */
+/* The bottom margin of a nested list, where it ends (sourceStyle.ts; the margin from pageStyle()). */
 .rme-editor .cm-line.rme-list-nest-end {
-  padding-bottom: 4px;
+  --rme-nest-bottom: var(--rme-nest-margin-bottom, 4px);
 }
 
 /*
@@ -671,7 +704,7 @@
 
 /* In a quote, in the quote's color, as Phorge draws it. */
 .rme-editor .rme-src-quote.rme-src-list .rme-list-marker .rme-item-marker {
-  color: inherit;
+  color: var(--rme-quote-color, #464c5c);
 }
 
 .rme-editor .rme-src-list .rme-item-marker :is(ul, ol).remarkup-list,
@@ -681,8 +714,13 @@
   padding: 0;
 }
 
+/*
+ * In the font the page draws it in (Firefox has one of its own for bullets),
+ * without the space that font adds to the line: the line has it already
+ * (--rme-marker-top), so the marker sits where the page draws it.
+ */
 .rme-src-list .rme-item-marker li::marker {
-  font-family: inherit;
+  line-height: 0;
 }
 
 /* Its checkbox: Phorge's checklist item (see ItemMarker), ending where the text starts. */

@@ -14,7 +14,10 @@ nothing moves when the cursor moves.
     Phorge renders them, each rendered by the server; a click on one puts the cursor at its end, `Ctrl`+click opens it;
   - bold, italic, monospaced, struck through, highlighted and underlined text hides its markers;
   - headers hide their markers unless the cursor is on their line; quotes (also the `>>!` of replies), the word of
-    `(NOTE)` notes and rules hide theirs; list items show their bullet, number or checkbox (a click on a bullet or number edits it, on a checkbox checks it, left of them goes to the start of the line);
+    `(NOTE)` notes and rules hide theirs; list items show their bullet, number or checkbox (a click on a bullet or
+    number edits it, on a checkbox checks it, left of them goes to the start of the line), where the page draws it
+    and as far apart as the page's items, also in nested lists, checklists and quotes (items in a checked item are
+    grey, as on the page);
   - in quotes, headers, lists, notes and rules look like themselves too, as Phorge renders them there; code blocks
     and tables in quotes show rendered like elsewhere (tables edited cell by cell), with Phorge's space between
     blocks on consecutive lines;

@@ -53,9 +53,10 @@ import { buttonIcon, toolbarButton } from "./toolbar";
 const enabledChoice = storedChoice(__TARGET__ === "phorge" ? null : "phizziwig-enabled", "1", ["1", "0"]);
 
 /**
- * Copies how the page renders headers, code blocks and notes into CSS variables of
- * the editor, so a block being edited takes the same space and has the same
- * font as the rendered one. Both differ between Phorge versions and custom
+ * Copies how the page renders headers, code blocks, notes and lists into CSS
+ * variables of the editor, so a block being edited takes the same space and
+ * has the same font as the rendered one, and list items are where the
+ * rendered ones are. Both differ between Phorge versions and custom
  * styles, and code blocks use each user's "Monospaced Font" setting. The probe
  * goes into the editor element, so it has the font of the editor content like
  * the rendered blocks.
@@ -96,33 +97,65 @@ function pageStyle(editor: HTMLElement, context: HTMLElement, textarea: HTMLText
     probe.append(note);
     return note;
   });
-  // A list item and a checked checklist item: how much further the text of the second starts, and its color.
-  const lists = ["", " remarkup-list-with-checkmarks"].map((checks) => {
-    const list = document.createElement("ul");
-    list.className = `remarkup-list${checks}`;
+  /**
+   * A list of one item in `parent`, as Phorge renders it: a checked
+   * checklist item has its hidden input, then a space.
+   */
+  const listItem = (parent: HTMLElement, tag: "ul" | "ol", checked: boolean, letter: string) => {
+    const list = document.createElement(tag);
+    list.className = `remarkup-list${checked ? " remarkup-list-with-checkmarks" : ""}`;
     const item = document.createElement("li");
-    item.className = `remarkup-list-item${checks && " remarkup-checked-item"}`;
-    if (checks) {
-      // As Phorge renders it: the hidden input, then a space.
+    item.className = `remarkup-list-item${checked ? " remarkup-checked-item" : ""}`;
+    if (checked) {
       const input = document.createElement("input");
       input.type = "checkbox";
       item.append(input, " ");
     }
-    item.append("x");
+    const text = document.createTextNode(letter);
+    item.append(text);
     list.append(item);
-    probe.append(list);
-    return item;
-  });
+    parent.append(list);
+    return { item, text };
+  };
+  // A list item and a checked checklist item: how much further the text of the second starts, and its color;
+  // also in a quote, whose text is italic: so is the space before the checklist item's text, which is narrower.
+  const [plain, check] = [false, true].map((checked) => listItem(probe, "ul", checked, "x"));
+  const [quotedPlain, quotedCheck] = [false, true].map((checked) => listItem(quote, "ul", checked, "x"));
+  // A list nested in each of them: further in, in a checklist item; and with its top margin, after the input.
+  const [nested, checkNested] = [plain, check].map(({ item }) => listItem(item, "ul", false, "y"));
+  // An item of each kind of list with its marker and without one: what the marker adds to its line.
+  const marked = (["ul", "ol"] as const).map((tag) =>
+    ["", "none"].map((style) => {
+      const { item } = listItem(probe, tag, false, "x");
+      item.style.listStyleType = style;
+      return item;
+    }),
+  );
   context.append(probe);
-  const textStart = (item: HTMLElement) => {
+  const textRect = (text: Node) => {
     const range = document.createRange();
-    const text = item.lastChild!;
     range.setStart(text, text.textContent!.length - 1);
     range.setEnd(text, text.textContent!.length);
-    return range.getBoundingClientRect().left;
+    return range.getBoundingClientRect();
   };
-  editor.style.setProperty("--rme-check-indent", `${textStart(lists[1]) - textStart(lists[0])}px`);
-  editor.style.setProperty("--rme-checked-color", getComputedStyle(lists[1]).color);
+  const textStart = (text: Node) => textRect(text).left;
+  const px = (n: number) => `${n}px`;
+  for (const [i, [withMarker, without]] of marked.entries()) {
+    const [a, b] = [withMarker, without].map((item) => item.getBoundingClientRect());
+    const above = textRect(withMarker.firstChild!).top - a.top - (textRect(without.firstChild!).top - b.top);
+    const tag = i ? "ol" : "ul";
+    editor.style.setProperty(`--rme-${tag}-marker-top`, px(above));
+    editor.style.setProperty(`--rme-${tag}-marker-bottom`, px(a.height - b.height - above));
+  }
+  editor.style.setProperty("--rme-check-indent", px(textStart(check.text) - textStart(plain.text)));
+  editor.style.setProperty("--rme-quote-check-indent", px(textStart(quotedCheck.text) - textStart(quotedPlain.text)));
+  editor.style.setProperty("--rme-check-nest", px(textStart(checkNested.text) - textStart(nested.text)));
+  // The margins of a nested list; Phorge takes the top one away where the
+  // list comes first in its item (sourceStyle.ts).
+  const nestedList = getComputedStyle(checkNested.item.parentElement!);
+  editor.style.setProperty("--rme-nest-margin-top", nestedList.marginTop);
+  editor.style.setProperty("--rme-nest-margin-bottom", nestedList.marginBottom);
+  editor.style.setProperty("--rme-checked-color", getComputedStyle(check.item).color);
 
   headers.forEach((header, i) => {
     const style = getComputedStyle(header);
