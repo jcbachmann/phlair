@@ -925,7 +925,8 @@ export function lineStart(state: EditorState, line: Line): number {
 }
 
 /** The live preview; see above. With mouseSelection.ts and verticalMotion.ts for moving in it. */
-export function livePreview(renderer: BlockRenderer) {
+/** The live preview; `measuring` is told while it measures the space between blocks (gapMeasurer()). */
+export function livePreview(renderer: BlockRenderer, measuring?: (pending: boolean) => void) {
   return [
     blockRenderer.of(renderer),
     // Before previewField, which reads them.
@@ -942,7 +943,7 @@ export function livePreview(renderer: BlockRenderer) {
         refreshCellEditor();
       }
     }),
-    gapMeasurer((state) => state.field(previewField).missingGaps),
+    gapMeasurer((state) => state.field(previewField).missingGaps, measuring),
     // Images change the height of blocks when they arrive.
     ViewPlugin.define((view) => {
       const onLoad = (event: Event) => event.target instanceof HTMLImageElement && view.requestMeasure();

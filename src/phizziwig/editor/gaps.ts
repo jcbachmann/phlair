@@ -178,18 +178,30 @@ function measure(view: EditorView, keys: string[]): Map<string, number> {
   return gaps;
 }
 
-/** Measures the gaps the decorations ask for, outside of CodeMirror's update cycle. */
-export function gapMeasurer(missing: (state: EditorState) => Set<string>) {
+/**
+ * Measures the gaps the decorations ask for, outside of CodeMirror's update
+ * cycle; `measuring` is told while gaps wait for that (their spacers are not
+ * as high as they will be yet).
+ */
+export function gapMeasurer(
+  missing: (state: EditorState) => Set<string>,
+  measuring: (pending: boolean) => void = () => {},
+) {
   return ViewPlugin.define((view) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
       // A hidden editor measures nothing; it is measured again when it shows (attach.ts).
       if (timer === undefined && missing(view.state).size && view.dom.getClientRects().length) {
+        measuring(true);
         timer = setTimeout(() => {
           timer = undefined;
           const keys = Array.from(missing(view.state));
           if (keys.length) {
+            // Which may ask for more (schedule()).
             view.dispatch({ effects: setGaps.of(measure(view, keys)) });
+          }
+          if (timer === undefined) {
+            measuring(false);
           }
         });
       }
@@ -197,7 +209,10 @@ export function gapMeasurer(missing: (state: EditorState) => Set<string>) {
     schedule();
     return {
       update: schedule,
-      destroy: () => clearTimeout(timer),
+      destroy: () => {
+        clearTimeout(timer);
+        measuring(false);
+      },
     };
   });
 }

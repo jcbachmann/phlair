@@ -2345,7 +2345,25 @@ test.describe("everything renders until the cursor is on it", () => {
     await expect(page.locator(".rme-editor .rme-quoted-block td", { hasText: "cellword" })).toBeVisible();
     await expect(page.locator(".rme-spacer.rme-src-quote")).toHaveCount(3);
     await settled(page);
+    // Until the spacers are as high as they will be again, the editor is busy (settled() waits for that): also when
+    // the page's styles change, which it measures again, from no space.
+    type Seen = { busy: boolean; heights: string[] }[];
+    await page.locator(".rme-editor").evaluate((editor) => {
+      const seen: Seen = [];
+      new MutationObserver(() => {
+        const heights = [...editor.querySelectorAll<HTMLElement>(".rme-spacer")].map((spacer) => spacer.style.height);
+        seen.push({ busy: editor.getAttribute("aria-busy") === "true", heights });
+      }).observe(editor, { subtree: true, childList: true, attributes: true });
+      (window as unknown as { seen: Seen }).seen = seen;
+      document.documentElement.classList.add("rme-restyled");
+    });
+    const seen = () => page.evaluate(() => (window as unknown as { seen: Seen }).seen);
+    await expect.poll(async () => (await seen()).some(({ heights }) => heights.includes("0px"))).toBe(true);
+    await settled(page);
+    expect((await seen()).filter(({ busy, heights }) => !busy && heights.includes("0px"))).toEqual([]);
     await renderBeside(page, text);
+    // The page changed: its fonts, for example.
+    await settled(page);
     for (const word of ["cellword", "itemword", "two", "paraword"]) {
       const shown = await wordPosition(page, ".rme-editor", word);
       expect(Math.abs(shown.y - (await wordPosition(page, "#rendered", word)).y)).toBeLessThan(1.5);

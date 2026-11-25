@@ -323,6 +323,8 @@ class LiveEditor {
   /** The editor's top panels (Ctrl+F) in the toolbar, which stays in view. */
   private readonly panelBox = document.createElement("div");
   private readonly wrapper: HTMLElement;
+  /** What the editor is busy with: parts of the text wait for the server, or the space between blocks is measured. */
+  private readonly busy = { rendering: false, measuring: false };
   private readonly status: HTMLElement;
   private readonly removeButtons: () => void;
   private readonly timer: ReturnType<typeof setInterval>;
@@ -368,8 +370,7 @@ class LiveEditor {
           this.showStatus();
         }
       },
-      // While parts of the text wait for the server, e.g. for tests and screen readers.
-      (busy) => this.wrapper?.setAttribute("aria-busy", String(busy)),
+      (busy) => this.setBusy("rendering", busy),
     );
 
     this.wrapper = document.createElement("div");
@@ -400,7 +401,7 @@ class LiveEditor {
           EditorState.allowMultipleSelections.of(false),
           // With where to find what the editor can do.
           placeholder(withHints(textarea.placeholder || "Write here…")),
-          livePreview(this.renderer),
+          livePreview(this.renderer, (pending) => this.setBusy("measuring", pending)),
           mouseSelection,
           verticalMotion,
           // The editors of table cells.
@@ -623,6 +624,12 @@ class LiveEditor {
     status.append(text, " ", retry);
     this.wrapper.append(status);
     return status;
+  }
+
+  /** While the text is not shown as it will be, e.g. for tests and screen readers. */
+  private setBusy(part: "rendering" | "measuring", busy: boolean): void {
+    this.busy[part] = busy;
+    this.wrapper?.setAttribute("aria-busy", String(this.busy.rendering || this.busy.measuring));
   }
 
   private showStatus(): void {
