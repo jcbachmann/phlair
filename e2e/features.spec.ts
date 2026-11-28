@@ -3618,7 +3618,14 @@ test.describe("feedback of T30675", () => {
     await editor(page).click();
     await page.keyboard.insertText(`| {F${id}} |     |`);
     await blur(page);
+    // The table is only as high as the image once it is rendered and loaded;
+    // before that, the click lands below the table.
+    await settled(page);
     const form = page.locator(".phui-comment-form-view .rme-editor");
+    const image = form.locator("img").first();
+    await expect
+      .poll(() => image.evaluate((img: HTMLImageElement) => img.complete && img.naturalHeight))
+      .toBeGreaterThan(0);
     await form.scrollIntoViewIfNeeded();
     const box = (await form.boundingBox())!;
     // Below the table's row, beside its image.

@@ -5,6 +5,8 @@ name: Check
 
 on:
   push:
+    # Dependabot's branches are checked by their pull requests.
+    branches-ignore: ["dependabot/**"]
   pull_request:
 
 permissions:
