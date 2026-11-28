@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a branch cancels its run that is still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   node:
     runs-on: ubuntu-latest
@@ -42,7 +47,7 @@ jobs:
         php: ["8.4"]
     steps:
       - uses: actions/checkout@v7
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           tools: none

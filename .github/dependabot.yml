@@ -1,0 +1,38 @@
+# Pull requests for new versions of the npm packages and the actions, once a
+# week; security fixes come at once (a setting of the repository). A release
+# is taken only after it has been out for a week (cooldown), so that one that
+# is broken or was published by an attacker is gone again by then.
+#
+# Not covered: the images of dev/phorge are on the versions of production on
+# purpose (PHP 8.4 of Debian 13), and Phorge and Arcanist are commits of
+# we.phorge.it (dev/phorge/Dockerfile), which Dependabot cannot follow.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: Dependencies
+    groups:
+      # The editor's packages belong together; new major versions come alone.
+      editor:
+        patterns: ["@codemirror/*", "@lezer/*"]
+        update-types: [minor, patch]
+      tools:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: CI
+    groups:
+      actions:
+        patterns: ["*"]
