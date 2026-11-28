@@ -43,6 +43,16 @@ export async function openWithEditor(page: Page, path: string): Promise<void> {
   await expect(editor(page)).toBeVisible();
 }
 
+/**
+ * Takes the focus from the editor, and waits until CodeMirror has seen that:
+ * it does so 10 ms after the blur event, and only then asks for the blocks
+ * that were edited, so settled() could pass before that.
+ */
+export async function blur(page: Page): Promise<void> {
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+  await expect(page.locator(".cm-editor.cm-focused")).toHaveCount(0);
+}
+
 /** Waits until the editor has the server's rendering of all it shows (references, images, rendered blocks). */
 export async function settled(page: Page): Promise<void> {
   await expect(page.locator(".rme-editor").first()).toHaveAttribute("aria-busy", "false");

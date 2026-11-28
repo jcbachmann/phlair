@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import {
   addPhlair,
+  blur,
   conduit,
   createRevision,
   createTask,
@@ -20,7 +21,6 @@ import {
 } from "./helpers";
 import { FILES_URL } from "./env";
 
-const blur = (page: Page) => page.evaluate(() => (document.activeElement as HTMLElement).blur());
 const source = (page: Page) => textarea(page).inputValue();
 const selected = (page: Page) =>
   textarea(page).evaluate((t: HTMLTextAreaElement) => t.value.slice(t.selectionStart, t.selectionEnd));

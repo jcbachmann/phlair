@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { addPhlair, createTask, editor, openNewWikiPage, openWithEditor, settled, textarea } from "./helpers";
+import { addPhlair, blur, createTask, editor, openNewWikiPage, openWithEditor, settled, textarea } from "./helpers";
 
 // Whitespace differs, e.g. between the rows of tables; list markers are drawn by the browser.
 const normalize = (text: string) => text.replace(/[\s\u200b]+/g, "");
@@ -55,9 +55,8 @@ test("entering a block does not move the text below it", async ({ page }) => {
       "End.",
     ].join("\n\n"),
   );
-  const blur = () => page.evaluate(() => (document.activeElement as HTMLElement).blur());
   const end = page.locator(".cm-line", { hasText: "End." });
-  await blur();
+  await blur(page);
   await settled(page);
   const top = async () => (await end.boundingBox())!.y;
   const before = await top();
@@ -71,7 +70,8 @@ test("entering a block does not move the text below it", async ({ page }) => {
       await expect(page.locator(".rme-block-code")).toHaveCount(0);
     }
     expect(Math.abs((await top()) - before), `moved by entering ${kind}`).toBeLessThan(0.5);
-    await blur();
+    await blur(page);
+    await settled(page);
     expect(Math.abs((await top()) - before), `moved by leaving ${kind}`).toBeLessThan(0.5);
   }
 });
@@ -524,8 +524,7 @@ for (const font of [null, "Liberation Sans"]) {
         "End.",
       ].join("\n\n"),
     );
-    const blur = () => page.evaluate(() => (document.activeElement as HTMLElement).blur());
-    await blur();
+    await blur(page);
     await settled(page);
     await page.addStyleTag({ content: ".phui-remarkup-preview { display: block !important; }" });
     const preview = page.locator(".phui-remarkup-preview .phui-preview-body .phabricator-remarkup");
